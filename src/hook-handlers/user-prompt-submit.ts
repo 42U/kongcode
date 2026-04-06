@@ -8,6 +8,7 @@
 
 import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
+import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { log } from "../engine/log.js";
 
 export async function handleUserPromptSubmit(
@@ -19,22 +20,21 @@ export async function handleUserPromptSubmit(
 
   // Reset per-turn state
   session.resetTurn();
-  session.userTurnCount++;
 
   const userPrompt = (payload.user_prompt as string) ?? "";
   if (!userPrompt) return {};
 
   session.lastUserText = userPrompt;
 
-  // TODO: Phase 4 will implement the full context pipeline here:
-  // 1. classifyIntent(userPrompt)
-  // 2. vectorSearch across 7 tables
-  // 3. graphExpand neighbors
-  // 4. WMR/ACAN scoring
-  // 5. dedup + budget trim
-  // 6. format as systemMessage
+  // Ingest user message into graph (async, don't block context assembly)
+  ingestTurn(state, session, "user", userPrompt).catch(() => {});
 
-  log.debug(`UserPromptSubmit: session=${sessionId}, prompt=${userPrompt.slice(0, 80)}...`);
+  // Run full context retrieval pipeline
+  const contextString = await assembleContextString(state, session, userPrompt);
 
-  return {};
+  log.debug(`UserPromptSubmit: session=${sessionId}, context=${contextString ? "injected" : "none"}`);
+
+  return {
+    ...(contextString ? { systemMessage: contextString } : {}),
+  };
 }

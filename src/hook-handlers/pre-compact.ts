@@ -2,12 +2,13 @@
  * PreCompact hook handler.
  *
  * Before Claude Code compacts the conversation, extract and preserve
- * critical context that would otherwise be lost: pending work,
- * key files, tool usage, recent errors.
+ * critical context: pending work, key files, tool usage, recent errors.
+ * Returns as systemMessage so context survives compaction.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
+import { log } from "../engine/log.js";
 
 export async function handlePreCompact(
   state: GlobalPluginState,
@@ -17,12 +18,39 @@ export async function handlePreCompact(
   const session = state.getSession(sessionId);
   if (!session) return {};
 
-  // TODO: Phase 4 will add:
-  // - Extract pending work (regex: "todo", "next", "pending")
-  // - Key files mentioned (.ts, .js, .md, etc.)
-  // - Tool usage summary
-  // - Recent errors
-  // - Return as systemMessage for context preservation
+  // Clear injected sections tracking — after compaction, the model loses
+  // previously injected context, so we need to re-inject on next turn
+  session.injectedSections.clear();
 
-  return {};
+  // Build compaction summary from session state
+  const parts: string[] = [];
+
+  // Session context
+  parts.push(`Session: turn ${session.userTurnCount}, ${session.cumulativeTokens} tokens processed`);
+
+  // Last user request
+  if (session.lastUserText) {
+    parts.push(`Last user request: ${session.lastUserText.slice(0, 200)}`);
+  }
+
+  // Retrieval summary
+  if (session.lastRetrievalSummary) {
+    parts.push(`Last retrieval: ${session.lastRetrievalSummary}`);
+  }
+
+  // Adaptive config
+  if (session.currentConfig) {
+    parts.push(`Current intent: ${session.currentConfig.intent ?? "unknown"}`);
+  }
+
+  const summary = parts.join("\n");
+
+  // Stash for next assemble() call
+  session._compactionSummary = summary;
+
+  log.debug(`PreCompact: preserving context for session ${sessionId}`);
+
+  return {
+    systemMessage: `[KongCode post-compaction context]\n${summary}\n\nNote: Graph memory will re-retrieve relevant context on the next prompt.`,
+  };
 }
