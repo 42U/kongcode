@@ -31,6 +31,7 @@ import { handlePreToolUse } from "./hook-handlers/pre-tool-use.js";
 import { handlePostToolUse } from "./hook-handlers/post-tool-use.js";
 import { handleStop } from "./hook-handlers/stop.js";
 import { handlePreCompact } from "./hook-handlers/pre-compact.js";
+import { handlePostCompact } from "./hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "./hook-handlers/subagent.js";
 import { handleRecall } from "./tools/recall.js";
 import { handleCoreMemory } from "./tools/core-memory.js";
@@ -181,6 +182,7 @@ async function initialize(): Promise<void> {
   registerHookHandler("post-tool-use", handlePostToolUse);
   registerHookHandler("stop", handleStop);
   registerHookHandler("pre-compact", handlePreCompact);
+  registerHookHandler("post-compact", handlePostCompact);
   registerHookHandler("task-created", handleTaskCreated);
   registerHookHandler("subagent-stop", handleSubagentStop);
 

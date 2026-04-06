@@ -37,7 +37,7 @@ type IngestResult = { ingested: boolean };
 type IngestBatchResult = { ingestedCount: number };
 import type { GlobalPluginState, SessionState } from "./state.js";
 import { graphTransformContext } from "./graph-context.js";
-import { evaluateRetrieval, getStagedItems } from "./retrieval-quality.js";
+import { getStagedItems } from "./retrieval-quality.js";
 import { shouldRunCheck, runCognitiveCheck } from "./cognitive-check.js";
 import { checkACANReadiness } from "./acan.js";
 import { predictQueries, prefetchContext } from "./prefetch.js";
@@ -491,12 +491,9 @@ export class KongCodeContextEngine {
     // Snapshot staged retrieval items before evaluateRetrieval clears them
     const stagedSnapshot = getStagedItems();
 
-    // Evaluate retrieval quality — writes outcome records for ACAN training
-    if (session.lastAssistantText) {
-      const lastAssistantTurn = session.lastUserTurnId; // Turn ID for linking
-      evaluateRetrieval(lastAssistantTurn, session.lastAssistantText, store)
-        .catch(e => swallow.warn("afterTurn:evaluateRetrieval", e));
-    }
+    // NOTE: evaluateRetrieval is called in stop.ts (awaited) — not here.
+    // Previously this was a duplicate fire-and-forget call that raced with
+    // stop.ts for the shared _pendingRetrieval state.
 
     // Single fetch for all downstream consumers (cognitive check, daemon flush, handoff)
     const allSessionTurns = await store.getSessionTurns(session.sessionId, 50)

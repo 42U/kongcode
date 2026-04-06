@@ -76,8 +76,11 @@ export async function evaluateRetrieval(
   const { sessionId, items, toolResults, queryEmbedding } = _pendingRetrieval;
   _pendingRetrieval = null;
 
+  // Use majority-based success: mark as successful if >= 50% of tool calls
+  // succeeded. The previous `every()` logic caused 99%+ failure rates because
+  // a single exploratory failure (e.g. file-not-found) would tank the whole turn.
   const toolSuccess = toolResults.length > 0
-    ? toolResults.every((r) => r.success)
+    ? toolResults.filter((r) => r.success).length / toolResults.length >= 0.5
     : null;
 
   const responseLower = responseText.toLowerCase();

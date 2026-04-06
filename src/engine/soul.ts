@@ -11,7 +11,7 @@
  *   developing (4/7)    — Some signal. Diagnose weak areas, guide focus.
  *   emerging   (5/7)    — Volume is there. Quality gate becomes the blocker.
  *   maturing   (6/7)    — Almost there. Final thresholds + quality must pass.
- *   ready      (7/7)    — All thresholds met AND quality score ≥ 0.6.
+ *   ready      (7/7)    — All thresholds met AND quality score ≥ 0.85.
  *
  * Quality is computed from actual performance signals: retrieval utilization,
  * skill success rates, reflection severity distribution, and tool failure rates.
@@ -34,6 +34,7 @@ export interface GraduationSignals {
   reflections: number;
   causalChains: number;
   concepts: number;
+  skills: number;
   monologues: number;
   spanDays: number;
 }
@@ -75,7 +76,7 @@ export interface GraduationReport {
   volumeScore: number;
   /** Quality signals from actual performance data. */
   quality: QualitySignals;
-  /** Composite quality score (0-1). Must be ≥ 0.6 to graduate. */
+  /** Composite quality score (0-1). Must be ≥ 0.85 to graduate. */
   qualityScore: number;
   /** Per-area diagnostics with actionable suggestions. */
   diagnostics: StageDiagnostic[];
@@ -88,28 +89,30 @@ const THRESHOLDS: GraduationSignals = {
   reflections: 10,
   causalChains: 5,
   concepts: 30,
+  skills: 30,
   monologues: 5,
   spanDays: 3,
 };
 
 /** Quality score must be at or above this to graduate even with 7/7 volume. */
-const QUALITY_GATE = 0.6;
+const QUALITY_GATE = 0.85;
 
 // ── Signal Collection ──
 
 async function getGraduationSignals(store: SurrealStore): Promise<GraduationSignals> {
   const defaults: GraduationSignals = {
     sessions: 0, reflections: 0, causalChains: 0,
-    concepts: 0, monologues: 0, spanDays: 0,
+    concepts: 0, skills: 0, monologues: 0, spanDays: 0,
   };
   if (!store.isAvailable()) return defaults;
 
   try {
-    const [sessions, reflections, causal, concepts, monologues, span] = await Promise.all([
+    const [sessions, reflections, causal, concepts, skills, monologues, span] = await Promise.all([
       store.queryFirst<{ count: number }>(`SELECT count() AS count FROM session GROUP ALL`).catch(() => []),
       store.queryFirst<{ count: number }>(`SELECT count() AS count FROM reflection GROUP ALL`).catch(() => []),
       store.queryFirst<{ count: number }>(`SELECT count() AS count FROM causal_chain GROUP ALL`).catch(() => []),
       store.queryFirst<{ count: number }>(`SELECT count() AS count FROM concept GROUP ALL`).catch(() => []),
+      store.queryFirst<{ count: number }>(`SELECT count() AS count FROM skill GROUP ALL`).catch(() => []),
       store.queryFirst<{ count: number }>(`SELECT count() AS count FROM monologue GROUP ALL`).catch(() => []),
       store.queryFirst<{ earliest: string }>(`SELECT started_at AS earliest FROM session ORDER BY started_at ASC LIMIT 1`).catch(() => []),
     ]);
@@ -125,6 +128,7 @@ async function getGraduationSignals(store: SurrealStore): Promise<GraduationSign
       reflections: (reflections as { count: number }[])[0]?.count ?? 0,
       causalChains: (causal as { count: number }[])[0]?.count ?? 0,
       concepts: (concepts as { count: number }[])[0]?.count ?? 0,
+      skills: (skills as { count: number }[])[0]?.count ?? 0,
       monologues: (monologues as { count: number }[])[0]?.count ?? 0,
       spanDays,
     };
@@ -352,6 +356,7 @@ function getSuggestion(key: keyof GraduationSignals, current: number, threshold:
     case "reflections": return `${remaining} more reflection(s) needed. These are generated automatically when sessions have performance issues.`;
     case "causalChains": return `${remaining} more causal chain(s) needed. These form when the agent corrects mistakes during tool usage.`;
     case "concepts": return `${remaining} more concept(s) needed. Concepts are extracted from conversation topics and domain vocabulary.`;
+    case "skills": return `${remaining} more skill(s) needed. Skills are learned procedures extracted from successful tool usage patterns.`;
     case "monologues": return `${remaining} more monologue(s) needed. Inner monologue triggers during cognitive checks.`;
     case "spanDays": return `${remaining} more day(s) of history needed. The agent needs time-spread experience, not just volume.`;
   }
@@ -598,7 +603,7 @@ Be honest, not aspirational. Only claim what the data supports.`;
 /**
  * The full graduation ceremony: check readiness, generate soul, save it.
  *
- * Key change: requires 7/7 thresholds AND quality ≥ 0.6. No more premature
+ * Key change: requires 7/7 thresholds AND quality ≥ 0.85. No more premature
  * graduation at 5/7 with no quality check.
  */
 export async function attemptGraduation(store: SurrealStore, complete: CompleteFn, userSoulNudge?: string): Promise<{
@@ -659,7 +664,8 @@ export function formatGraduationReport(report: GraduationReport): string {
   lines.push("");
 
   // Volume
-  lines.push(`**Volume**: ${report.met.length}/7 thresholds met (${(report.volumeScore * 100).toFixed(0)}%)`);
+  const thresholdCount = Object.keys(THRESHOLDS).length;
+  lines.push(`**Volume**: ${report.met.length}/${thresholdCount} thresholds met (${(report.volumeScore * 100).toFixed(0)}%)`);
   if (report.met.length > 0) lines.push(`  Met: ${report.met.join(", ")}`);
   if (report.unmet.length > 0) lines.push(`  Unmet: ${report.unmet.join(", ")}`);
   lines.push("");
