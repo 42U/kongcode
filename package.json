@@ -1,0 +1,60 @@
+{
+  "name": "kongcode",
+  "version": "0.1.0",
+  "description": "Graph-backed persistent memory engine for Claude Code. SurrealDB + BGE-M3 vector embeddings that learn across sessions.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/42U/kongcode.git"
+  },
+  "keywords": [
+    "claude-code",
+    "claude-code-plugin",
+    "context-engine",
+    "memory",
+    "persistent-memory",
+    "graph-database",
+    "surrealdb",
+    "vector-search",
+    "embeddings",
+    "bge-m3",
+    "ai-agent",
+    "cognitive-architecture",
+    "knowledge-graph",
+    "mcp"
+  ],
+  "main": "dist/mcp-server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "start": "node dist/mcp-server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@sinclair/typebox": "0.34.48",
+    "node-llama-cpp": "^3.18.1",
+    "surrealdb": "^2.0.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
+  },
+  "files": [
+    "dist/",
+    ".claude-plugin/",
+    ".mcp.json",
+    "hooks/",
+    "skills/",
+    "commands/",
+    "agents/",
+    "scripts/",
+    "README.md",
+    "LICENSE"
+  ]
+}

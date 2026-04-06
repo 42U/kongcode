@@ -1,0 +1,218 @@
+/**
+ * KongCode MCP Server — entry point.
+ *
+ * Long-lived stdio process that owns:
+ * - SurrealDB connection
+ * - BGE-M3 embedding model
+ * - Session state and memory daemon
+ * - MCP tools: recall, core_memory, introspect
+ * - Internal Unix socket HTTP API for hook communication
+ *
+ * Spawned by Claude Code via .mcp.json (stdio transport).
+ */
+
+import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import {
+  CallToolRequestSchema,
+  ListToolsRequestSchema,
+} from "@modelcontextprotocol/sdk/types.js";
+
+import { parsePluginConfig } from "./engine/config.js";
+import { SurrealStore } from "./engine/surreal.js";
+import { EmbeddingService } from "./engine/embeddings.js";
+import { GlobalPluginState } from "./engine/state.js";
+import { createAnthropicComplete } from "./complete-anthropic.js";
+import { startHttpApi, stopHttpApi } from "./http-api.js";
+import { log } from "./engine/log.js";
+
+// ── Global state ──────────────────────────────────────────────────────────────
+
+let globalState: GlobalPluginState | null = null;
+
+export function getGlobalState(): GlobalPluginState | null {
+  return globalState;
+}
+
+// ── MCP Tool definitions ──────────────────────────────────────────────────────
+
+const TOOLS = [
+  {
+    name: "recall",
+    description: "Search the persistent memory graph for past knowledge, concepts, artifacts, skills, and conversation history.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Natural language search query" },
+        scope: {
+          type: "string",
+          enum: ["all", "memories", "concepts", "turns", "artifacts", "skills"],
+          description: "Narrow search to a specific knowledge type (default: all)",
+        },
+        limit: {
+          type: "number",
+          description: "Max results to return (1-15, default: 5)",
+          minimum: 1,
+          maximum: 15,
+        },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "core_memory",
+    description: "Manage always-loaded memory directives. Tier 0 entries appear every turn (identity, rules). Tier 1 entries are session-pinned.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["list", "add", "update", "deactivate"],
+          description: "Operation to perform",
+        },
+        tier: { type: "number", enum: [0, 1], description: "Memory tier (0=always, 1=session)" },
+        category: {
+          type: "string",
+          enum: ["identity", "rules", "tools", "operations", "general"],
+          description: "Category for the directive",
+        },
+        text: { type: "string", description: "Content of the directive (for add/update)" },
+        priority: { type: "number", description: "Priority 0-100 (higher = loaded first)" },
+        id: { type: "string", description: "Record ID (for update/deactivate)" },
+      },
+      required: ["action"],
+    },
+  },
+  {
+    name: "introspect",
+    description: "Inspect the memory database: health status, table counts, record verification, and predefined reports.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        action: {
+          type: "string",
+          enum: ["status", "count", "verify", "query", "migrate"],
+          description: "Diagnostic action to perform",
+        },
+        table: { type: "string", description: "Table name (for count/verify)" },
+        filter: {
+          type: "string",
+          enum: ["active", "inactive", "recent_24h", "with_embedding", "unresolved"],
+          description: "Filter preset (for count)",
+        },
+        record_id: { type: "string", description: "Record ID (for verify)" },
+      },
+      required: ["action"],
+    },
+  },
+];
+
+// ── Tool handlers ─────────────────────────────────────────────────────────────
+
+async function handleToolCall(
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  if (!globalState) {
+    return { content: [{ type: "text", text: "KongCode not initialized. Is SurrealDB running?" }] };
+  }
+
+  // TODO: Phase 2 will wire these to the actual tool implementations from engine/tools/
+  switch (name) {
+    case "recall":
+      return { content: [{ type: "text", text: `[recall stub] query="${args.query}" scope="${args.scope ?? "all"}"` }] };
+    case "core_memory":
+      return { content: [{ type: "text", text: `[core_memory stub] action="${args.action}"` }] };
+    case "introspect":
+      return { content: [{ type: "text", text: `[introspect stub] action="${args.action}"` }] };
+    default:
+      return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
+  }
+}
+
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+
+async function initialize(): Promise<void> {
+  log.info("Initializing KongCode MCP server...");
+
+  // Parse config from env vars
+  const config = parsePluginConfig();
+
+  // Create services
+  const store = new SurrealStore(config.surreal);
+  const embeddings = new EmbeddingService(config.embedding);
+  const complete = createAnthropicComplete(config.llm);
+
+  // Build global state
+  globalState = new GlobalPluginState(config, store, embeddings, complete);
+  globalState.workspaceDir = process.env.KONGCODE_PROJECT_DIR ?? process.cwd();
+
+  // Connect to SurrealDB
+  try {
+    await store.initialize();
+    log.info("SurrealDB connected");
+  } catch (err) {
+    log.error("SurrealDB connection failed — running in degraded mode:", err);
+  }
+
+  // Start internal HTTP API for hook communication
+  const socketPath = process.env.KONGCODE_PROJECT_DIR
+    ? `${process.env.KONGCODE_PROJECT_DIR}/.kongcode.sock`
+    : undefined;
+  await startHttpApi(globalState, socketPath);
+
+  log.info("KongCode MCP server ready");
+}
+
+async function shutdown(): Promise<void> {
+  log.info("Shutting down KongCode MCP server...");
+  await stopHttpApi();
+  if (globalState) {
+    await globalState.shutdown();
+    globalState = null;
+  }
+  log.info("KongCode shutdown complete");
+}
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const server = new Server(
+    { name: "kongcode", version: "0.1.0" },
+    { capabilities: { tools: {} } },
+  );
+
+  // Register tool list handler
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    tools: TOOLS,
+  }));
+
+  // Register tool call handler
+  server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    const { name, arguments: args } = request.params;
+    return handleToolCall(name, (args ?? {}) as Record<string, unknown>);
+  });
+
+  // Initialize services
+  await initialize();
+
+  // Graceful shutdown
+  process.on("SIGTERM", async () => {
+    await shutdown();
+    process.exit(0);
+  });
+  process.on("SIGINT", async () => {
+    await shutdown();
+    process.exit(0);
+  });
+
+  // Start MCP stdio transport
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  log.info("KongCode MCP server running on stdio");
+}
+
+main().catch((err) => {
+  log.error("Fatal error:", err);
+  process.exit(1);
+});
