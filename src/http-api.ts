@@ -8,12 +8,13 @@
  */
 
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, unlinkSync } from "node:fs";
+import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import type { GlobalPluginState } from "./engine/state.js";
 import { log } from "./engine/log.js";
 
 let server: HttpServer | null = null;
 let socketPath: string | null = null;
+let portFilePath: string | null = null;
 
 /** Hook response format matching Claude Code's expected output. */
 export interface HookResponse {
@@ -100,6 +101,7 @@ async function handleRequest(
 export async function startHttpApi(
   state: GlobalPluginState,
   sock?: string,
+  projectDir?: string,
 ): Promise<void> {
   server = createServer((req, res) => {
     handleRequest(state, req, res).catch(err => {
@@ -117,29 +119,43 @@ export async function startHttpApi(
       try { unlinkSync(sock); } catch { /* ignore */ }
     }
     socketPath = sock;
-    await new Promise<void>((resolve, reject) => {
-      server!.listen(sock, () => {
-        log.info(`HTTP API listening on Unix socket: ${sock}`);
-        resolve();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        server!.listen(sock, () => {
+          log.info(`HTTP API listening on Unix socket: ${sock}`);
+          resolve();
+        });
+        server!.on("error", reject);
       });
-      server!.on("error", reject);
-    });
-  } else {
-    // Fallback: random port
-    await new Promise<void>((resolve, reject) => {
-      server!.listen(0, "127.0.0.1", () => {
-        const addr = server!.address();
-        if (addr && typeof addr === "object") {
-          log.info(`HTTP API listening on port ${addr.port}`);
-        }
-        resolve();
-      });
-      server!.on("error", reject);
-    });
+      return;
+    } catch (err) {
+      log.warn(`Unix socket failed, falling back to TCP:`, err);
+      socketPath = null;
+    }
   }
+
+  // Fallback: random port — write port file so hook proxy can discover us
+  await new Promise<void>((resolve, reject) => {
+    server!.listen(0, "127.0.0.1", () => {
+      const addr = server!.address();
+      if (addr && typeof addr === "object") {
+        log.info(`HTTP API listening on port ${addr.port}`);
+        const dir = projectDir || process.cwd();
+        portFilePath = `${dir}/.kongcode-port`;
+        try {
+          writeFileSync(portFilePath, String(addr.port));
+          log.info(`Port file written: ${portFilePath}`);
+        } catch (e) {
+          log.warn(`Failed to write port file:`, e);
+        }
+      }
+      resolve();
+    });
+    server!.on("error", reject);
+  });
 }
 
-/** Stop the internal HTTP API and clean up socket file. */
+/** Stop the internal HTTP API and clean up socket/port files. */
 export async function stopHttpApi(): Promise<void> {
   if (server) {
     await new Promise<void>((resolve) => {
@@ -150,5 +166,9 @@ export async function stopHttpApi(): Promise<void> {
   if (socketPath && existsSync(socketPath)) {
     try { unlinkSync(socketPath); } catch { /* ignore */ }
     socketPath = null;
+  }
+  if (portFilePath && existsSync(portFilePath)) {
+    try { unlinkSync(portFilePath); } catch { /* ignore */ }
+    portFilePath = null;
   }
 }
