@@ -2,7 +2,7 @@
 # KongCode health check — quick connectivity diagnostics.
 set -euo pipefail
 
-SURREAL_URL="${SURREAL_URL:-ws://localhost:8042/rpc}"
+SURREAL_URL="${SURREAL_URL:-ws://localhost:8000/rpc}"
 HTTP_URL=$(echo "$SURREAL_URL" | sed 's|ws://|http://|' | sed 's|wss://|https://|' | sed 's|/rpc|/health|')
 
 STATUS="OK"

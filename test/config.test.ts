@@ -23,7 +23,7 @@ describe("parsePluginConfig", () => {
 
   it("returns sensible defaults with no input", () => {
     const config = parsePluginConfig();
-    expect(config.surreal.url).toBe("ws://localhost:8042/rpc");
+    expect(config.surreal.url).toBe("ws://localhost:8000/rpc");
     expect(config.surreal.user).toBe("root");
     expect(config.surreal.pass).toBe("root");
     expect(config.surreal.ns).toBe("kong");
@@ -36,7 +36,7 @@ describe("parsePluginConfig", () => {
 
   it("returns defaults with empty object", () => {
     const config = parsePluginConfig({});
-    expect(config.surreal.url).toBe("ws://localhost:8042/rpc");
+    expect(config.surreal.url).toBe("ws://localhost:8000/rpc");
     expect(config.surreal.ns).toBe("kong");
   });
 
@@ -72,11 +72,11 @@ describe("parsePluginConfig", () => {
     process.env.EMBED_MODEL_PATH = "/env/model.gguf";
 
     const config = parsePluginConfig({
-      surreal: { url: "ws://plugin-config:8042/rpc", user: "pluginuser" },
+      surreal: { url: "ws://plugin-config:8000/rpc", user: "pluginuser" },
     });
 
     // Plugin config wins over env vars
-    expect(config.surreal.url).toBe("ws://plugin-config:8042/rpc");
+    expect(config.surreal.url).toBe("ws://plugin-config:8000/rpc");
     expect(config.surreal.user).toBe("pluginuser");
     // Fields not in plugin config fall back to env vars
     expect(config.surreal.pass).toBe("envpass");
@@ -87,9 +87,9 @@ describe("parsePluginConfig", () => {
 
   it("derives httpUrl from ws url", () => {
     const config = parsePluginConfig({
-      surreal: { url: "ws://localhost:8042/rpc" },
+      surreal: { url: "ws://localhost:8000/rpc" },
     });
-    expect(config.surreal.httpUrl).toBe("http://localhost:8042/sql");
+    expect(config.surreal.httpUrl).toBe("http://localhost:8000/sql");
   });
 
   it("derives httpUrl from wss url", () => {
@@ -102,7 +102,7 @@ describe("parsePluginConfig", () => {
   it("SURREAL_HTTP_URL overrides derived httpUrl", () => {
     process.env.SURREAL_HTTP_URL = "http://custom:9999/sql";
     const config = parsePluginConfig({
-      surreal: { url: "ws://localhost:8042/rpc" },
+      surreal: { url: "ws://localhost:8000/rpc" },
     });
     expect(config.surreal.httpUrl).toBe("http://custom:9999/sql");
   });
@@ -111,7 +111,7 @@ describe("parsePluginConfig", () => {
     const config = parsePluginConfig({
       surreal: { url: 12345, user: null, pass: undefined },
     });
-    expect(config.surreal.url).toBe("ws://localhost:8042/rpc");
+    expect(config.surreal.url).toBe("ws://localhost:8000/rpc");
     expect(config.surreal.user).toBe("root");
     expect(config.surreal.pass).toBe("root");
   });

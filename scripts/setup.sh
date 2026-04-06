@@ -6,7 +6,7 @@ echo "=== KongCode Setup ==="
 echo ""
 
 # Check SurrealDB
-SURREAL_URL="${SURREAL_URL:-ws://localhost:8042/rpc}"
+SURREAL_URL="${SURREAL_URL:-ws://localhost:8000/rpc}"
 HTTP_URL=$(echo "$SURREAL_URL" | sed 's|ws://|http://|' | sed 's|wss://|https://|' | sed 's|/rpc|/health|')
 
 echo "Checking SurrealDB at ${SURREAL_URL}..."
@@ -16,8 +16,8 @@ else
   echo "  [MISSING] SurrealDB not reachable at ${SURREAL_URL}"
   echo ""
   echo "  Install SurrealDB:"
-  echo "    Docker:  docker run -d --name surrealdb -p 8042:8000 surrealdb/surrealdb:latest start --user root --pass root"
-  echo "    Native:  curl -sSf https://install.surrealdb.com | sh && surreal start --user root --pass root --bind 0.0.0.0:8042"
+  echo "    Docker:  docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest start --user root --pass root"
+  echo "    Native:  curl -sSf https://install.surrealdb.com | sh && surreal start --user root --pass root --bind 0.0.0.0:8000"
   echo ""
 fi
 

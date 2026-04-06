@@ -20,12 +20,12 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ```bash
 # Docker (recommended)
-docker run -d --name surrealdb -p 8042:8000 \
+docker run -d --name surrealdb -p 8000:8000 \
   surrealdb/surrealdb:latest start --user root --pass root
 
 # Or native
 curl -sSf https://install.surrealdb.com | sh
-surreal start --user root --pass root --bind 0.0.0.0:8042
+surreal start --user root --pass root --bind 0.0.0.0:8000
 ```
 
 ### 2. Install KongCode
@@ -78,7 +78,7 @@ Environment variables (all optional, sensible defaults):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SURREAL_URL` | `ws://localhost:8042/rpc` | SurrealDB WebSocket URL |
+| `SURREAL_URL` | `ws://localhost:8000/rpc` | SurrealDB WebSocket URL |
 | `SURREAL_USER` | `root` | SurrealDB username |
 | `SURREAL_PASS` | `root` | SurrealDB password |
 | `SURREAL_NS` | `kong` | SurrealDB namespace |

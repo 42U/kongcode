@@ -58,7 +58,7 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
   const url =
     (typeof surreal.url === "string" ? surreal.url : null) ??
     process.env.SURREAL_URL ??
-    "ws://localhost:8042/rpc";
+    "ws://localhost:8000/rpc";
 
   return {
     surreal: {
