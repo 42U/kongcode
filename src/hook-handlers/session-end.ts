@@ -30,6 +30,22 @@ export async function handleSessionEnd(
 
   if (!store.isAvailable()) return {};
 
+  // Final daemon flush — extract everything that hasn't been processed yet
+  if (session.daemon) {
+    try {
+      const turns: import("../engine/daemon-types.js").TurnData[] = [];
+      if (session.lastUserText) turns.push({ role: "user", text: session.lastUserText });
+      if (session.lastAssistantText) turns.push({ role: "assistant", text: session.lastAssistantText });
+      if (turns.length > 0) {
+        session.daemon.sendTurnBatch(turns, session.pendingThinking.slice(-3), []);
+      }
+      await session.daemon.shutdown(10_000);
+    } catch (e) {
+      swallow.warn("sessionEnd:daemonShutdown", e);
+    }
+    session.daemon = null;
+  }
+
   // Run cleanup operations in parallel
   const ops: Promise<unknown>[] = [];
 

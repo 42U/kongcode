@@ -11,6 +11,7 @@ import { seedIdentity } from "../engine/identity.js";
 import { seedCognitiveBootstrap } from "../engine/cognitive-bootstrap.js";
 import { synthesizeWakeup } from "../engine/wakeup.js";
 import { runDeferredCleanup } from "../engine/deferred-cleanup.js";
+import { startMemoryDaemon } from "../engine/daemon-manager.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 
@@ -46,6 +47,19 @@ export async function handleSessionStart(
         .catch(e => swallow("sessionStart:linkTaskToProject", e));
 
       session.surrealSessionId = await store.createSession(session.agentId);
+      await store.markSessionActive(session.surrealSessionId)
+        .catch(e => swallow("sessionStart:markActive", e));
+      await store.linkSessionToTask(session.surrealSessionId, session.taskId)
+        .catch(e => swallow("sessionStart:linkSessionToTask", e));
+
+      // Start memory daemon for background knowledge extraction
+      if (!session.daemon) {
+        session.daemon = startMemoryDaemon(
+          store, embeddings, session.sessionId, state.complete,
+          state.config.thresholds.extractionTimeoutMs,
+          session.taskId, session.projectId,
+        );
+      }
 
       // Seed identity and cognitive bootstrap (idempotent)
       await seedIdentity(store, embeddings).catch(e => swallow("sessionStart:identity", e));
