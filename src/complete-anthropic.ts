@@ -4,6 +4,12 @@
  * Used for all internal LLM calls: daemon extraction, reflection,
  * soul synthesis, wakeup briefing, cognitive check. These are
  * background operations, not part of the user-facing prompt chain.
+ *
+ * NOTE: The engine uses `outputFormat: { type: "json_schema", schema }` for
+ * structured output. The Anthropic API doesn't support json_schema natively,
+ * so we handle it by appending a JSON instruction to the system prompt.
+ * The engine's fallback JSON parsing (regex extraction, trailing comma fix,
+ * field-by-field recovery) handles any formatting imperfections.
  */
 
 import Anthropic from "@anthropic-ai/sdk";
@@ -29,11 +35,22 @@ export function createAnthropicComplete(llmConfig: LlmConfig): CompleteFn {
     const model = params.model ?? llmConfig.model;
     const maxTokens = params.maxTokens ?? llmConfig.maxTokens;
 
+    // Handle outputFormat: append JSON instruction to system prompt.
+    // The engine's daemon, soul, cognitive check, and skill extraction all
+    // request structured JSON output via outputFormat. Since Anthropic's API
+    // doesn't have a json_schema mode, we enforce it via prompting.
+    let system = params.system ?? "";
+    if (params.outputFormat?.type === "json_schema") {
+      const schemaHint = JSON.stringify(params.outputFormat.schema);
+      system += "\n\nIMPORTANT: You MUST respond with valid JSON only. No markdown fences, no preamble, no explanation. " +
+        "Output a single JSON object matching this schema:\n" + schemaHint;
+    }
+
     try {
       const response = await getClient().messages.create({
         model,
         max_tokens: maxTokens,
-        ...(params.system ? { system: params.system } : {}),
+        ...(system ? { system } : {}),
         messages: params.messages.map(m => ({
           role: m.role,
           content: m.content,
