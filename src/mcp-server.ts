@@ -23,7 +23,18 @@ import { SurrealStore } from "./engine/surreal.js";
 import { EmbeddingService } from "./engine/embeddings.js";
 import { GlobalPluginState } from "./engine/state.js";
 import { createAnthropicComplete } from "./complete-anthropic.js";
-import { startHttpApi, stopHttpApi } from "./http-api.js";
+import { startHttpApi, stopHttpApi, registerHookHandler } from "./http-api.js";
+import { handleSessionStart } from "./hook-handlers/session-start.js";
+import { handleSessionEnd } from "./hook-handlers/session-end.js";
+import { handleUserPromptSubmit } from "./hook-handlers/user-prompt-submit.js";
+import { handlePreToolUse } from "./hook-handlers/pre-tool-use.js";
+import { handlePostToolUse } from "./hook-handlers/post-tool-use.js";
+import { handleStop } from "./hook-handlers/stop.js";
+import { handlePreCompact } from "./hook-handlers/pre-compact.js";
+import { handleTaskCreated, handleSubagentStop } from "./hook-handlers/subagent.js";
+import { handleRecall } from "./tools/recall.js";
+import { handleCoreMemory } from "./tools/core-memory.js";
+import { handleIntrospect } from "./tools/introspect.js";
 import { log } from "./engine/log.js";
 
 // ── Global state ──────────────────────────────────────────────────────────────
@@ -109,6 +120,12 @@ const TOOLS = [
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
 
+/** Get or create a session for tool calls. Uses KONGCODE_SESSION_ID env var or a default. */
+function getSession(): import("./engine/state.js").SessionState {
+  const sessionId = process.env.KONGCODE_SESSION_ID ?? "mcp-default";
+  return globalState!.getOrCreateSession(sessionId, sessionId);
+}
+
 async function handleToolCall(
   name: string,
   args: Record<string, unknown>,
@@ -117,14 +134,15 @@ async function handleToolCall(
     return { content: [{ type: "text", text: "KongCode not initialized. Is SurrealDB running?" }] };
   }
 
-  // TODO: Phase 2 will wire these to the actual tool implementations from engine/tools/
+  const session = getSession();
+
   switch (name) {
     case "recall":
-      return { content: [{ type: "text", text: `[recall stub] query="${args.query}" scope="${args.scope ?? "all"}"` }] };
+      return handleRecall(globalState, session, args);
     case "core_memory":
-      return { content: [{ type: "text", text: `[core_memory stub] action="${args.action}"` }] };
+      return handleCoreMemory(globalState, session, args);
     case "introspect":
-      return { content: [{ type: "text", text: `[introspect stub] action="${args.action}"` }] };
+      return handleIntrospect(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }
@@ -154,6 +172,17 @@ async function initialize(): Promise<void> {
   } catch (err) {
     log.error("SurrealDB connection failed — running in degraded mode:", err);
   }
+
+  // Register hook handlers
+  registerHookHandler("session-start", handleSessionStart);
+  registerHookHandler("session-end", handleSessionEnd);
+  registerHookHandler("user-prompt-submit", handleUserPromptSubmit);
+  registerHookHandler("pre-tool-use", handlePreToolUse);
+  registerHookHandler("post-tool-use", handlePostToolUse);
+  registerHookHandler("stop", handleStop);
+  registerHookHandler("pre-compact", handlePreCompact);
+  registerHookHandler("task-created", handleTaskCreated);
+  registerHookHandler("subagent-stop", handleSubagentStop);
 
   // Start internal HTTP API for hook communication
   const socketPath = process.env.KONGCODE_PROJECT_DIR
