@@ -36,15 +36,10 @@ cd ~/.claude/plugins/kongcode
 npm install && npm run build
 ```
 
-### 3. Set API Key (for background learning)
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-### 4. Use Claude Code
+### 3. Use Claude Code
 
 KongCode activates automatically. Memory is extracted and retrieved transparently.
+Background learning uses Claude subagents — no separate API key needed.
 
 ## Architecture
 
@@ -83,20 +78,20 @@ Environment variables (all optional, sensible defaults):
 | `SURREAL_PASS` | `root` | SurrealDB password |
 | `SURREAL_NS` | `kong` | SurrealDB namespace |
 | `SURREAL_DB` | `memory` | SurrealDB database |
-| `ANTHROPIC_API_KEY` | (required for learning) | For daemon extraction LLM calls |
-| `KONGCODE_MODEL` | `claude-sonnet-4-20250514` | Model for internal LLM calls |
 | `KONGCODE_LOG_LEVEL` | `warn` | Log level: error, warn, info, debug |
+
+No API key is needed — all cognitive work (extraction, reflection, synthesis) is delegated to Claude subagents.
 
 ## How It Works
 
 ### Every Turn
-1. **UserPromptSubmit** — classifies intent, retrieves relevant graph context, injects as system message
+1. **UserPromptSubmit** — classifies intent, retrieves relevant graph context, injects via `additionalContext`
 2. **PreToolUse** — tracks tool calls against adaptive budget
 3. **PostToolUse** — records outcomes, tracks artifacts
 4. **Stop** — ingests turn, accumulates tokens
 
 ### Between Turns
-- Memory daemon extracts: concepts, causal chains, monologues, corrections, preferences, artifacts, decisions, skills
+- Claude subagents extract: concepts, causal chains, monologues, corrections, preferences, artifacts, decisions, skills
 
 ### Between Sessions
 - Handoff note captures session state for next wakeup

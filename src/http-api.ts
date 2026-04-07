@@ -16,15 +16,39 @@ let server: HttpServer | null = null;
 let socketPath: string | null = null;
 let portFilePath: string | null = null;
 
-/** Hook response format matching Claude Code's expected output. */
+/** Hook response format matching Claude Code's expected output.
+ *
+ * IMPORTANT: `additionalContext` must be inside `hookSpecificOutput` with a
+ * matching `hookEventName` — Claude Code's Zod schema silently strips
+ * unknown top-level keys. Top-level fields are only: continue,
+ * suppressOutput, decision, reason, stopReason, systemMessage, hookSpecificOutput.
+ */
 export interface HookResponse {
   continue?: boolean;
   suppressOutput?: boolean;
+  /** Warning shown in UI — NOT sent to the model. */
   systemMessage?: string;
-  hookSpecificOutput?: Record<string, unknown>;
+  stopReason?: string;
+  hookSpecificOutput?: {
+    hookEventName: string;
+    additionalContext?: string;
+    [key: string]: unknown;
+  };
   /** For Stop hooks: approve or block the stop. */
   decision?: "approve" | "block";
   reason?: string;
+}
+
+/** Helper: wrap additionalContext in the hookSpecificOutput envelope Claude Code expects. */
+export function makeHookOutput(eventName: string, additionalContext?: string, extra?: Record<string, unknown>): HookResponse {
+  if (!additionalContext && !extra) return {};
+  return {
+    hookSpecificOutput: {
+      hookEventName: eventName,
+      ...(additionalContext ? { additionalContext } : {}),
+      ...extra,
+    },
+  };
 }
 
 type HookHandler = (

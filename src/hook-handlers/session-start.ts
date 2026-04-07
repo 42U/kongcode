@@ -6,7 +6,7 @@
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
-import type { HookResponse } from "../http-api.js";
+import { makeHookOutput, type HookResponse } from "../http-api.js";
 import { seedIdentity } from "../engine/identity.js";
 import { seedCognitiveBootstrap } from "../engine/cognitive-bootstrap.js";
 import { synthesizeWakeup } from "../engine/wakeup.js";
@@ -112,7 +112,5 @@ export async function handleSessionStart(
     } catch { /* wakeup will be injected on next UserPromptSubmit */ }
   }
 
-  return {
-    ...(wakeupText ? { systemMessage: wakeupText } : {}),
-  };
+  return makeHookOutput("SessionStart", wakeupText ?? undefined);
 }

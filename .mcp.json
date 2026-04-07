@@ -2,7 +2,7 @@
   "mcpServers": {
     "kongcode": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"]
+      "args": ["./dist/mcp-server.js"]
     }
   }
 }

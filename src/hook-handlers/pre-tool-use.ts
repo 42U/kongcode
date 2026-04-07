@@ -6,7 +6,7 @@
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
-import type { HookResponse } from "../http-api.js";
+import { makeHookOutput, type HookResponse } from "../http-api.js";
 import { log } from "../engine/log.js";
 
 export async function handlePreToolUse(
@@ -25,10 +25,10 @@ export async function handlePreToolUse(
   if (session.toolCallCount > session.toolLimit && !session.softInterrupted) {
     session.softInterrupted = true;
     log.debug(`Tool budget soft interrupt: ${session.toolCallCount}/${session.toolLimit}`);
-    return {
-      systemMessage: `[KongCode] Tool budget reached (${session.toolCallCount}/${session.toolLimit}). ` +
+    return makeHookOutput("PreToolUse",
+      `[KongCode] Tool budget reached (${session.toolCallCount}/${session.toolLimit}). ` +
         "Consider summarizing progress before making more tool calls.",
-    };
+    );
   }
 
   // Redundant recall detection: if user prompt was already retrieved via
@@ -39,10 +39,10 @@ export async function handlePreToolUse(
 
     if (recallQuery && session.lastRetrievalSummary) {
       // Don't block — just inform that context was already retrieved
-      return {
-        systemMessage: `[KongCode] Context was already auto-retrieved this turn (${session.lastRetrievalSummary}). ` +
+      return makeHookOutput("PreToolUse",
+        `[KongCode] Context was already auto-retrieved this turn (${session.lastRetrievalSummary}). ` +
           "Only call recall if you need something specific not already in the injected context.",
-      };
+      );
     }
   }
 

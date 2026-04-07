@@ -3,14 +3,14 @@
  *
  * The core context injection point. Runs the full retrieval pipeline:
  * intent classification → vector search → graph expand → WMR/ACAN scoring
- * → dedup → budget trim → format. Returns assembled context as systemMessage.
+ * → dedup → budget trim → format. Returns assembled context as additionalContext.
  *
  * On the first turn of a new session, also checks for pending background
  * work and instructs Claude to spawn a subagent to process it.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
-import type { HookResponse } from "../http-api.js";
+import { makeHookOutput, type HookResponse } from "../http-api.js";
 import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
@@ -63,11 +63,9 @@ This runs silently in the background. Respond to the user normally.
     }
   }
 
-  const systemMessage = [contextString, pendingWorkMessage].filter(Boolean).join("") || undefined;
+  const additionalContext = [contextString, pendingWorkMessage].filter(Boolean).join("") || undefined;
 
   log.debug(`UserPromptSubmit: session=${sessionId}, context=${contextString ? "injected" : "none"}, pending=${pendingWorkMessage ? "yes" : "no"}`);
 
-  return {
-    ...(systemMessage ? { systemMessage } : {}),
-  };
+  return makeHookOutput("UserPromptSubmit", additionalContext);
 }

@@ -3,12 +3,12 @@
  *
  * Fires AFTER Claude Code shrinks the conversation window.
  * The model just lost context, so we re-retrieve relevant knowledge
- * from the graph and inject it via systemMessage. Also clears
+ * from the graph and inject it via additionalContext. Also clears
  * injectedSections so the next UserPromptSubmit does a full re-inject.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
-import type { HookResponse } from "../http-api.js";
+import { makeHookOutput, type HookResponse } from "../http-api.js";
 import { assembleContextString } from "../context-assembler.js";
 import { log } from "../engine/log.js";
 
@@ -34,9 +34,9 @@ export async function handlePostCompact(
     if (session._compactionSummary) {
       const summary = session._compactionSummary;
       session._compactionSummary = undefined;
-      return {
-        systemMessage: `[KongCode context recovery after compaction]\n${summary}\n\nGraph memory will provide full context on the next prompt.`,
-      };
+      return makeHookOutput("PostCompact",
+        `[KongCode context recovery after compaction]\n${summary}\n\nGraph memory will provide full context on the next prompt.`,
+      );
     }
     return {};
   }
@@ -45,13 +45,11 @@ export async function handlePostCompact(
   const contextString = await assembleContextString(state, session, query);
 
   // Include compaction summary if available
-  let systemMessage = contextString ?? "";
+  let additionalContext = contextString ?? "";
   if (session._compactionSummary) {
-    systemMessage = `[Post-compaction context recovery]\n${session._compactionSummary}\n\n${systemMessage}`;
+    additionalContext = `[Post-compaction context recovery]\n${session._compactionSummary}\n\n${additionalContext}`;
     session._compactionSummary = undefined;
   }
 
-  return {
-    ...(systemMessage ? { systemMessage } : {}),
-  };
+  return makeHookOutput("PostCompact", additionalContext || undefined);
 }

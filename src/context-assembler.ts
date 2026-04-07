@@ -3,7 +3,7 @@
  *
  * Calls the engine's graphTransformContext and extracts the text content
  * from the injected context message + system prompt section. This preserves
- * 100% of the retrieval logic while adapting the output for hook systemMessage.
+ * 100% of the retrieval logic while adapting the output for hook additionalContext.
  */
 
 import type { GlobalPluginState, SessionState } from "./engine/state.js";
@@ -15,7 +15,7 @@ import { log } from "./engine/log.js";
 
 /**
  * Run the full context retrieval pipeline and return a formatted string
- * suitable for injection as a Claude Code hook systemMessage.
+ * suitable for injection as a Claude Code hook additionalContext.
  *
  * Flow: classifyIntent → vectorSearch → graphExpand → WMR/ACAN scoring
  *       → dedup → budgetTrim → formatContextMessage → extract text
