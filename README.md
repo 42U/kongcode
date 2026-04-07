@@ -36,26 +36,55 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ```bash
 # Docker (recommended)
-docker run -d --name surrealdb -p 8000:8000 \
+docker run -d --name surrealdb -p 127.0.0.1:8000:8000 \
   surrealdb/surrealdb:latest start --user root --pass root
 
 # Or native
 curl -sSf https://install.surrealdb.com | sh
-surreal start --user root --pass root --bind 0.0.0.0:8000
+surreal start --user root --pass root --bind 127.0.0.1:8000
 ```
 
-### 2. Install KongCode
+> **Security note:** Always bind to `127.0.0.1`, not `0.0.0.0`, unless you need remote access.
+
+### 2. Clone and build
 
 ```bash
-git clone https://github.com/42U/kongcode.git ~/.claude/plugins/kongcode
-cd ~/.claude/plugins/kongcode
+git clone https://github.com/42U/kongcode.git
+cd kongcode
 npm install && npm run build
 ```
 
-### 3. Use Claude Code
+### 3. Enable the plugin
 
-KongCode activates automatically. Memory is extracted and retrieved transparently.
-Background learning uses Claude subagents — no separate API key needed.
+Add the following to your `~/.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "kongcode-marketplace": {
+      "source": {
+        "source": "directory",
+        "path": "/absolute/path/to/kongcode"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "kongcode@kongcode-marketplace": true
+  }
+}
+```
+
+Replace `/absolute/path/to/kongcode` with wherever you cloned the repo.
+
+### 4. Start Claude Code
+
+```bash
+claude
+```
+
+On first startup, KongCode downloads the BGE-M3 embedding model (~420MB) from [Hugging Face](https://huggingface.co/BAAI/bge-m3) and creates all database tables automatically. No manual setup required.
+
+After that, memory is extracted and retrieved transparently every session. No API key needed — all cognitive work is delegated to Claude subagents.
 
 ## Architecture
 
@@ -95,8 +124,6 @@ Environment variables (all optional, sensible defaults):
 | `SURREAL_NS` | `kong` | SurrealDB namespace |
 | `SURREAL_DB` | `memory` | SurrealDB database |
 | `KONGCODE_LOG_LEVEL` | `warn` | Log level: error, warn, info, debug |
-
-No API key is needed — all cognitive work (extraction, reflection, synthesis) is delegated to Claude subagents.
 
 ## How It Works
 
