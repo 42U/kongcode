@@ -5,6 +5,5 @@
   "author": {
     "name": "VoidOrigin"
   },
-  "hooks": "./hooks/hooks.json",
   "mcpServers": "./.mcp.json"
 }

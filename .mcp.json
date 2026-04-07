@@ -2,19 +2,7 @@
   "mcpServers": {
     "kongcode": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"],
-      "env": {
-        "SURREAL_URL": "${SURREAL_URL}",
-        "SURREAL_USER": "${SURREAL_USER}",
-        "SURREAL_PASS": "${SURREAL_PASS}",
-        "SURREAL_NS": "${SURREAL_NS}",
-        "SURREAL_DB": "${SURREAL_DB}",
-        "EMBED_MODEL_PATH": "${EMBED_MODEL_PATH}",
-        "ANTHROPIC_API_KEY": "${ANTHROPIC_API_KEY}",
-        "KONGCODE_MODEL": "${KONGCODE_MODEL}",
-        "KONGCODE_LOG_LEVEL": "${KONGCODE_LOG_LEVEL}",
-        "KONGCODE_PROJECT_DIR": "${CLAUDE_PROJECT_DIR}"
-      }
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"]
     }
   }
 }
