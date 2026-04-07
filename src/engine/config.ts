@@ -28,18 +28,10 @@ export interface ThresholdConfig {
   acanTrainingThreshold: number;
 }
 
-export interface LlmConfig {
-  /** Model for daemon extraction, reflection, soul synthesis (default: claude-sonnet-4-20250514) */
-  model: string;
-  /** Max tokens for internal LLM calls (default: 4096) */
-  maxTokens: number;
-}
-
 export interface KongCodeConfig {
   surreal: SurrealConfig;
   embedding: EmbeddingConfig;
   thresholds: ThresholdConfig;
-  llm: LlmConfig;
 }
 
 /** @deprecated Alias for backwards compatibility with engine modules that reference KongBrainConfig. */
@@ -97,10 +89,6 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
         typeof thresholds.maxPendingThinking === "number" ? thresholds.maxPendingThinking : 20,
       acanTrainingThreshold:
         typeof thresholds.acanTrainingThreshold === "number" ? thresholds.acanTrainingThreshold : 5000,
-    },
-    llm: {
-      model: process.env.KONGCODE_MODEL ?? "claude-sonnet-4-20250514",
-      maxTokens: 4096,
     },
   };
 }

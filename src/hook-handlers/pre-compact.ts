@@ -2,13 +2,11 @@
  * PreCompact hook handler.
  *
  * Fires BEFORE Claude Code shrinks the conversation window.
- * This is our last chance to extract knowledge from the full conversation,
- * so we force a daemon flush and ingest any pending turns into SurrealDB.
+ * Ingests any pending turns into SurrealDB before they're lost.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
-import type { TurnData } from "../engine/daemon-types.js";
 import { ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
@@ -29,23 +27,6 @@ export async function handlePreCompact(
   }
   if (session.lastAssistantText) {
     await ingestTurn(state, session, "assistant", session.lastAssistantText).catch(() => {});
-  }
-
-  // Force daemon flush — extract all pending knowledge to SurrealDB
-  // before the conversation window shrinks
-  if (session.daemon) {
-    try {
-      const turns: TurnData[] = [];
-      if (session.lastUserText) turns.push({ role: "user", text: session.lastUserText });
-      if (session.lastAssistantText) turns.push({ role: "assistant", text: session.lastAssistantText });
-      if (turns.length > 0) {
-        session.daemon.sendTurnBatch(turns, session.pendingThinking.slice(-3), []);
-      }
-      session.newContentTokens = 0;
-      session.lastDaemonFlushTurnCount = session.userTurnCount;
-    } catch (e) {
-      swallow.warn("preCompact:daemonFlush", e);
-    }
   }
 
   // Flush session stats to DB

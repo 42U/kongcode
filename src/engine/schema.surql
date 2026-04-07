@@ -379,6 +379,24 @@ DEFINE FIELD IF NOT EXISTS stage ON graduation_event TYPE string;
 DEFINE FIELD IF NOT EXISTS created_at ON graduation_event TYPE datetime DEFAULT time::now();
 
 -- ============================================================
+-- PENDING WORK QUEUE: Deferred cognitive tasks for subagent processing
+-- ============================================================
+-- Session-end queues work items (extraction, reflection, skill, soul).
+-- Next session's subagent (Opus) fetches and processes them via MCP tools.
+DEFINE TABLE IF NOT EXISTS pending_work SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS work_type ON pending_work TYPE string;
+DEFINE FIELD IF NOT EXISTS session_id ON pending_work TYPE string;
+DEFINE FIELD IF NOT EXISTS surreal_session_id ON pending_work TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS task_id ON pending_work TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS project_id ON pending_work TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS payload ON pending_work TYPE option<object>;
+DEFINE FIELD IF NOT EXISTS status ON pending_work TYPE string DEFAULT "pending";
+DEFINE FIELD IF NOT EXISTS priority ON pending_work TYPE int DEFAULT 5;
+DEFINE FIELD IF NOT EXISTS created_at ON pending_work TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS completed_at ON pending_work TYPE option<datetime>;
+DEFINE INDEX IF NOT EXISTS pw_status_idx ON pending_work FIELDS status, priority;
+
+-- ============================================================
 -- MIGRATIONS (must run after table definitions)
 -- ============================================================
 -- 768d → 1024d migration completed; REMOVE INDEX / UPDATE stale

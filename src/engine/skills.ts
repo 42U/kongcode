@@ -9,26 +9,10 @@
  * Ported from kongbrain — takes SurrealStore/EmbeddingService as params.
  */
 
-import type { CompleteFn } from "./state.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { SurrealStore } from "./surreal.js";
 import { swallow } from "./errors.js";
-import { linkToRelevantConcepts } from "./concept-extract.js";
 import { assertRecordId } from "./surreal.js";
-
-// --- Shared schema for structured output ---
-
-const skillSchema = {
-  type: "object" as const,
-  properties: {
-    name: { type: "string" },
-    description: { type: "string" },
-    preconditions: { type: "string" },
-    steps: { type: "array", items: { type: "object", properties: { tool: { type: "string" }, description: { type: "string" } } } },
-    postconditions: { type: "string" },
-  },
-  required: ["name", "description", "steps"],
-};
 
 // --- Types ---
 
@@ -72,84 +56,12 @@ export async function extractSkill(
   taskId: string,
   store: SurrealStore,
   embeddings: EmbeddingService,
-  complete: CompleteFn,
 ): Promise<string | null> {
   if (!store.isAvailable()) return null;
 
-  const turns = await store.getSessionTurns(sessionId, 50);
-  if (turns.length < 4) return null; // Too short for skill extraction
-
-  const transcript = turns
-    .map((t) => `[${t.role}] ${(t.text ?? "").slice(0, 300)}`)
-    .join("\n");
-
-  try {
-    const response = await complete({
-      system: `Extract a reusable skill procedure. Generic patterns only (no specific paths). Return null if no clear multi-step workflow.`,
-      messages: [{
-        role: "user",
-        content: `${turns.length} turns:\n${transcript.slice(0, 20000)}`,
-      }],
-      outputFormat: { type: "json_schema", schema: skillSchema },
-    });
-
-    const text = response.text;
-
-    if (text.trim() === "null" || text.trim() === "None") return null;
-
-    // Try direct JSON.parse first (structured output), fall back to regex extraction
-    let parsed: ExtractedSkill;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      const jsonMatch = text.match(/\{[\s\S]*\}/); // greedy — handles nested objects
-      if (!jsonMatch) return null;
-      parsed = JSON.parse(jsonMatch[0]) as ExtractedSkill;
-    }
-    if (!parsed.name || !parsed.description || !Array.isArray(parsed.steps) || parsed.steps.length === 0) {
-      return null;
-    }
-
-    let skillEmb: number[] | null = null;
-    if (embeddings.isAvailable()) {
-      try { skillEmb = await embeddings.embed(`${parsed.name}: ${parsed.description}`); } catch (e) { swallow("skills:ok", e); }
-    }
-
-    const record: Record<string, unknown> = {
-      name: String(parsed.name).slice(0, 100),
-      description: String(parsed.description).slice(0, 200),
-      preconditions: parsed.preconditions ? String(parsed.preconditions).slice(0, 200) : undefined,
-      steps: parsed.steps.slice(0, 8).map((s) => ({
-        tool: String(s.tool ?? "unknown"),
-        description: String(s.description ?? "").slice(0, 200),
-      })),
-      postconditions: parsed.postconditions ? String(parsed.postconditions).slice(0, 200) : undefined,
-      confidence: 1.0,
-      active: true,
-    };
-    if (skillEmb?.length) record.embedding = skillEmb;
-
-    const rows = await store.queryFirst<{ id: string }>(
-      `CREATE skill CONTENT $record RETURN id`,
-      { record },
-    );
-    const skillId = String(rows[0]?.id ?? "");
-
-    if (skillId && taskId) {
-      await store.relate(skillId, "skill_from_task", taskId).catch(e => swallow.warn("skills:relateSkillTask", e));
-    }
-    if (skillId) {
-      await supersedeOldSkills(skillId, skillEmb ?? [], store);
-      // skill_uses_concept: skill → concept
-      const skillDesc = `${parsed.name} ${parsed.description ?? ""} ${(parsed.preconditions ?? "")}`;
-      await linkToRelevantConcepts(skillId, "skill_uses_concept", skillDesc, store, embeddings, "skills:concepts", 5, 0.65, skillEmb);
-    }
-
-    return skillId || null;
-  } catch (e) {
-    swallow.warn("skills:extract", e);
-    return null;
-  }
+  // LLM call logic removed — skill extraction is now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
+  return null;
 }
 
 // --- Supersession ---
@@ -285,85 +197,8 @@ export async function recordSkillOutcome(
 export async function graduateCausalToSkills(
   store: SurrealStore,
   embeddings: EmbeddingService,
-  complete: CompleteFn,
 ): Promise<number> {
-  if (!store.isAvailable()) return 0;
-
-  try {
-    const groups = await store.queryFirst<{ chain_type: string; cnt: number; descriptions: string[] }>(
-      `SELECT chain_type, count() AS cnt, array::group(description) AS descriptions
-       FROM causal_chain
-       WHERE success = true AND confidence >= 0.7
-       GROUP BY chain_type`,
-    );
-
-    let created = 0;
-
-    for (const group of groups) {
-      if (group.cnt < 3) continue;
-
-      // Check if a skill already covers this chain type
-      const existing = await store.queryFirst<{ id: string }>(
-        `SELECT id FROM skill WHERE string::lowercase(name) CONTAINS string::lowercase($ct) LIMIT 1`,
-        { ct: group.chain_type },
-      );
-      if (existing.length > 0) continue;
-
-      const resp = await complete({
-        system: `Synthesize a reusable procedure from recurring patterns. Generic — no specific file paths or variable names.`,
-        messages: [{
-          role: "user",
-          content: `${group.cnt} successful "${group.chain_type}" patterns:\n${group.descriptions.slice(0, 8).join("\n")}`,
-        }],
-        outputFormat: { type: "json_schema", schema: skillSchema },
-      });
-
-      const text = resp.text;
-      let parsed: ExtractedSkill;
-      try { parsed = JSON.parse(text); } catch {
-        const jsonMatch = text.match(/\{[\s\S]*?\}/);
-        if (!jsonMatch) continue;
-        try { parsed = JSON.parse(jsonMatch[0]); } catch { continue; }
-      }
-      if (!parsed.name || !Array.isArray(parsed.steps) || parsed.steps.length === 0) continue;
-
-      let skillEmb: number[] | null = null;
-      if (embeddings.isAvailable()) {
-        try { skillEmb = await embeddings.embed(`${parsed.name}: ${parsed.description}`); } catch (e) { swallow("skills:ok", e); }
-      }
-
-      const record: Record<string, unknown> = {
-        name: String(parsed.name).slice(0, 100),
-        description: String(parsed.description).slice(0, 200),
-        preconditions: parsed.preconditions ? String(parsed.preconditions).slice(0, 200) : undefined,
-        steps: parsed.steps.slice(0, 6).map((s) => ({
-          tool: String(s.tool ?? "unknown"),
-          description: String(s.description ?? "").slice(0, 200),
-        })),
-        postconditions: parsed.postconditions ? String(parsed.postconditions).slice(0, 200) : undefined,
-        graduated_from: group.chain_type,
-        confidence: 1.0,
-        active: true,
-      };
-      if (skillEmb?.length) record.embedding = skillEmb;
-
-      const rows = await store.queryFirst<{ id: string }>(
-        `CREATE skill CONTENT $record RETURN id`,
-        { record },
-      );
-      if (rows[0]?.id) {
-        const gradSkillId = String(rows[0].id);
-        await supersedeOldSkills(gradSkillId, skillEmb ?? [], store);
-        // skill_uses_concept: skill → concept
-        const skillDesc = `${parsed.name} ${parsed.description ?? ""}`;
-        await linkToRelevantConcepts(gradSkillId, "skill_uses_concept", skillDesc, store, embeddings, "skills:graduate:concepts", 5, 0.65, skillEmb);
-        created++;
-      }
-    }
-
-    return created;
-  } catch (e) {
-    swallow.warn("skills:graduateCausal", e);
-    return 0;
-  }
+  // LLM call logic removed — causal-to-skill graduation is now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
+  return 0;
 }

@@ -43,7 +43,6 @@
     "start": "node dist/mcp-server.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.82.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "@sinclair/typebox": "0.34.48",
     "node-llama-cpp": "^3.18.1",

@@ -2,7 +2,7 @@
  * SessionStart hook handler.
  *
  * Bootstraps the session: creates 5-pillar graph nodes, applies schema,
- * starts memory daemon, synthesizes wakeup briefing, runs deferred cleanup.
+ * synthesizes wakeup briefing, runs deferred cleanup.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
@@ -11,7 +11,6 @@ import { seedIdentity } from "../engine/identity.js";
 import { seedCognitiveBootstrap } from "../engine/cognitive-bootstrap.js";
 import { synthesizeWakeup } from "../engine/wakeup.js";
 import { runDeferredCleanup } from "../engine/deferred-cleanup.js";
-import { startMemoryDaemon } from "../engine/daemon-manager.js";
 import { getSoul } from "../engine/soul.js";
 import { hasMigratableFiles } from "../engine/workspace-migrate.js";
 import { swallow } from "../engine/errors.js";
@@ -54,21 +53,12 @@ export async function handleSessionStart(
       await store.linkSessionToTask(session.surrealSessionId, session.taskId)
         .catch(e => swallow("sessionStart:linkSessionToTask", e));
 
-      // Start memory daemon for background knowledge extraction
-      if (!session.daemon) {
-        session.daemon = startMemoryDaemon(
-          store, embeddings, session.sessionId, state.complete,
-          state.config.thresholds.extractionTimeoutMs,
-          session.taskId, session.projectId,
-        );
-      }
-
       // Seed identity and cognitive bootstrap (idempotent)
       await seedIdentity(store, embeddings).catch(e => swallow("sessionStart:identity", e));
       await seedCognitiveBootstrap(store, embeddings).catch(e => swallow("sessionStart:cognitive", e));
 
       // Run deferred cleanup for orphaned sessions
-      await runDeferredCleanup(store, embeddings, state.complete).catch(e => swallow("sessionStart:deferredCleanup", e));
+      await runDeferredCleanup(store).catch(e => swallow("sessionStart:deferredCleanup", e));
 
       // Check for unacknowledged graduation events from previous sessions
       try {
@@ -107,7 +97,7 @@ export async function handleSessionStart(
 
   // Synthesize wakeup briefing (async, result cached for UserPromptSubmit)
   if (store.isAvailable() && embeddings.isAvailable()) {
-    session._wakeupPromise = synthesizeWakeup(store, state.complete, session.sessionId)
+    session._wakeupPromise = synthesizeWakeup(store, session.sessionId)
       .catch(e => { swallow("sessionStart:wakeup", e); return null; });
   }
 

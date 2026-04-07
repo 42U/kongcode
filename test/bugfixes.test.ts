@@ -4,7 +4,6 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { startMemoryDaemon } from "../src/engine/daemon-manager.js";
 import { preflight } from "../src/engine/orchestrator.js";
 import { SessionState } from "../src/engine/state.js";
 import { writeHandoffFileSync, readAndDeleteHandoffFile } from "../src/engine/handoff-file.js";
@@ -18,15 +17,6 @@ import { tmpdir } from "node:os";
 
 // ── Mock factories ───────────────────────────────────────────────────────────
 
-function mockStore() {
-  return {
-    isAvailable: () => true,
-    getSessionTurns: async () => [],
-    queryFirst: async () => [],
-    queryExec: async () => {},
-  } as any;
-}
-
 function mockEmbeddings(available = true) {
   const svc = {
     isAvailable: () => available,
@@ -35,79 +25,6 @@ function mockEmbeddings(available = true) {
   } as any;
   return svc;
 }
-
-function mockComplete() {
-  return async () => ({ text: "{}", usage: { input: 0, output: 0 } });
-}
-
-function neverComplete() {
-  return () => new Promise<any>(() => {});
-}
-
-// ── Fix #1: Interval leak on daemon shutdown timeout ─────────────────────────
-
-describe("daemon shutdown timeout cleans up interval (fix #1)", () => {
-  it("shutdown resolves via timeout even when processing is stuck", async () => {
-    const daemon = startMemoryDaemon(
-      mockStore(), mockEmbeddings(), "session1", neverComplete(), 60_000,
-    );
-
-    // Start processing by sending a batch (needs ≥2 turns)
-    daemon.sendTurnBatch(
-      [
-        { role: "user", text: "hello world test", turnId: "t1" },
-        { role: "assistant", text: "response here", turnId: "t2" },
-      ],
-      [], [],
-    );
-
-    // Let processing start
-    await new Promise(r => setTimeout(r, 50));
-
-    // Shutdown with short timeout — should resolve, not hang
-    const start = Date.now();
-    await daemon.shutdown(200);
-    const elapsed = Date.now() - start;
-
-    // Should resolve within ~300ms (200ms timeout + slack), not hang forever
-    expect(elapsed).toBeLessThan(500);
-  });
-});
-
-// ── Fix #4: Batch overwrite logs warning ─────────────────────────────────────
-
-describe("batch overwrite logs warning (fix #4)", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  it("warns when overwriting a pending batch", async () => {
-    const daemon = startMemoryDaemon(
-      mockStore(), mockEmbeddings(), "session1", neverComplete(), 60_000,
-    );
-
-    const turns = [
-      { role: "user", text: "hello", turnId: "t1" },
-      { role: "assistant", text: "world", turnId: "t2" },
-    ];
-
-    // First batch starts processing
-    daemon.sendTurnBatch(turns, [], []);
-    await new Promise(r => setTimeout(r, 50));
-
-    // Second batch merges into pending slot
-    daemon.sendTurnBatch(turns, [], []);
-
-    // Third batch merges again — no data loss
-    daemon.sendTurnBatch(turns, [], []);
-
-    await daemon.shutdown(200);
-  });
-});
 
 // ── Fix #5: Continuation inherits lower tool budget ──────────────────────────
 

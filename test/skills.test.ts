@@ -39,10 +39,6 @@ function mockEmbeddings(available = true) {
   } as any;
 }
 
-function mockComplete(response = JSON.stringify({name:"Debug auth",description:"Fix auth bugs",steps:[{tool:"read",description:"Read error logs"}],preconditions:"failing tests",postconditions:"tests pass"})) {
-  return vi.fn(async () => ({ text: response }));
-}
-
 function makeSampleSkill(overrides: Partial<Skill> = {}): Skill {
   return {
     id: "skill:s1",
@@ -68,48 +64,17 @@ function makeSampleSkill(overrides: Partial<Skill> = {}): Skill {
 // ── extractSkill ──
 
 describe("extractSkill", () => {
-  it("extracts a skill from session turns via LLM", async () => {
+  it("returns null (LLM body removed — handled by pending_work pipeline)", async () => {
     const store = mockStore();
-    const complete = mockComplete();
-    const result = await extractSkill("session:s1", "task:t1", store, mockEmbeddings(), complete);
-
-    expect(result).toBe("skill:new1");
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(store.queryFirst).toHaveBeenCalledWith(
-      expect.stringContaining("CREATE skill"),
-      expect.objectContaining({
-        record: expect.objectContaining({ name: "Debug auth" }),
-      }),
-    );
-  });
-
-  it("returns null when session has fewer than 4 turns", async () => {
-    const store = mockStore();
-    store.getSessionTurns.mockResolvedValue([
-      { role: "user", text: "hi" },
-      { role: "assistant", text: "hello" },
-    ]);
-    const result = await extractSkill("session:s1", "task:t1", store, mockEmbeddings(), mockComplete());
-    expect(result).toBeNull();
-  });
-
-  it("returns null when LLM returns 'null'", async () => {
-    const complete = mockComplete("null");
-    const result = await extractSkill("session:s1", "task:t1", mockStore(), mockEmbeddings(), complete);
+    const result = await extractSkill("session:s1", "task:t1", store, mockEmbeddings());
     expect(result).toBeNull();
   });
 
   it("returns null when store is unavailable", async () => {
     const store = mockStore();
     store.isAvailable = () => false;
-    const result = await extractSkill("session:s1", "task:t1", store, mockEmbeddings(), mockComplete());
+    const result = await extractSkill("session:s1", "task:t1", store, mockEmbeddings());
     expect(result).toBeNull();
-  });
-
-  it("creates skill_from_task edge", async () => {
-    const store = mockStore();
-    await extractSkill("session:s1", "task:t1", store, mockEmbeddings(), mockComplete());
-    expect(store.relate).toHaveBeenCalledWith("skill:new1", "skill_from_task", "task:t1");
   });
 });
 
@@ -242,59 +207,16 @@ describe("supersedeOldSkills", () => {
 // ── graduateCausalToSkills ──
 
 describe("graduateCausalToSkills", () => {
-  it("graduates causal chains with 3+ successes into skills", async () => {
+  it("returns 0 (LLM body removed — handled by pending_work pipeline)", async () => {
     const store = mockStore();
-    // First call: get grouped causal chains
-    store.queryFirst
-      .mockResolvedValueOnce([
-        { chain_type: "debug", cnt: 5, descriptions: ["fixed null check", "fixed import", "fixed type error"] },
-      ])
-      // Second call: check if skill already exists for this chain type
-      .mockResolvedValueOnce([]) // no existing skill
-      // Third call: CREATE skill
-      .mockResolvedValueOnce([{ id: "skill:graduated1" }])
-      // Fourth+: supersession check
-      .mockResolvedValue([]);
-
-    const complete = mockComplete();
-    const result = await graduateCausalToSkills(store, mockEmbeddings(), complete);
-
-    expect(result).toBe(1);
-    expect(complete).toHaveBeenCalledTimes(1);
-  });
-
-  it("skips chain types that already have a skill", async () => {
-    const store = mockStore();
-    store.queryFirst
-      .mockResolvedValueOnce([
-        { chain_type: "debug", cnt: 5, descriptions: ["fixed stuff"] },
-      ])
-      .mockResolvedValueOnce([{ id: "skill:existing" }]); // already exists
-
-    const complete = mockComplete();
-    const result = await graduateCausalToSkills(store, mockEmbeddings(), complete);
-
+    const result = await graduateCausalToSkills(store, mockEmbeddings());
     expect(result).toBe(0);
-    expect(complete).not.toHaveBeenCalled();
-  });
-
-  it("skips chains with fewer than 3 successes", async () => {
-    const store = mockStore();
-    store.queryFirst.mockResolvedValueOnce([
-      { chain_type: "debug", cnt: 2, descriptions: ["only two"] },
-    ]);
-
-    const complete = mockComplete();
-    const result = await graduateCausalToSkills(store, mockEmbeddings(), complete);
-
-    expect(result).toBe(0);
-    expect(complete).not.toHaveBeenCalled();
   });
 
   it("returns 0 when store is unavailable", async () => {
     const store = mockStore();
     store.isAvailable = () => false;
-    const result = await graduateCausalToSkills(store, mockEmbeddings(), mockComplete());
+    const result = await graduateCausalToSkills(store, mockEmbeddings());
     expect(result).toBe(0);
   });
 });

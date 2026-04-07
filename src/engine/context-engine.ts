@@ -8,7 +8,6 @@
 
 import { loadSchema } from "./schema-loader.js";
 import type { AgentMessage } from "./types.js";
-import { startMemoryDaemon } from "./daemon-manager.js";
 
 // Result types (previously mirrored from OpenClaw — now standalone).
 type AssembleResult = {
@@ -42,10 +41,7 @@ import { shouldRunCheck, runCognitiveCheck } from "./cognitive-check.js";
 import { checkACANReadiness } from "./acan.js";
 import { predictQueries, prefetchContext } from "./prefetch.js";
 import { runDeferredCleanup } from "./deferred-cleanup.js";
-import { extractSkill } from "./skills.js";
-import { generateReflection } from "./reflection.js";
-import { graduateCausalToSkills } from "./skills.js";
-import { attemptGraduation, evolveSoul, checkStageTransition } from "./soul.js";
+import { checkStageTransition } from "./soul.js";
 import { swallow } from "./errors.js";
 import { log } from "./log.js";
 
@@ -110,15 +106,6 @@ export class KongCodeContextEngine {
 
         session.surrealSessionId = surrealSessionId;
         session.lastUserTurnId = "";
-
-        // Start memory daemon for this session
-        if (!session.daemon) {
-          session.daemon = startMemoryDaemon(
-            store, embeddings, session.sessionId, this.state.complete,
-            this.state.config.thresholds.extractionTimeoutMs,
-            session.taskId, session.projectId,
-          );
-        }
       } catch (e) {
         swallow.error("bootstrap:5pillar", e);
       }
@@ -454,27 +441,9 @@ export class KongCodeContextEngine {
 
     const { store, embeddings } = this.state;
 
-    // Lazy daemon start: if session was resumed after gateway restart,
-    // session_start won't re-fire, so the daemon never started.
-    if (!session.daemon && typeof this.state.complete === "function") {
-      try {
-        session.daemon = startMemoryDaemon(
-          store,
-          embeddings,
-          session.sessionId,
-          this.state.complete,
-          this.state.config.thresholds.extractionTimeoutMs,
-          session.taskId,
-          session.projectId,
-        );
-      } catch (e) {
-        swallow.warn("afterTurn:lazyDaemonStart", e);
-      }
-    }
-
-    // Deferred cleanup: run once on first turn when complete() is available
-    if (session.userTurnCount <= 1 && typeof this.state.complete === "function") {
-      runDeferredCleanup(store, embeddings, this.state.complete)
+    // Deferred cleanup: run once on first turn
+    if (session.userTurnCount <= 1) {
+      runDeferredCleanup(store)
         .catch(e => swallow.warn("afterTurn:deferredCleanup", e));
     }
 
@@ -512,140 +481,26 @@ export class KongCodeContextEngine {
           table: n.table,
         })),
         recentTurns: allSessionTurns.slice(-6),
-      }, session, store, this.state.complete).catch(e => swallow.warn("afterTurn:cognitiveCheck", e));
-    }
-
-    // Flush to daemon when token threshold OR turn count threshold is reached
-    const tokenReady = session.newContentTokens >= session.daemonTokenThreshold;
-    const turnReady = session.userTurnCount >= session.lastDaemonFlushTurnCount + 3;
-    log.debug(`flush check: daemon=${!!session.daemon} tokenReady=${tokenReady} turnReady=${turnReady} turns=${session.userTurnCount}`);
-    if (session.daemon && (tokenReady || turnReady)) {
-      try {
-        const recentTurns = allSessionTurns.slice(-20);
-        const turnData = recentTurns.map(t => ({
-          role: t.role as "user" | "assistant",
-          text: t.text,
-          turnId: String((t as { id?: string }).id ?? ""),
-        }));
-
-        // Gather retrieved memory IDs for dedup
-        const retrievedMemories = stagedSnapshot.map(n => ({
-          id: n.id,
-          text: n.text ?? "",
-        }));
-
-        session.daemon.sendTurnBatch(
-          turnData,
-          [...session.pendingThinking],
-          retrievedMemories,
-        );
-
-        session.newContentTokens = 0;
-        session.lastDaemonFlushTurnCount = session.userTurnCount;
-        session.pendingThinking.length = 0;
-      } catch (e) {
-        swallow.warn("afterTurn:daemonBatch", e);
-      }
+      }, session, store).catch(e => swallow.warn("afterTurn:cognitiveCheck", e));
     }
 
     // Mid-session cleanup: simulate session_end after ~100k tokens.
     // OpenClaw exits via Ctrl+C×2 (no async window), so session_end never fires.
     // Run reflection, skill extraction, and causal graduation periodically.
     const tokensSinceCleanup = session.cumulativeTokens - session.lastCleanupTokens;
-    if (tokensSinceCleanup >= session.midSessionCleanupThreshold && typeof this.state.complete === "function") {
+    if (tokensSinceCleanup >= session.midSessionCleanupThreshold) {
       session.lastCleanupTokens = session.cumulativeTokens;
 
-      // Fire-and-forget: these are non-critical background operations
+      // Fire-and-forget: these are non-critical background operations.
+      // Skill extraction, reflection, causal graduation, handoff, and soul
+      // graduation/evolution previously used this.state.complete (LLM calls)
+      // and are now handled by the subagent-driven pending_work pipeline.
       const cleanupOps: Promise<unknown>[] = [];
-
-      // Final daemon flush with full transcript before cleanup (reuse allSessionTurns)
-      if (session.daemon) {
-        const turnData = allSessionTurns.map(t => ({
-          role: t.role as "user" | "assistant",
-          text: t.text,
-          turnId: String((t as { id?: string }).id ?? ""),
-        }));
-        session.daemon.sendTurnBatch(turnData, [...session.pendingThinking], []);
-      }
-
-      if (session.taskId) {
-        cleanupOps.push(
-          extractSkill(session.sessionId, session.taskId, store, embeddings, this.state.complete)
-            .catch(e => swallow.warn("midCleanup:extractSkill", e)),
-        );
-      }
-
-      cleanupOps.push(
-        generateReflection(session.sessionId, store, embeddings, this.state.complete, session.surrealSessionId)
-          .catch(e => swallow.warn("midCleanup:reflection", e)),
-      );
-
-      cleanupOps.push(
-        graduateCausalToSkills(store, embeddings, this.state.complete)
-          .catch(e => swallow.warn("midCleanup:graduateCausal", e)),
-      );
 
       // ACAN: check if new retrieval outcomes warrant retraining
       cleanupOps.push(
         checkACANReadiness(store, this.state.config.thresholds.acanTrainingThreshold)
           .catch(e => swallow("midCleanup:acan", e)),
-      );
-
-      // Handoff note — snapshot for wakeup even if session continues (reuse allSessionTurns)
-      cleanupOps.push(
-        (async () => {
-          const recentTurns = allSessionTurns.slice(-15);
-          if (recentTurns.length < 2) return;
-          const turnSummary = recentTurns
-            .map(t => `[${t.role}] ${t.text.slice(0, 200)}`)
-            .join("\n");
-          const handoffResponse = await this.state.complete({
-            system: "Summarize this session for handoff to your next self. What was worked on, what's unfinished, what to remember. 2-3 sentences. Write in first person.",
-            messages: [{ role: "user", content: turnSummary }],
-          });
-          const handoffText = handoffResponse.text.trim();
-          if (handoffText.length > 20) {
-            let embedding: number[] | null = null;
-            if (embeddings.isAvailable()) {
-              try { embedding = await embeddings.embed(handoffText); } catch { /* ok */ }
-            }
-            const handoffMemId = await store.createMemory(handoffText, embedding, 8, "handoff", session.sessionId);
-            if (handoffMemId && session.surrealSessionId) {
-              await store.relate(handoffMemId, "summarizes", session.surrealSessionId)
-                .catch(e => swallow.warn("midCleanup:summarizes", e));
-            }
-          }
-        })().catch(e => swallow.warn("midCleanup:handoff", e)),
-      );
-
-      // Soul graduation + stage transition — run mid-session so marathon
-      // sessions don't miss milestones that would normally fire at session_end
-      cleanupOps.push(
-        (async () => {
-          const gradResult = await attemptGraduation(store, this.state.complete);
-          if (gradResult?.graduated && gradResult.soul) {
-            if (gradResult.report.stage === "ready") {
-              // New graduation — persist event for celebration
-              await store.queryExec(
-                `CREATE graduation_event CONTENT $data`,
-                {
-                  data: {
-                    session_id: session.sessionId,
-                    acknowledged: false,
-                    quality_score: gradResult.report.qualityScore,
-                    volume_score: gradResult.report.volumeScore,
-                    stage: gradResult.report.stage,
-                    created_at: new Date().toISOString(),
-                  },
-                },
-              );
-              log.info("[GRADUATION] KongCode has achieved soul graduation!");
-            } else {
-              // Pre-existing soul — check for evolution
-              await evolveSoul(store, this.state.complete);
-            }
-          }
-        })().catch(e => swallow.warn("midCleanup:soulGraduation", e)),
       );
 
       cleanupOps.push(

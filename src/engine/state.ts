@@ -2,39 +2,6 @@ import type { KongBrainConfig } from "./config.js";
 import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { AdaptiveConfig } from "./orchestrator.js";
-import type { MemoryDaemon } from "./daemon-manager.js";
-
-/** JSON schema for structured output (forces API to return valid JSON matching schema). */
-export type OutputFormat = {
-  type: "json_schema";
-  schema: Record<string, unknown>;
-};
-
-/** Parameters for an LLM completion call. */
-export type CompleteParams = {
-  system?: string;
-  messages: { role: "user" | "assistant"; content: string }[];
-  provider?: string;
-  model?: string;
-  temperature?: number;
-  maxTokens?: number;
-  reasoning?: "none" | "low" | "medium" | "high";
-  /** When set, API returns structured JSON matching the schema (no markdown, no preamble). */
-  outputFormat?: OutputFormat;
-};
-
-/** Result of an LLM completion call. */
-export type CompleteResult = {
-  text: string;
-  thinking?: string;
-  usage?: { input: number; output: number };
-  provider?: string;
-  model?: string;
-  stopReason?: string;
-};
-
-/** Provider-agnostic LLM completion function. */
-export type CompleteFn = (params: CompleteParams) => Promise<CompleteResult>;
 
 // --- Per-session mutable state ---
 
@@ -62,12 +29,6 @@ export class SessionState {
 
   // Thinking capture
   readonly pendingThinking: string[] = [];
-
-  // Memory daemon
-  daemon: MemoryDaemon | null = null;
-  newContentTokens = 0;
-  daemonTokenThreshold = 4000;
-  lastDaemonFlushTurnCount = 0;
 
   // Cumulative session token tracking (for mid-session cleanup trigger)
   cumulativeTokens = 0;
@@ -149,7 +110,6 @@ export class GlobalPluginState {
   readonly config: KongBrainConfig;
   readonly store: SurrealStore;
   readonly embeddings: EmbeddingService;
-  complete: CompleteFn;
   workspaceDir?: string;
   schemaApplied = false;
   private sessions = new Map<string, SessionState>();
@@ -158,12 +118,10 @@ export class GlobalPluginState {
     config: KongBrainConfig,
     store: SurrealStore,
     embeddings: EmbeddingService,
-    complete: CompleteFn,
   ) {
     this.config = config;
     this.store = store;
     this.embeddings = embeddings;
-    this.complete = complete;
   }
 
   /** Get or create a SessionState for the given session key. */
@@ -171,7 +129,6 @@ export class GlobalPluginState {
     let session = this.sessions.get(sessionKey);
     if (!session) {
       session = new SessionState(sessionId, sessionKey);
-      session.daemonTokenThreshold = this.config.thresholds.daemonTokenThreshold;
       session.midSessionCleanupThreshold = this.config.thresholds.midSessionCleanupThreshold;
       this.sessions.set(sessionKey, session);
     }

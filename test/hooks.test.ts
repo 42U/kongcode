@@ -66,7 +66,6 @@ describe("createLlmOutputHandler", () => {
     }, makeCtx(session));
 
     expect(session.cumulativeTokens).toBe(165);
-    expect(session.newContentTokens).toBe(165);
   });
 
   it("computes delta from cumulative usage (not double-counting)", async () => {
@@ -89,7 +88,6 @@ describe("createLlmOutputHandler", () => {
     }, makeCtx(session));
 
     expect(session.cumulativeTokens).toBe(250); // 100 + 150
-    expect(session.newContentTokens).toBe(250);
   });
 
   it("falls back to text-length estimation when no usage data", async () => {

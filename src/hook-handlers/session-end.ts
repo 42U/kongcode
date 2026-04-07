@@ -1,16 +1,14 @@
 /**
  * SessionEnd hook handler.
  *
- * Runs final cleanup: daemon flush, skill extraction, reflection,
- * soul graduation, handoff note. Mirrors KongBrain's session_end logic.
+ * Queues cognitive work (extraction, reflection, skills, soul) to the
+ * pending_work table for processing by a subagent on the next session.
+ * No LLM calls — all intelligence runs through Claude subagents.
  */
 
 import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
-import { extractSkill } from "../engine/skills.js";
-import { generateReflection } from "../engine/reflection.js";
-import { graduateCausalToSkills } from "../engine/skills.js";
-import { attemptGraduation, evolveSoul, checkStageTransition } from "../engine/soul.js";
+import { hasSoul, checkStageTransition } from "../engine/soul.js";
 import { writeHandoffFileSync } from "../engine/handoff-file.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
@@ -25,86 +23,107 @@ export async function handleSessionEnd(
 
   log.info(`Session end: ${sessionId}`);
 
-  const { store, embeddings } = state;
+  const { store } = state;
   session.cleanedUp = true;
 
   if (!store.isAvailable()) return {};
 
-  // Final daemon flush — extract everything that hasn't been processed yet
-  if (session.daemon) {
-    try {
-      const turns: import("../engine/daemon-types.js").TurnData[] = [];
-      if (session.lastUserText) turns.push({ role: "user", text: session.lastUserText });
-      if (session.lastAssistantText) turns.push({ role: "assistant", text: session.lastAssistantText });
-      if (turns.length > 0) {
-        session.daemon.sendTurnBatch(turns, session.pendingThinking.slice(-3), []);
-      }
-      await session.daemon.shutdown(10_000);
-    } catch (e) {
-      swallow.warn("sessionEnd:daemonShutdown", e);
-    }
-    session.daemon = null;
-  }
+  // Queue cognitive work for subagent processing on next session
+  const queueOps: Promise<unknown>[] = [];
 
-  // Run cleanup operations in parallel
-  const ops: Promise<unknown>[] = [];
-
-  // Skill extraction
-  if (session.userTurnCount >= 4) {
-    ops.push(
-      extractSkill(session.sessionId, session.taskId, store, embeddings, state.complete)
-        .catch(e => swallow.warn("sessionEnd:skillExtract", e)),
+  // Extraction — always queue if session had meaningful conversation
+  if (session.userTurnCount >= 2) {
+    queueOps.push(
+      store.queryExec(`CREATE pending_work CONTENT $data`, {
+        data: {
+          work_type: "extraction",
+          session_id: session.sessionId,
+          surreal_session_id: session.surrealSessionId,
+          task_id: session.taskId,
+          project_id: session.projectId,
+          payload: { turn_count: session.userTurnCount },
+          priority: 1,
+        },
+      }).catch(e => swallow("sessionEnd:queueExtraction", e)),
     );
   }
 
-  // Reflection
-  ops.push(
-    generateReflection(session.sessionId, store, embeddings, state.complete, session.surrealSessionId)
-      .catch(e => swallow.warn("sessionEnd:reflection", e)),
-  );
+  // Handoff note — high priority, needed for next wakeup
+  if (session.userTurnCount >= 2) {
+    queueOps.push(
+      store.queryExec(`CREATE pending_work CONTENT $data`, {
+        data: {
+          work_type: "handoff_note",
+          session_id: session.sessionId,
+          surreal_session_id: session.surrealSessionId,
+          priority: 2,
+        },
+      }).catch(e => swallow("sessionEnd:queueHandoff", e)),
+    );
+  }
+
+  // Reflection — needs 3+ turns for meaningful analysis
+  if (session.userTurnCount >= 3) {
+    queueOps.push(
+      store.queryExec(`CREATE pending_work CONTENT $data`, {
+        data: {
+          work_type: "reflection",
+          session_id: session.sessionId,
+          surreal_session_id: session.surrealSessionId,
+          priority: 3,
+        },
+      }).catch(e => swallow("sessionEnd:queueReflection", e)),
+    );
+  }
+
+  // Skill extraction — needs 4+ turns for meaningful patterns
+  if (session.userTurnCount >= 4) {
+    queueOps.push(
+      store.queryExec(`CREATE pending_work CONTENT $data`, {
+        data: {
+          work_type: "skill_extract",
+          session_id: session.sessionId,
+          task_id: session.taskId,
+          priority: 5,
+        },
+      }).catch(e => swallow("sessionEnd:queueSkill", e)),
+    );
+  }
 
   // Causal chain graduation
-  ops.push(
-    graduateCausalToSkills(store, embeddings, state.complete)
-      .catch(e => swallow.warn("sessionEnd:causalGrad", e)),
+  queueOps.push(
+    store.queryExec(`CREATE pending_work CONTENT $data`, {
+      data: {
+        work_type: "causal_graduate",
+        session_id: session.sessionId,
+        priority: 7,
+      },
+    }).catch(e => swallow("sessionEnd:queueCausal", e)),
   );
 
-  // Soul graduation
-  ops.push(
-    (async () => {
-      const gradResult = await attemptGraduation(store, state.complete);
-      if (gradResult.graduated && gradResult.report.stage === "ready") {
-        // Persist graduation event for next session's celebration
-        await store.queryExec(
-          `CREATE graduation_event CONTENT $data`,
-          {
-            data: {
-              session_id: session.sessionId,
-              acknowledged: false,
-              quality_score: gradResult.report.qualityScore,
-              volume_score: gradResult.report.volumeScore,
-              stage: gradResult.report.stage,
-              created_at: new Date().toISOString(),
-            },
-          },
-        ).catch(e => swallow("sessionEnd:graduationEvent", e));
-        log.info("[GRADUATION] KongCode has achieved soul graduation!");
-      } else if (!gradResult.graduated) {
-        await evolveSoul(store, state.complete);
-      }
-    })().catch(e => swallow.warn("sessionEnd:soul", e)),
+  // Soul graduation or evolution
+  const soulExists = await hasSoul(store).catch(() => false);
+  queueOps.push(
+    store.queryExec(`CREATE pending_work CONTENT $data`, {
+      data: {
+        work_type: soulExists ? "soul_evolve" : "soul_generate",
+        session_id: session.sessionId,
+        priority: 9,
+      },
+    }).catch(e => swallow("sessionEnd:queueSoul", e)),
   );
 
-  // Stage transition check
-  ops.push(
-    checkStageTransition(store).then(transition => {
-      if (transition.transitioned) {
-        log.info(`[MATURITY] ${transition.previousStage ?? "nascent"} → ${transition.currentStage}`);
-      }
-    }).catch(e => swallow("sessionEnd:stageTransition", e)),
-  );
+  await Promise.allSettled(queueOps);
 
-  await Promise.allSettled(ops);
+  // Stage transition check (no LLM needed — reads DB directly)
+  try {
+    const transition = await checkStageTransition(store);
+    if (transition.transitioned) {
+      log.info(`[MATURITY] ${transition.previousStage ?? "nascent"} → ${transition.currentStage}`);
+    }
+  } catch (e) {
+    swallow("sessionEnd:stageTransition", e);
+  }
 
   // Mark session ended in DB
   try {
@@ -121,7 +140,7 @@ export async function handleSessionEnd(
       userTurnCount: session.userTurnCount,
       lastUserText: session.lastUserText.slice(0, 500),
       lastAssistantText: session.lastAssistantText.slice(0, 500),
-      unextractedTokens: session.newContentTokens,
+      unextractedTokens: 0,
     }, state.workspaceDir ?? process.cwd());
   } catch (e) {
     swallow.warn("sessionEnd:handoff", e);

@@ -9,7 +9,6 @@
  * Ported from kongbrain — takes SurrealStore/EmbeddingService as params.
  */
 
-import type { CompleteFn } from "./state.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { SurrealStore } from "./surreal.js";
 import { swallow } from "./errors.js";
@@ -142,7 +141,6 @@ export async function generateReflection(
   sessionId: string,
   store: SurrealStore,
   embeddings: EmbeddingService,
-  complete: CompleteFn,
   surrealSessionId?: string,
 ): Promise<void> {
   if (!store.isAvailable()) return;
@@ -154,78 +152,8 @@ export async function generateReflection(
     if (!reflect) return;
   }
 
-  // Get session turns directly — no dependency on orchestrator_metrics
-  const turns = await store.getSessionTurns(sessionId, 15).catch(() => []);
-  if (turns.length < 3) return; // Too short for meaningful reflection
-
-  const transcript = turns
-    .map(t => `[${t.role}] ${(t.text ?? "").slice(0, 300)}`)
-    .join("\n");
-
-  const severity = turns.length >= 15 ? "moderate" : "minor";
-  const category = "session_review";
-
-  try {
-    const response = await complete({
-      system: `Reflect on this session. Write 2-4 sentences about: what went well, what could improve, any patterns worth noting. Be specific and actionable. If the session was too trivial for reflection, respond with just "skip".`,
-      messages: [{
-        role: "user",
-        content: `Session with ${turns.length} turns:\n${transcript.slice(0, 15000)}`,
-      }],
-    });
-
-    const reflectionText = response.text.trim();
-
-    if (reflectionText.length < 20 || reflectionText.toLowerCase() === "skip") return;
-
-    let reflEmb: number[] | null = null;
-    if (embeddings.isAvailable()) {
-      try { reflEmb = await embeddings.embed(reflectionText); } catch (e) { swallow("reflection:ok", e); }
-    }
-
-    // Dedup: skip if a very similar reflection already exists
-    if (reflEmb?.length) {
-      const existing = await store.queryFirst<{ id: string; importance: number; score: number }>(
-        `SELECT id, importance,
-                vector::similarity::cosine(embedding, $vec) AS score
-         FROM reflection
-         WHERE embedding != NONE AND array::len(embedding) > 0
-         ORDER BY score DESC LIMIT 1`,
-        { vec: reflEmb },
-      );
-      const top = existing[0];
-      if (top && typeof top.score === "number" && top.score > 0.85) {
-        const newImportance = Math.min(10, (top.importance ?? 7) + 0.5);
-        await store.queryFirst<any>(
-          `UPDATE $id SET importance = $imp, updated_at = time::now()`,
-          { id: top.id, imp: newImportance },
-        );
-        return;
-      }
-    }
-
-    const record: Record<string, unknown> = {
-      session_id: sessionId,
-      text: reflectionText,
-      category,
-      severity,
-      importance: 7.0,
-    };
-    if (reflEmb?.length) record.embedding = reflEmb;
-
-    const rows = await store.queryFirst<{ id: string }>(
-      `CREATE reflection CONTENT $record RETURN id`,
-      { record },
-    );
-    const reflectionId = String(rows[0]?.id ?? "");
-    store.clearReflectionCache();
-
-    if (reflectionId && surrealSessionId) {
-      await store.relate(reflectionId, "reflects_on", surrealSessionId).catch(e => swallow.warn("reflection:relate", e));
-    }
-  } catch (e) {
-    swallow("reflection:silent", e);
-  }
+  // LLM call logic removed — reflection writes are now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
 }
 
 // --- Reflection Retrieval ---

@@ -15,7 +15,7 @@ const ALLOWED_TABLES = new Set([
   "core_memory", "monologue", "skill", "reflection",
   "retrieval_outcome", "orchestrator_metrics",
   "causal_chain", "compaction_checkpoint", "subagent",
-  "memory_utility_cache", "soul", "graduation_event", "maturity_stage",
+  "memory_utility_cache", "soul", "graduation_event", "maturity_stage", "pending_work",
 ]);
 
 const VECTOR_TABLES = new Set([

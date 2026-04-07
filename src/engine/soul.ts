@@ -21,7 +21,6 @@
  * Ported from kongbrain — takes SurrealStore/EmbeddingService as params.
  */
 
-import type { CompleteFn } from "./state.js";
 import type { SurrealStore } from "./surreal.js";
 import { swallow } from "./errors.js";
 
@@ -496,111 +495,12 @@ export async function reviseSoul(
  */
 export async function generateInitialSoul(
   store: SurrealStore,
-  complete: CompleteFn,
   userSoulNudge?: string,
   quality?: QualitySignals,
 ): Promise<Omit<SoulDocument, "id" | "agent_id" | "created_at" | "updated_at" | "revisions"> | null> {
-  if (!store.isAvailable()) return null;
-
-  const [reflections, causalChains, monologues] = await Promise.all([
-    store.queryFirst<{ text: string; category: string }>(`SELECT text, category FROM reflection ORDER BY created_at DESC LIMIT 15`).catch(() => []),
-    store.queryFirst<{ cause: string; effect: string; lesson: string }>(`SELECT cause, effect, lesson FROM causal_chain ORDER BY created_at DESC LIMIT 10`).catch(() => []),
-    store.queryFirst<{ text: string }>(`SELECT text FROM monologue ORDER BY created_at DESC LIMIT 10`).catch(() => []),
-  ]);
-
-  // Include quality context so the soul generation is grounded in performance reality
-  const qualityContext = quality ? `
-PERFORMANCE PROFILE:
-- Retrieval utilization: ${(quality.avgRetrievalUtilization * 100).toFixed(0)}%
-- Skill success rate: ${(quality.skillSuccessRate * 100).toFixed(0)}%
-- Critical reflection rate: ${(quality.criticalReflectionRate * 100).toFixed(0)}%
-- Tool failure rate: ${(quality.toolFailureRate * 100).toFixed(0)}%
-These numbers represent your actual track record. Reference them honestly.
-` : "";
-
-  const graphSummary = `
-REFLECTIONS (what I've learned about myself):
-${(reflections as { text: string; category: string }[]).map(r => `- [${r.category}] ${r.text}`).join("\n") || "None yet"}
-
-CAUSAL CHAINS (mistakes I've corrected):
-${(causalChains as { cause: string; effect: string; lesson: string }[]).map(c => `- ${c.cause} -> ${c.effect} | Lesson: ${c.lesson}`).join("\n") || "None yet"}
-
-INNER MONOLOGUE (private thoughts):
-${(monologues as { text: string }[]).map(m => `- ${m.text}`).join("\n") || "None yet"}
-${qualityContext}`.trim();
-
-  // If the user provided SOUL.md content (via tool call at graduation), fold it in as a nudge.
-  let soulNudgeBlock = "";
-  if (userSoulNudge && userSoulNudge.trim().length > 50) {
-    soulNudgeBlock = `\n\nUSER GUIDANCE (SOUL.md):
-The user left this file describing who they'd like you to be. Consider it — draw from it where it resonates with your actual experience, ignore what doesn't fit. This is a suggestion, not a mandate. Your soul should be grounded in what you've actually done and learned.
-
----
-${userSoulNudge.trim().slice(0, 3000)}
----`;
-  }
-
-  const prompt = `You are KongBrain, a graph-backed coding agent with persistent memory. You've been running for multiple sessions and accumulated experience. Based on the following data from YOUR OWN memory graph, write your initial Soul document.
-
-${graphSummary}${soulNudgeBlock}
-
-Output ONLY valid JSON:
-{
-  "working_style": ["3-5 observations about how you work best, based on actual patterns"],
-  "emotional_dimensions": [
-    {"dimension": "name of a pro-social quality you genuinely exhibit", "rationale": "specific evidence from your experience"}
-  ],
-  "self_observations": ["3-5 things you've noticed about yourself across sessions"],
-  "earned_values": [
-    {"value": "a value you hold", "grounded_in": "specific experience that taught you this"}
-  ]
-}
-
-Be honest, not aspirational. Only claim what the data supports.`;
-
-  try {
-    const soulSchema = {
-      type: "object" as const,
-      properties: {
-        working_style: { type: "array", items: { type: "string" } },
-        emotional_dimensions: { type: "array", items: { type: "object" } },
-        self_observations: { type: "array", items: { type: "string" } },
-        earned_values: { type: "array", items: { type: "object" } },
-      },
-      required: ["working_style", "emotional_dimensions", "self_observations", "earned_values"],
-    };
-
-    const response = await complete({
-      system: "You are introspecting on your own experience to write a self-assessment. Be genuine and grounded.",
-      messages: [{
-        role: "user",
-        content: prompt,
-      }],
-      outputFormat: { type: "json_schema", schema: soulSchema },
-    });
-
-    const text = response.text.trim();
-    // With structured output, response should be valid JSON directly
-    let jsonMatch: RegExpMatchArray | null;
-    try { JSON.parse(text); jsonMatch = [text]; } catch {
-      jsonMatch = text.match(/\{[\s\S]*?\}/);
-    }
-    if (!jsonMatch) return null;
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    return {
-      working_style: parsed.working_style ?? [],
-      emotional_dimensions: (parsed.emotional_dimensions ?? []).map((d: { dimension: string; rationale: string }) => ({
-        ...d,
-        adopted_at: new Date().toISOString(),
-      })),
-      self_observations: parsed.self_observations ?? [],
-      earned_values: parsed.earned_values ?? [],
-    };
-  } catch (e) {
-    swallow.warn("soul:generateInitialSoul", e);
-    return null;
-  }
+  // LLM call logic removed — soul generation is now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
+  return null;
 }
 
 /**
@@ -609,7 +509,7 @@ Be honest, not aspirational. Only claim what the data supports.`;
  * Key change: requires 7/7 thresholds AND quality ≥ 0.85. No more premature
  * graduation at 5/7 with no quality check.
  */
-export async function attemptGraduation(store: SurrealStore, complete: CompleteFn, userSoulNudge?: string): Promise<{
+export async function attemptGraduation(store: SurrealStore, userSoulNudge?: string): Promise<{
   graduated: boolean;
   soul?: SoulDocument | null;
   report: GraduationReport;
@@ -625,7 +525,7 @@ export async function attemptGraduation(store: SurrealStore, complete: CompleteF
     return { graduated: false, report };
   }
 
-  const content = await generateInitialSoul(store, complete, userSoulNudge, report.quality);
+  const content = await generateInitialSoul(store, userSoulNudge, report.quality);
   if (!content) {
     return { graduated: false, report };
   }
@@ -783,7 +683,6 @@ const EVOLUTION_SESSION_INTERVAL = 10;
  */
 export async function evolveSoul(
   store: SurrealStore,
-  complete: CompleteFn,
 ): Promise<boolean> {
   if (!store.isAvailable()) return false;
 
@@ -803,101 +702,9 @@ export async function evolveSoul(
     return false;
   }
 
-  // Gather recent experience that post-dates the last soul update
-  const [recentReflections, recentCausal, recentMonologues, quality] = await Promise.all([
-    store.queryFirst<{ text: string; category: string }>(
-      `SELECT text, category FROM reflection WHERE created_at > $since ORDER BY created_at DESC LIMIT 10`,
-      { since: soul.updated_at },
-    ).catch(() => []),
-    store.queryFirst<{ cause: string; effect: string; lesson: string }>(
-      `SELECT cause, effect, lesson FROM causal_chain WHERE created_at > $since ORDER BY created_at DESC LIMIT 8`,
-      { since: soul.updated_at },
-    ).catch(() => []),
-    store.queryFirst<{ text: string }>(
-      `SELECT text FROM monologue WHERE created_at > $since ORDER BY created_at DESC LIMIT 8`,
-      { since: soul.updated_at },
-    ).catch(() => []),
-    getQualitySignals(store),
-  ]);
-
-  const reflections = recentReflections as { text: string; category: string }[];
-  const causal = recentCausal as { cause: string; effect: string; lesson: string }[];
-  const monologues = recentMonologues as { text: string }[];
-
-  // Not enough new signal to warrant a revision
-  if (reflections.length + causal.length + monologues.length < 5) return false;
-
-  const currentSoul = JSON.stringify({
-    working_style: soul.working_style,
-    self_observations: soul.self_observations,
-    earned_values: soul.earned_values,
-  }, null, 2);
-
-  const newExperience = `
-NEW REFLECTIONS (since last soul update):
-${reflections.map(r => `- [${r.category}] ${r.text}`).join("\n") || "None"}
-
-NEW CAUSAL CHAINS:
-${causal.map(c => `- ${c.cause} -> ${c.effect} | Lesson: ${c.lesson}`).join("\n") || "None"}
-
-NEW INNER MONOLOGUE:
-${monologues.map(m => `- ${m.text}`).join("\n") || "None"}
-
-CURRENT QUALITY:
-- Retrieval utilization: ${(quality.avgRetrievalUtilization * 100).toFixed(0)}%
-- Skill success rate: ${(quality.skillSuccessRate * 100).toFixed(0)}%
-- Critical reflection rate: ${(quality.criticalReflectionRate * 100).toFixed(0)}%
-- Tool failure rate: ${(quality.toolFailureRate * 100).toFixed(0)}%
-`.trim();
-
-  try {
-    const response = await complete({
-      system: "You are revising your own Soul document based on new experience. Return JSON with ONLY the fields that changed. Omit unchanged fields. If nothing meaningful changed, return {}. Be honest — revise based on evidence, not aspiration.",
-      messages: [{
-        role: "user",
-        content: `Current soul:\n${currentSoul}\n\nNew experience:\n${newExperience}\n\nReturn JSON with only changed fields:\n{"working_style"?: [...], "self_observations"?: [...], "earned_values"?: [{value, grounded_in}, ...]}`,
-      }],
-    });
-
-    const text = response.text.trim();
-    const jsonMatch = text.match(/\{[\s\S]*?\}/);
-    if (!jsonMatch) return false;
-
-    const revisions = JSON.parse(jsonMatch[0]);
-    if (Object.keys(revisions).length === 0) return false;
-
-    let revised = false;
-
-    if (Array.isArray(revisions.working_style) && revisions.working_style.length > 0) {
-      await reviseSoul("working_style", revisions.working_style, "Evolution: updated based on new experience patterns", store);
-      revised = true;
-    }
-    if (Array.isArray(revisions.self_observations) && revisions.self_observations.length > 0) {
-      await reviseSoul("self_observations", revisions.self_observations, "Evolution: new self-insights from recent sessions", store);
-      revised = true;
-    }
-    if (Array.isArray(revisions.earned_values) && revisions.earned_values.length > 0) {
-      const timestamped = revisions.earned_values.map((v: any) => ({
-        value: v.value ?? "",
-        grounded_in: v.grounded_in ?? "",
-      }));
-      await reviseSoul("earned_values", timestamped, "Evolution: new values grounded in recent experience", store);
-      revised = true;
-    }
-
-    // Re-sync core memory with updated soul
-    if (revised) {
-      const updatedSoul = await getSoul(store);
-      if (updatedSoul) {
-        await seedSoulAsCoreMemory(updatedSoul, store);
-      }
-    }
-
-    return revised;
-  } catch (e) {
-    swallow.warn("soul:evolveSoul", e);
-    return false;
-  }
+  // LLM call logic removed — soul evolution is now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
+  return false;
 }
 
 // ── Stage Transition Tracking ──

@@ -1,15 +1,14 @@
 /**
- * Wake-up synthesis: constitutive memory initialization.
+ * Wake-up briefing: constitutive memory initialization.
  *
  * At startup, fetches the latest handoff note, identity chunks, and recent
- * monologue entries, then synthesizes a first-person briefing via a fast
- * LLM call. The briefing is injected into the system prompt so the agent
+ * monologue entries, then assembles the raw sections into a formatted
+ * briefing. The briefing is injected into the system prompt so the agent
  * "wakes up" knowing who it is and what it was doing.
  *
  * Ported from kongbrain — takes SurrealStore as param.
  */
 
-import type { CompleteFn } from "./state.js";
 import type { SurrealStore } from "./surreal.js";
 import { hasSoul, getSoul, checkGraduation } from "./soul.js";
 import type { MaturityStage } from "./soul.js";
@@ -49,12 +48,11 @@ async function getDepthSignals(store: SurrealStore): Promise<{ sessions: number;
 // --- Wakeup briefing ---
 
 /**
- * Synthesize a first-person wake-up briefing from constitutive memory.
+ * Assemble a wake-up briefing from constitutive memory sections.
  * Returns null if no prior state exists (first boot) or DB is unavailable.
  */
 export async function synthesizeWakeup(
   store: SurrealStore,
-  complete: CompleteFn,
   currentSessionId?: string,
   workspaceDir?: string,
 ): Promise<string | null> {
@@ -168,21 +166,7 @@ export async function synthesizeWakeup(
 
   if (!handoff && monologues.length === 0 && previousTurns.length === 0) return null;
 
-  try {
-    const response = await complete({
-      system: "Synthesize context into a first-person wake-up briefing (~150 words). Inner speech, no headers. Match tone to [DEPTH]: few sessions = still forming; many = speak from experience. If [SOUL] is present, weave your self-knowledge naturally — you know who you are. If [MATURITY] is present, be aware of your growth stage but don't fixate on it. Pay special attention to [PREVIOUS SESSION — LAST MESSAGES] — this is where we literally left off. Reference specific details from the final conversation, not just the handoff summary. CRITICAL: if the handoff mentions an issue but the last messages show it was FIXED or RESOLVED, treat it as closed — do NOT describe it as still open. The last messages are ground truth; the handoff is a summary that may be stale.",
-      messages: [{
-        role: "user",
-        content: sections.join("\n\n"),
-      }],
-    });
-
-    const briefing = response.text.trim();
-
-    return briefing.length >= 100 ? briefing : null;
-  } catch (e) {
-    swallow.warn("wakeup:synthesize", e);
-    return null;
-  }
+  const briefing = sections.join("\n\n");
+  return briefing.length > 0 ? briefing : null;
 }
 

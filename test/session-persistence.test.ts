@@ -171,12 +171,11 @@ describe("readAndDeleteHandoffFile", () => {
 describe("runDeferredCleanup", () => {
   // Note: runDeferredCleanup uses a process-global flag (Symbol.for)
   // so it only runs once per process. Tests for the inner logic need
-  // to test processOrphanedSession indirectly or accept that only the
-  // first test actually runs the cleanup.
+  // to accept that only the first test actually runs the cleanup.
 
   it("returns 0 when store is unavailable", async () => {
     const store = { isAvailable: () => false } as any;
-    const result = await runDeferredCleanup(store, {} as any, vi.fn());
+    const result = await runDeferredCleanup(store);
     expect(result).toBe(0);
   });
 
@@ -186,7 +185,7 @@ describe("runDeferredCleanup", () => {
       isAvailable: () => true,
       getOrphanedSessions: vi.fn(async () => []),
     } as any;
-    const result = await runDeferredCleanup(store, {} as any, vi.fn());
+    const result = await runDeferredCleanup(store);
     expect(result).toBe(0); // already ran in this process
   });
 });

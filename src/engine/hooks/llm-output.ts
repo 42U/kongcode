@@ -82,8 +82,6 @@ export function createLlmOutputHandler(state: GlobalPluginState) {
       }
     }
 
-    // Accumulate for daemon batching and mid-session cleanup
-    session.newContentTokens += deltaTokens;
     session.cumulativeTokens += deltaTokens;
 
     // Track accumulated text output for planning gate

@@ -384,73 +384,16 @@ describe("generateInitialSoul", () => {
     } as any;
   }
 
-  const validSoulJson = JSON.stringify({
-    working_style: ["methodical debugging", "test-first approach"],
-    emotional_dimensions: [{ dimension: "thoroughness", rationale: "caught 3 edge cases others missed" }],
-    self_observations: ["I tend to over-document"],
-    earned_values: [{ value: "correctness over speed", grounded_in: "learned from shipping a bug" }],
-  });
-
-  it("generates soul from graph data via LLM", async () => {
-    const complete = vi.fn(async () => ({ text: validSoulJson }));
-    const result = await generateInitialSoul(mockSoulGenStore(), complete);
-
-    expect(result).not.toBeNull();
-    expect(result!.working_style).toHaveLength(2);
-    expect(result!.earned_values[0].value).toBe("correctness over speed");
-  });
-
-  it("includes quality context when provided", async () => {
-    const complete = vi.fn(async () => ({ text: validSoulJson }));
-    const quality: QualitySignals = {
-      avgRetrievalUtilization: 0.75, skillSuccessRate: 0.9,
-      criticalReflectionRate: 0.3, toolFailureRate: 0.05,
-    };
-
-    await generateInitialSoul(mockSoulGenStore(), complete, undefined, quality);
-
-    const prompt = complete.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain("PERFORMANCE PROFILE");
-    expect(prompt).toContain("75%");
-  });
-
-  it("includes user SOUL.md nudge when provided", async () => {
-    const complete = vi.fn(async () => ({ text: validSoulJson }));
-    const nudge = "You should be friendly, precise, and always explain your reasoning. ".repeat(3);
-
-    await generateInitialSoul(mockSoulGenStore(), complete, nudge);
-
-    const prompt = complete.mock.calls[0][0].messages[0].content;
-    expect(prompt).toContain("USER GUIDANCE (SOUL.md)");
-    expect(prompt).toContain("friendly");
+  it("returns null (LLM body removed — handled by pending_work pipeline)", async () => {
+    const result = await generateInitialSoul(mockSoulGenStore());
+    expect(result).toBeNull();
   });
 
   it("returns null when store is unavailable", async () => {
     const store = mockSoulGenStore();
     store.isAvailable = () => false;
-    const result = await generateInitialSoul(store, vi.fn());
+    const result = await generateInitialSoul(store);
     expect(result).toBeNull();
-  });
-
-  it("returns null on LLM failure", async () => {
-    const complete = vi.fn(async () => { throw new Error("API error"); });
-    const result = await generateInitialSoul(mockSoulGenStore(), complete);
-    expect(result).toBeNull();
-  });
-
-  it("adds adopted_at timestamp to emotional dimensions", async () => {
-    const complete = vi.fn(async () => ({ text: validSoulJson }));
-    const result = await generateInitialSoul(mockSoulGenStore(), complete);
-    expect(result!.emotional_dimensions[0].adopted_at).toBeDefined();
-  });
-
-  it("uses structured output format", async () => {
-    const complete = vi.fn(async () => ({ text: validSoulJson }));
-    await generateInitialSoul(mockSoulGenStore(), complete);
-    expect(complete.mock.calls[0][0].outputFormat).toEqual({
-      type: "json_schema",
-      schema: expect.objectContaining({ required: ["working_style", "emotional_dimensions", "self_observations", "earned_values"] }),
-    });
   });
 });
 
@@ -459,7 +402,7 @@ describe("generateInitialSoul", () => {
 describe("attemptGraduation", () => {
   it("returns graduated=false when not ready", async () => {
     const store = mockStore({ sessions: 2, reflections: 0 }); // way below thresholds
-    const result = await attemptGraduation(store as any, vi.fn());
+    const result = await attemptGraduation(store as any);
     expect(result.graduated).toBe(false);
   });
 
@@ -479,7 +422,7 @@ describe("attemptGraduation", () => {
       }),
     };
 
-    const result = await attemptGraduation(store as any, vi.fn());
+    const result = await attemptGraduation(store as any);
     expect(result.graduated).toBe(true);
   });
 });
@@ -489,7 +432,7 @@ describe("attemptGraduation", () => {
 describe("evolveSoul", () => {
   it("returns false when store is unavailable", async () => {
     const store = { isAvailable: () => false } as any;
-    const result = await evolveSoul(store, vi.fn());
+    const result = await evolveSoul(store);
     expect(result).toBe(false);
   });
 
@@ -498,7 +441,7 @@ describe("evolveSoul", () => {
       isAvailable: () => true,
       queryFirst: vi.fn(async () => []),
     } as any;
-    const result = await evolveSoul(store, vi.fn());
+    const result = await evolveSoul(store);
     expect(result).toBe(false);
   });
 });

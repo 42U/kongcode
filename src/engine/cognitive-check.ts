@@ -8,7 +8,7 @@
  * Ported from kongbrain — per-session state via WeakMap, takes SurrealStore param.
  */
 
-import type { CompleteFn, SessionState } from "./state.js";
+import type { SessionState } from "./state.js";
 import type { SurrealStore } from "./surreal.js";
 import { swallow } from "./errors.js";
 import { assertRecordId } from "./surreal.js";
@@ -116,122 +116,9 @@ export async function runCognitiveCheck(
   params: CognitiveCheckInput,
   session: SessionState,
   store: SurrealStore,
-  complete: CompleteFn,
 ): Promise<void> {
-  const state = getState(session);
-  if (state.checkInFlight) return;
-  if (params.retrievedNodes.length === 0) return;
-
-  state.checkInFlight = true;
-  try {
-    // Build input sections
-    const sections: string[] = [];
-    sections.push(`[QUERY] ${params.userQuery.slice(0, 500)}`);
-    sections.push(`[RESPONSE] ${params.responseText.slice(0, 500)}`);
-
-    const nodeLines = params.retrievedNodes
-      .slice(0, 20)
-      .map(n => `- ${n.id} (score: ${n.score.toFixed(2)}): ${n.text.slice(0, 150)}`);
-    sections.push(`[RETRIEVED]\n${nodeLines.join("\n")}`);
-
-    if (params.recentTurns.length > 0) {
-      const trajectory = params.recentTurns
-        .slice(-6)
-        .map(t => `[${t.role}] ${(t.text ?? "").slice(0, 200)}`)
-        .join("\n");
-      sections.push(`[TRAJECTORY]\n${trajectory}`);
-    }
-
-    const cogCheckSchema = {
-      type: "object" as const,
-      properties: {
-        directives: { type: "array", items: { type: "object" } },
-        grades: { type: "array", items: { type: "object" } },
-        sessionContinuity: { type: "string", enum: ["repeat", "continuation", "new_topic", "tangent"] },
-        preferences: { type: "array", items: { type: "object" } },
-      },
-      required: ["directives", "grades", "sessionContinuity", "preferences"],
-    };
-
-    const response = await complete({
-      system: `Grade retrieved context. directives: max 3, types: repeat|continuation|contradiction|noise|insight. grades: one per node, learned=true only if CORRECTION already followed unprompted. preferences: max 2, [] if none.`,
-      messages: [{
-        role: "user",
-        content: sections.join("\n\n"),
-      }],
-      outputFormat: { type: "json_schema", schema: cogCheckSchema },
-    });
-
-    const responseText = response.text;
-
-    const result = parseCheckResponse(responseText);
-    if (!result) return;
-
-    // Store directives for next turn's context formatting
-    state.pendingDirectives = result.directives;
-    state.sessionContinuity = result.sessionContinuity;
-
-    // Write grades to DB
-    if (result.grades.length > 0) {
-      await applyRetrievalGrades(result.grades, params.sessionId, store);
-    }
-
-    // Correction importance adjustment based on behavioral compliance
-    const correctionGrades = result.grades.filter(g => g.id.startsWith("memory:") && g.relevant);
-    for (const g of correctionGrades) {
-      if (g.learned) {
-        // Agent followed the correction unprompted — decay toward background (floor 3)
-        assertRecordId(g.id);
-        // Direct interpolation safe: assertRecordId validates format above
-        await store.queryExec(
-          `UPDATE ${g.id} SET importance = math::max([3, (importance ?? 5) - 2])`,
-        ).catch(e => swallow.warn("cognitive-check:correctionDecay", e));
-      } else {
-        // Correction was relevant but agent ignored it — reinforce (cap 9)
-        assertRecordId(g.id);
-        // Direct interpolation safe: assertRecordId validates format above
-        await store.queryExec(
-          `UPDATE ${g.id} SET importance = math::min([9, (importance ?? 5) + 1])`,
-        ).catch(e => swallow.warn("cognitive-check:correctionReinforce", e));
-      }
-    }
-
-    // Store high-confidence user preferences as session-pinned core memory
-    const highConfPrefs = result.preferences.filter(p => p.confidence === "high");
-    for (const pref of highConfPrefs) {
-      await store.createCoreMemory(
-        `[USER PREFERENCE] ${pref.observation}`,
-        "preference", 7, 1, params.sessionId,
-      ).catch(e => swallow.warn("cognitive-check:preference", e));
-    }
-
-    // Noise suppression — prevent re-retrieval of irrelevant nodes this session
-    for (const g of result.grades) {
-      if (!g.relevant && g.score < 0.3) {
-        state.suppressedNodeIds.add(g.id);
-      }
-    }
-    for (const d of result.directives) {
-      if (d.type === "noise" && VALID_RECORD_ID.test(d.target)) {
-        state.suppressedNodeIds.add(d.target);
-      }
-    }
-
-    // Mid-session resolution — mark addressed memories immediately
-    const resolvedGrades = result.grades.filter(g => g.resolved && g.id.startsWith("memory:"));
-    for (const g of resolvedGrades) {
-      assertRecordId(g.id);
-      // Direct interpolation safe: assertRecordId validates format above
-      await store.queryExec(
-        `UPDATE ${g.id} SET status = 'resolved', resolved_at = time::now(), resolved_by = $sid`,
-        { sid: params.sessionId },
-      ).catch(e => swallow.warn("cognitive-check:resolve", e));
-    }
-  } catch (e) {
-    swallow.warn("cognitive-check:run", e);
-  } finally {
-    state.checkInFlight = false;
-  }
+  // LLM call logic removed — cognitive checks are now handled by
+  // the subagent-driven pending_work pipeline (commit_work_results tool).
 }
 
 // --- Response parsing ---

@@ -4,7 +4,7 @@
  * Long-lived stdio process that owns:
  * - SurrealDB connection
  * - BGE-M3 embedding model
- * - Session state and memory daemon
+ * - Session state
  * - MCP tools: recall, core_memory, introspect
  * - Internal Unix socket HTTP API for hook communication
  *
@@ -22,7 +22,6 @@ import { parsePluginConfig } from "./engine/config.js";
 import { SurrealStore } from "./engine/surreal.js";
 import { EmbeddingService } from "./engine/embeddings.js";
 import { GlobalPluginState } from "./engine/state.js";
-import { createAnthropicComplete } from "./complete-anthropic.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "./http-api.js";
 import { handleSessionStart } from "./hook-handlers/session-start.js";
 import { handleSessionEnd } from "./hook-handlers/session-end.js";
@@ -36,6 +35,7 @@ import { handleTaskCreated, handleSubagentStop } from "./hook-handlers/subagent.
 import { handleRecall } from "./tools/recall.js";
 import { handleCoreMemory } from "./tools/core-memory.js";
 import { handleIntrospect } from "./tools/introspect.js";
+import { handleFetchPendingWork, handleCommitWorkResults } from "./tools/pending-work.js";
 import { log } from "./engine/log.js";
 
 // ── Global state ──────────────────────────────────────────────────────────────
@@ -117,6 +117,26 @@ const TOOLS = [
       required: ["action"],
     },
   },
+  {
+    name: "fetch_pending_work",
+    description: "Claim the next pending background work item for processing. Returns instructions and data for extraction, reflection, skill, or soul work. Call repeatedly until it returns empty.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "commit_work_results",
+    description: "Submit processed results for a pending work item. Persists extracted knowledge, reflections, skills, or soul documents to the memory database.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        work_id: { type: "string", description: "The work item ID from fetch_pending_work" },
+        results: { description: "The extraction results — JSON object or plain text depending on work type" },
+      },
+      required: ["work_id", "results"],
+    },
+  },
 ];
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -144,6 +164,10 @@ async function handleToolCall(
       return handleCoreMemory(globalState, session, args);
     case "introspect":
       return handleIntrospect(globalState, session, args);
+    case "fetch_pending_work":
+      return handleFetchPendingWork(globalState, session, args);
+    case "commit_work_results":
+      return handleCommitWorkResults(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }
@@ -160,10 +184,9 @@ async function initialize(): Promise<void> {
   // Create services
   const store = new SurrealStore(config.surreal);
   const embeddings = new EmbeddingService(config.embedding);
-  const complete = createAnthropicComplete(config.llm);
 
   // Build global state
-  globalState = new GlobalPluginState(config, store, embeddings, complete);
+  globalState = new GlobalPluginState(config, store, embeddings);
   globalState.workspaceDir = process.env.KONGCODE_PROJECT_DIR ?? process.cwd();
 
   // Connect to SurrealDB
