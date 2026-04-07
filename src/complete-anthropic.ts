@@ -18,9 +18,17 @@ import type { LlmConfig } from "./engine/config.js";
 import { log } from "./engine/log.js";
 
 let client: Anthropic | null = null;
+let keyWarned = false;
 
 function getClient(): Anthropic {
   if (!client) {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      if (!keyWarned) {
+        log.warn("ANTHROPIC_API_KEY not set — background LLM features disabled (extraction, reflection, soul, wakeup). Set it in your shell or Claude Code settings.json env block.");
+        keyWarned = true;
+      }
+      throw new Error("ANTHROPIC_API_KEY not set");
+    }
     client = new Anthropic();
   }
   return client;
@@ -29,6 +37,7 @@ function getClient(): Anthropic {
 /**
  * Create a CompleteFn backed by the Anthropic SDK.
  * Reads ANTHROPIC_API_KEY from environment automatically.
+ * When not set, calls fail gracefully — callers already catch errors.
  */
 export function createAnthropicComplete(llmConfig: LlmConfig): CompleteFn {
   return async (params: CompleteParams): Promise<CompleteResult> => {
