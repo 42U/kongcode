@@ -34,12 +34,16 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ### 1. Start SurrealDB
 
+Docker (recommended):
+
 ```bash
-# Docker (recommended)
 docker run -d --name surrealdb -p 127.0.0.1:8042:8000 \
   surrealdb/surrealdb:latest start --user root --pass root
+```
 
-# Or native
+Or native:
+
+```bash
 curl -sSf https://install.surrealdb.com | sh
 surreal start --user root --pass root --bind 127.0.0.1:8042
 ```
