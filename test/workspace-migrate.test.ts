@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, writeFile, mkdir, rm, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { hasMigratableFiles, migrateWorkspace } from "../src/workspace-migrate.js";
+import { hasMigratableFiles, migrateWorkspace } from "../src/engine/workspace-migrate.js";
 
 // --- Mock SurrealStore ---
 

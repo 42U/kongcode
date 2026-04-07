@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { estimateComplexity } from "../src/intent.js";
-import type { IntentResult } from "../src/intent.js";
+import { estimateComplexity } from "../src/engine/intent.js";
+import type { IntentResult } from "../src/engine/intent.js";
 
 function mockIntent(category: string, confidence = 0.9): IntentResult {
   return { category: category as any, confidence, scores: [] };

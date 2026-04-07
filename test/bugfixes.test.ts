@@ -4,13 +4,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { startMemoryDaemon } from "../src/daemon-manager.js";
-import { preflight } from "../src/orchestrator.js";
-import { SessionState } from "../src/state.js";
-import { writeHandoffFileSync, readAndDeleteHandoffFile } from "../src/handoff-file.js";
-import { upsertAndLinkConcepts } from "../src/concept-extract.js";
-import { computeQualityScore } from "../src/soul.js";
-import type { QualitySignals } from "../src/soul.js";
+import { startMemoryDaemon } from "../src/engine/daemon-manager.js";
+import { preflight } from "../src/engine/orchestrator.js";
+import { SessionState } from "../src/engine/state.js";
+import { writeHandoffFileSync, readAndDeleteHandoffFile } from "../src/engine/handoff-file.js";
+import { upsertAndLinkConcepts } from "../src/engine/concept-extract.js";
+import { computeQualityScore } from "../src/engine/soul.js";
+import type { QualitySignals } from "../src/engine/soul.js";
 import { mkdtemp, rm, writeFile, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -182,7 +182,7 @@ describe("recall graph expansion limit (fix #13)", () => {
 
     const session = new SessionState("test-session", "test-key");
 
-    const { createRecallToolDef } = await import("../src/tools/recall.js");
+    const { createRecallToolDef } = await import("../src/engine/tools/recall.js");
     const tool = createRecallToolDef(state, session);
 
     // Call with limit=10 — should pass 8 IDs to graphExpand (min(10, 8))
@@ -217,7 +217,7 @@ describe("recall graph expansion limit (fix #13)", () => {
 
     const session = new SessionState("test-session", "test-key");
 
-    const { createRecallToolDef } = await import("../src/tools/recall.js");
+    const { createRecallToolDef } = await import("../src/engine/tools/recall.js");
     const tool = createRecallToolDef(state, session);
 
     // Call with limit=3 — should pass 3 IDs (min(3, 8) = 3)
@@ -263,13 +263,13 @@ describe("handoff file atomic rename (fix #14)", () => {
     writeHandoffFileSync(sampleData, dir);
     readAndDeleteHandoffFile(dir);
 
-    expect(existsSync(join(dir, ".kongbrain-handoff.json"))).toBe(false);
-    expect(existsSync(join(dir, ".kongbrain-handoff.json.processing"))).toBe(false);
+    expect(existsSync(join(dir, ".kongcode-handoff.json"))).toBe(false);
+    expect(existsSync(join(dir, ".kongcode-handoff.json.processing"))).toBe(false);
   });
 
   it("cleans up stale .processing file from prior crash", async () => {
     // Simulate crash: left a .processing file but no main file
-    const processingPath = join(dir, ".kongbrain-handoff.json.processing");
+    const processingPath = join(dir, ".kongcode-handoff.json.processing");
     await writeFile(processingPath, JSON.stringify(sampleData));
 
     // Should clean up the stale .processing file and return null
@@ -318,7 +318,7 @@ describe("soul quality Infinity guard (fix #16)", () => {
       skillSuccessRate: 0, // Should default to 0 when total is Infinity
       criticalReflectionRate: 0.1,
       toolFailureRate: 0.05,
-      retrievalCount: 10,
+      sampleSize: 10,
     };
 
     const score = computeQualityScore(signals);
@@ -332,12 +332,27 @@ describe("soul quality Infinity guard (fix #16)", () => {
       skillSuccessRate: 0.8,
       criticalReflectionRate: 0.05,
       toolFailureRate: 0.02,
-      retrievalCount: 50,
+      sampleSize: 50,
     };
 
     const score = computeQualityScore(signals);
     expect(Number.isFinite(score)).toBe(true);
     expect(score).toBeGreaterThan(0);
     expect(score).toBeLessThanOrEqual(1);
+  });
+
+  it("returns finite quality score when inputs are NaN", () => {
+    const signals: QualitySignals = {
+      avgRetrievalUtilization: NaN,
+      skillSuccessRate: NaN,
+      criticalReflectionRate: NaN,
+      toolFailureRate: NaN,
+      sampleSize: 50,
+    };
+
+    const score = computeQualityScore(signals);
+    expect(Number.isFinite(score)).toBe(true);
+    expect(score).not.toBeNaN();
+    expect(score).toBe(0);
   });
 });

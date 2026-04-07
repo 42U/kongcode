@@ -16,7 +16,7 @@ import {
   checkACANReadiness,
   type ACANWeights,
   type ACANCandidate,
-} from "../src/acan.js";
+} from "../src/engine/acan.js";
 
 // ── Constants (must match src/acan.ts) ──
 

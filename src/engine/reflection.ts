@@ -87,10 +87,14 @@ export async function gatherSessionMetrics(
     const totalTurns = Number(metrics?.totalTurns ?? 0);
     const totalTools = Number(metrics?.totalTools ?? 0);
     const totalSteering = Number(metrics?.totalSteering ?? 0);
-    const totalRetrievals = Number(quality?.totalRetrievals ?? 0);
-    const avgUtilization = Number(quality?.avgUtil ?? 1);
-    const toolFailures = Number(quality?.toolFailures ?? 0);
-    const wastedTokens = Number(quality?.wastedTokens ?? 0);
+    const rawRetrievals = Number(quality?.totalRetrievals ?? 0);
+    const totalRetrievals = Number.isFinite(rawRetrievals) ? rawRetrievals : 0;
+    const rawUtil = Number(quality?.avgUtil ?? 1);
+    const avgUtilization = Number.isFinite(rawUtil) ? rawUtil : 1;
+    const rawFailures = Number(quality?.toolFailures ?? 0);
+    const toolFailures = Number.isFinite(rawFailures) ? rawFailures : 0;
+    const rawWasted = Number(quality?.wastedTokens ?? 0);
+    const wastedTokens = Number.isFinite(rawWasted) ? rawWasted : 0;
 
     const toolFailureRate = totalRetrievals > 0 ? toolFailures / totalRetrievals : 0;
 

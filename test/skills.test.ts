@@ -12,7 +12,7 @@ import {
   supersedeOldSkills,
   graduateCausalToSkills,
   type Skill,
-} from "../src/skills.js";
+} from "../src/engine/skills.js";
 
 // ── Mock helpers ──
 

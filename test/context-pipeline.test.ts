@@ -5,10 +5,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { graphTransformContext } from "../src/graph-context.js";
-import { KongBrainContextEngine } from "../src/context-engine.js";
-import { SessionState } from "../src/state.js";
-import { createBeforePromptBuildHandler } from "../src/hooks/before-prompt-build.js";
+import { graphTransformContext } from "../src/engine/graph-context.js";
+import { KongCodeContextEngine } from "../src/engine/context-engine.js";
+import { SessionState } from "../src/engine/state.js";
+import { createBeforePromptBuildHandler } from "../src/engine/hooks/before-prompt-build.js";
 
 // ── Mock factories ───────────────────────────────────────────────────────────
 
@@ -218,9 +218,9 @@ describe("graphTransformContext — embeddings unavailable graceful degradation"
   });
 });
 
-// ── 4. KongBrainContextEngine.compact() — extracts structured signals ───────
+// ── 4. KongCodeContextEngine.compact() — extracts structured signals ───────
 
-describe("KongBrainContextEngine.compact() — structured signal extraction", () => {
+describe("KongCodeContextEngine.compact() — structured signal extraction", () => {
   it("extracts PENDING and FILES from session turns", async () => {
     const store = mockStore(true);
     const embeddings = mockEmbeddings(true);
@@ -250,7 +250,7 @@ describe("KongBrainContextEngine.compact() — structured signal extraction", ()
       },
     } as any;
 
-    const engine = new KongBrainContextEngine(state);
+    const engine = new KongCodeContextEngine(state);
     const result = await engine.compact({
       sessionId: "test-session",
       sessionKey: "test-key",
@@ -280,7 +280,7 @@ describe("KongBrainContextEngine.compact() — structured signal extraction", ()
       getSession: (key: string) => new SessionState("test-session", key),
     } as any;
 
-    const engine = new KongBrainContextEngine(state);
+    const engine = new KongCodeContextEngine(state);
     const result = await engine.compact({
       sessionId: "test-session",
       sessionKey: "test-key",
@@ -292,9 +292,9 @@ describe("KongBrainContextEngine.compact() — structured signal extraction", ()
   });
 });
 
-// ── 5. KongBrainContextEngine.ingest() — stashes user embedding ─────────────
+// ── 5. KongCodeContextEngine.ingest() — stashes user embedding ─────────────
 
-describe("KongBrainContextEngine.ingest() — user embedding stash", () => {
+describe("KongCodeContextEngine.ingest() — user embedding stash", () => {
   it("sets session.lastUserEmbedding after ingesting a user message", async () => {
     const store = mockStore(true);
     const embeddings = mockEmbeddings(true);
@@ -313,7 +313,7 @@ describe("KongBrainContextEngine.ingest() — user embedding stash", () => {
       getSession: (_key: string) => session,
     } as any;
 
-    const engine = new KongBrainContextEngine(state);
+    const engine = new KongCodeContextEngine(state);
     const result = await engine.ingest({
       sessionId: "test-session",
       sessionKey: "test-key",
@@ -342,7 +342,7 @@ describe("KongBrainContextEngine.ingest() — user embedding stash", () => {
       getSession: (_key: string) => session,
     } as any;
 
-    const engine = new KongBrainContextEngine(state);
+    const engine = new KongCodeContextEngine(state);
     await engine.ingest({
       sessionId: "test-session",
       sessionKey: "test-key",
@@ -373,7 +373,7 @@ describe("KongBrainContextEngine.ingest() — user embedding stash", () => {
       getSession: (_key: string) => session,
     } as any;
 
-    const engine = new KongBrainContextEngine(state);
+    const engine = new KongCodeContextEngine(state);
     const result = await engine.ingest({
       sessionId: "test-session",
       sessionKey: "test-key",

@@ -4,10 +4,10 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { SessionState } from "../src/state.js";
-import { createRecallToolDef } from "../src/tools/recall.js";
-import { createCoreMemoryToolDef } from "../src/tools/core-memory.js";
-import { createSubagentSpawnedHandler, createSubagentEndedHandler } from "../src/hooks/subagent-lifecycle.js";
+import { SessionState } from "../src/engine/state.js";
+import { createRecallToolDef } from "../src/engine/tools/recall.js";
+import { createCoreMemoryToolDef } from "../src/engine/tools/core-memory.js";
+import { createSubagentSpawnedHandler, createSubagentEndedHandler } from "../src/engine/hooks/subagent-lifecycle.js";
 
 // ── Mock helpers ──
 

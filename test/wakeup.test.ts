@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { synthesizeWakeup } from "../src/wakeup.js";
+import { synthesizeWakeup } from "../src/engine/wakeup.js";
 
 // ── Mock helpers ──
 

@@ -189,8 +189,8 @@ export async function getQualitySignals(store: SurrealStore): Promise<QualitySig
     const totalRow = (reflTotal as { count: number }[])[0];
     const failRow = (toolFails as { failRate: number }[])[0];
 
-    const avgRetrievalUtilization = retRow?.avgUtil ?? 0;
-    const retrievalCount = retRow?.cnt ?? 0;
+    const avgRetrievalUtilization = Number.isFinite(retRow?.avgUtil) ? retRow!.avgUtil : 0;
+    const retrievalCount = Number.isFinite(retRow?.cnt) ? retRow!.cnt : 0;
 
     const totalSuccess = Number(skillRow?.totalSuccess ?? 0);
     const totalFailure = Number(skillRow?.totalFailure ?? 0);
@@ -201,7 +201,7 @@ export async function getQualitySignals(store: SurrealStore): Promise<QualitySig
     const reflCount = Number(totalRow?.count ?? 0);
     const criticalReflectionRate = reflCount > 0 ? critCount / reflCount : 0;
 
-    const toolFailureRate = failRow?.failRate ?? 0;
+    const toolFailureRate = Number.isFinite(failRow?.failRate) ? failRow!.failRate : 0;
 
     return {
       avgRetrievalUtilization,
@@ -245,6 +245,9 @@ export function computeQualityScore(q: QualitySignals): number {
   if (q.sampleSize < 10) {
     composite *= (q.sampleSize / 10);
   }
+
+  // Safety net: if any input was NaN despite upstream guards, return 0
+  if (!Number.isFinite(composite)) return 0;
 
   return Math.round(composite * 1000) / 1000;
 }

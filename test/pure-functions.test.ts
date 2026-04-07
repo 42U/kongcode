@@ -5,19 +5,19 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { SessionState } from "../src/state.js";
+import { SessionState } from "../src/engine/state.js";
 import {
   shouldRunCheck,
   parseCheckResponse,
   getPendingDirectives,
   clearPendingDirectives,
   getSessionContinuity,
-} from "../src/cognitive-check.js";
-import { predictQueries } from "../src/prefetch.js";
-import { buildSystemPrompt, buildTranscript } from "../src/memory-daemon.js";
-import { formatRelativeTime } from "../src/graph-context.js";
-import { formatSkillContext, type Skill } from "../src/skills.js";
-import { formatReflectionContext, shouldReflect, type Reflection, type ReflectionMetrics } from "../src/reflection.js";
+} from "../src/engine/cognitive-check.js";
+import { predictQueries } from "../src/engine/prefetch.js";
+import { buildSystemPrompt, buildTranscript } from "../src/engine/memory-daemon.js";
+import { formatRelativeTime } from "../src/engine/graph-context.js";
+import { formatSkillContext, type Skill } from "../src/engine/skills.js";
+import { formatReflectionContext, shouldReflect, type Reflection, type ReflectionMetrics } from "../src/engine/reflection.js";
 
 // ── shouldRunCheck ──────────────────────────────────────────────────────────
 

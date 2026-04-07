@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { linkSupersedesEdges } from "../src/supersedes.js";
+import { linkSupersedesEdges } from "../src/engine/supersedes.js";
 
 // ── Mock helpers ──
 

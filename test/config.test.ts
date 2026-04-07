@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parsePluginConfig } from "../src/config.js";
+import { parsePluginConfig } from "../src/engine/config.js";
 
 describe("parsePluginConfig", () => {
   const originalEnv = { ...process.env };

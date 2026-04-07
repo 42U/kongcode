@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { stageRetrieval, getStagedItems, recordToolOutcome, evaluateRetrieval } from "../src/retrieval-quality.js";
-import type { RetrievedItem } from "../src/retrieval-quality.js";
+import { stageRetrieval, getStagedItems, recordToolOutcome, evaluateRetrieval } from "../src/engine/retrieval-quality.js";
+import type { RetrievedItem } from "../src/engine/retrieval-quality.js";
 
 function makeItem(overrides: Partial<RetrievedItem> = {}): RetrievedItem {
   return {

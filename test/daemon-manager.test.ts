@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { startMemoryDaemon } from "../src/daemon-manager.js";
+import { startMemoryDaemon } from "../src/engine/daemon-manager.js";
 
 function mockStore() {
   return {

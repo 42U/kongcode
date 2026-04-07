@@ -8,8 +8,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   writeExtractionResults,
   type ExtractionCounts,
-} from "../src/memory-daemon.js";
-import type { PriorExtractions } from "../src/daemon-types.js";
+} from "../src/engine/memory-daemon.js";
+import type { PriorExtractions } from "../src/engine/daemon-types.js";
 
 // ── Mock helpers ──
 

@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/42U/kongcode.git"
+    "url": "https://github.com/voidorigin/kongcode.git"
   },
   "keywords": [
     "claude-code",
@@ -25,6 +25,15 @@
     "mcp"
   ],
   "main": "dist/mcp-server.js",
+  "exports": "./dist/mcp-server.js",
+  "types": "dist/mcp-server.d.ts",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "homepage": "https://github.com/voidorigin/kongcode",
+  "bugs": {
+    "url": "https://github.com/voidorigin/kongcode/issues"
+  },
   "scripts": {
     "build": "tsc && cp src/engine/schema.surql dist/engine/schema.surql",
     "dev": "tsc --watch",

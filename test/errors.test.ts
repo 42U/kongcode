@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { swallow } from "../src/errors.js";
+import { swallow } from "../src/engine/errors.js";
 
 describe("swallow", () => {
   const originalEnv = process.env.KONGBRAIN_DEBUG;

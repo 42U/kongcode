@@ -18,8 +18,8 @@ import {
   deleteWakeupFile,
   saveUserIdentity,
   buildWakeupPrompt,
-} from "../src/identity.js";
-import { seedCognitiveBootstrap } from "../src/cognitive-bootstrap.js";
+} from "../src/engine/identity.js";
+import { seedCognitiveBootstrap } from "../src/engine/cognitive-bootstrap.js";
 
 // ── Helpers ──
 

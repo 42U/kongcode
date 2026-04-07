@@ -9,7 +9,7 @@ import {
   upsertAndLinkConcepts,
   linkToRelevantConcepts,
   linkConceptHierarchy,
-} from "../src/concept-extract.js";
+} from "../src/engine/concept-extract.js";
 
 // ── Mock helpers ──
 

@@ -9,8 +9,8 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { writeFileSync, existsSync, mkdirSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { writeHandoffFileSync, readAndDeleteHandoffFile, type HandoffFileData } from "../src/handoff-file.js";
-import { runDeferredCleanup } from "../src/deferred-cleanup.js";
+import { writeHandoffFileSync, readAndDeleteHandoffFile, type HandoffFileData } from "../src/engine/handoff-file.js";
+import { runDeferredCleanup } from "../src/engine/deferred-cleanup.js";
 
 // ── Temp dir helper ──
 
@@ -42,7 +42,7 @@ describe("writeHandoffFileSync", () => {
 
     writeHandoffFileSync(data, dir);
 
-    const path = join(dir, ".kongbrain-handoff.json");
+    const path = join(dir, ".kongcode-handoff.json");
     expect(existsSync(path)).toBe(true);
 
     const content = JSON.parse(readFileSync(path, "utf-8"));
@@ -85,8 +85,8 @@ describe("readAndDeleteHandoffFile", () => {
     expect(result!.lastUserText).toBe("deploy it");
 
     // File should be deleted
-    expect(existsSync(join(dir, ".kongbrain-handoff.json"))).toBe(false);
-    expect(existsSync(join(dir, ".kongbrain-handoff.json.processing"))).toBe(false);
+    expect(existsSync(join(dir, ".kongcode-handoff.json"))).toBe(false);
+    expect(existsSync(join(dir, ".kongcode-handoff.json.processing"))).toBe(false);
   });
 
   it("returns null when no file exists", () => {
@@ -96,7 +96,7 @@ describe("readAndDeleteHandoffFile", () => {
 
   it("truncates long fields for safety", () => {
     dir = makeTmpDir();
-    writeFileSync(join(dir, ".kongbrain-handoff.json"), JSON.stringify({
+    writeFileSync(join(dir, ".kongcode-handoff.json"), JSON.stringify({
       sessionId: "x".repeat(500),
       timestamp: "t".repeat(100),
       userTurnCount: 5,
@@ -115,7 +115,7 @@ describe("readAndDeleteHandoffFile", () => {
   it("rejects prototype pollution attempts", () => {
     dir = makeTmpDir();
     // Write raw JSON with __proto__ key (JSON.stringify strips it)
-    writeFileSync(join(dir, ".kongbrain-handoff.json"),
+    writeFileSync(join(dir, ".kongcode-handoff.json"),
       '{"__proto__":{"isAdmin":true},"sessionId":"s1","timestamp":"","userTurnCount":0,"lastUserText":"","lastAssistantText":"","unextractedTokens":0}');
 
     const result = readAndDeleteHandoffFile(dir);
@@ -124,14 +124,14 @@ describe("readAndDeleteHandoffFile", () => {
 
   it("handles corrupted JSON gracefully", () => {
     dir = makeTmpDir();
-    writeFileSync(join(dir, ".kongbrain-handoff.json"), "not json{{{");
+    writeFileSync(join(dir, ".kongcode-handoff.json"), "not json{{{");
     const result = readAndDeleteHandoffFile(dir);
     expect(result).toBeNull();
   });
 
   it("handles non-object JSON (array)", () => {
     dir = makeTmpDir();
-    writeFileSync(join(dir, ".kongbrain-handoff.json"), "[1,2,3]");
+    writeFileSync(join(dir, ".kongcode-handoff.json"), "[1,2,3]");
     const result = readAndDeleteHandoffFile(dir);
     expect(result).toBeNull();
   });
@@ -139,16 +139,16 @@ describe("readAndDeleteHandoffFile", () => {
   it("cleans up stale .processing files", () => {
     dir = makeTmpDir();
     // Simulate a crash: .processing file exists but no .json
-    writeFileSync(join(dir, ".kongbrain-handoff.json.processing"), "stale data");
+    writeFileSync(join(dir, ".kongcode-handoff.json.processing"), "stale data");
 
     const result = readAndDeleteHandoffFile(dir);
     expect(result).toBeNull();
-    expect(existsSync(join(dir, ".kongbrain-handoff.json.processing"))).toBe(false);
+    expect(existsSync(join(dir, ".kongcode-handoff.json.processing"))).toBe(false);
   });
 
   it("validates field types (non-string sessionId becomes empty)", () => {
     dir = makeTmpDir();
-    writeFileSync(join(dir, ".kongbrain-handoff.json"), JSON.stringify({
+    writeFileSync(join(dir, ".kongcode-handoff.json"), JSON.stringify({
       sessionId: 12345,  // should be string
       timestamp: null,
       userTurnCount: "not a number",

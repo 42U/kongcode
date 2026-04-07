@@ -6,10 +6,10 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SessionState } from "../src/state.js";
-import { cosineSimilarity, calcBudgets } from "../src/graph-context.js";
-import { createBeforeToolCallHandler } from "../src/hooks/before-tool-call.js";
-import { assertValidEdge, VALID_EDGES } from "../src/surreal.js";
+import { SessionState } from "../src/engine/state.js";
+import { cosineSimilarity, calcBudgets } from "../src/engine/graph-context.js";
+import { createBeforeToolCallHandler } from "../src/engine/hooks/before-tool-call.js";
+import { assertValidEdge, VALID_EDGES } from "../src/engine/surreal.js";
 
 // ── SessionState optimization fields ──────────────────────────────────────────
 

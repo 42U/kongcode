@@ -7,9 +7,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { SessionState } from "../src/state.js";
-import { createLlmOutputHandler } from "../src/hooks/llm-output.js";
-import { createAfterToolCallHandler } from "../src/hooks/after-tool-call.js";
+import { SessionState } from "../src/engine/state.js";
+import { createLlmOutputHandler } from "../src/engine/hooks/llm-output.js";
+import { createAfterToolCallHandler } from "../src/engine/hooks/after-tool-call.js";
 
 // ── Mock helpers ──
 

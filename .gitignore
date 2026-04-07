@@ -2,3 +2,17 @@ node_modules/
 dist/
 .kongcode.sock
 .kongcode-port
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# OS / editor
+.DS_Store
+
+# Process
+*.pid
+
+# Test coverage
+coverage/

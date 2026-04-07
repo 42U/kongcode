@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { SurrealStore } from "../src/surreal.js";
+import { SurrealStore } from "../src/engine/surreal.js";
 
 const SKIP = process.env.SKIP_INTEGRATION === "1";
 const TEST_NS = "kong_test";
