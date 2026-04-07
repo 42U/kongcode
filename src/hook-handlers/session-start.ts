@@ -12,6 +12,8 @@ import { seedCognitiveBootstrap } from "../engine/cognitive-bootstrap.js";
 import { synthesizeWakeup } from "../engine/wakeup.js";
 import { runDeferredCleanup } from "../engine/deferred-cleanup.js";
 import { startMemoryDaemon } from "../engine/daemon-manager.js";
+import { getSoul } from "../engine/soul.js";
+import { hasMigratableFiles } from "../engine/workspace-migrate.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 
@@ -67,6 +69,37 @@ export async function handleSessionStart(
 
       // Run deferred cleanup for orphaned sessions
       await runDeferredCleanup(store, embeddings, state.complete).catch(e => swallow("sessionStart:deferredCleanup", e));
+
+      // Check for unacknowledged graduation events from previous sessions
+      try {
+        const gradEvents = await store.queryFirst<{
+          id: string; quality_score: number; volume_score: number;
+        }>(`SELECT * FROM graduation_event WHERE acknowledged = false ORDER BY created_at DESC LIMIT 1`);
+        if (gradEvents.length > 0) {
+          const evt = gradEvents[0];
+          const soul = await getSoul(store);
+          if (soul) {
+            session._graduationCelebration = {
+              qualityScore: evt.quality_score,
+              volumeScore: evt.volume_score,
+              soulSummary: "Working style: " + soul.working_style.join("; ") +
+                "\nSelf-observations: " + soul.self_observations.join("; "),
+            };
+            // Mark as acknowledged
+            await store.queryExec(
+              `UPDATE $id SET acknowledged = true, acknowledged_at = time::now(), acknowledged_session = $sid`,
+              { id: evt.id, sid: session.sessionId },
+            ).catch(e => swallow("sessionStart:ackGraduation", e));
+            log.info("[GRADUATION] Celebration queued for context injection");
+          }
+        }
+      } catch (e) {
+        swallow("sessionStart:graduationCheck", e);
+      }
+
+      // Check for migratable workspace files
+      session._hasMigratableFiles = await hasMigratableFiles(cwd)
+        .catch(() => false);
     } catch (e) {
       swallow.warn("sessionStart:bootstrap", e);
     }

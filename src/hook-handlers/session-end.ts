@@ -73,9 +73,23 @@ export async function handleSessionEnd(
   ops.push(
     (async () => {
       const gradResult = await attemptGraduation(store, state.complete);
-      if (gradResult.graduated) {
+      if (gradResult.graduated && gradResult.report.stage === "ready") {
+        // Persist graduation event for next session's celebration
+        await store.queryExec(
+          `CREATE graduation_event CONTENT $data`,
+          {
+            data: {
+              session_id: session.sessionId,
+              acknowledged: false,
+              quality_score: gradResult.report.qualityScore,
+              volume_score: gradResult.report.volumeScore,
+              stage: gradResult.report.stage,
+              created_at: new Date().toISOString(),
+            },
+          },
+        ).catch(e => swallow("sessionEnd:graduationEvent", e));
         log.info("[GRADUATION] KongCode has achieved soul graduation!");
-      } else {
+      } else if (!gradResult.graduated) {
         await evolveSoul(store, state.complete);
       }
     })().catch(e => swallow.warn("sessionEnd:soul", e)),
