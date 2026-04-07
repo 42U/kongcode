@@ -41,14 +41,16 @@ Docker (recommended):
 
 ```bash
 docker run -d --name surrealdb -p 127.0.0.1:8042:8000 \
-  surrealdb/surrealdb:latest start --user root --pass root
+  -v ~/.kongcode/surreal-data:/data \
+  surrealdb/surrealdb:latest start \
+  --user root --pass root surrealkv:/data/surreal.db
 ```
 
 Or native:
 
 ```bash
 curl -sSf https://install.surrealdb.com | sh
-surreal start --user root --pass root --bind 127.0.0.1:8042
+surreal start --user root --pass root --bind 127.0.0.1:8042 surrealkv:~/.kongcode/surreal.db
 ```
 
 > **Security note:** Always bind to `127.0.0.1`, not `0.0.0.0`, unless you need remote access.
