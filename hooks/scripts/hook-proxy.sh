@@ -11,9 +11,9 @@ set -euo pipefail
 HOOK_EVENT="${1:?Missing hook event name}"
 INPUT=$(cat)
 
-# Discover MCP server endpoint
-SOCK_FILE="${CLAUDE_PROJECT_DIR:-.}/.kongcode.sock"
-PORT_FILE="${CLAUDE_PROJECT_DIR:-.}/.kongcode-port"
+# Discover MCP server endpoint — socket lives in user's home dir
+SOCK_FILE="${HOME}/.kongcode.sock"
+PORT_FILE="${HOME}/.kongcode-port"
 
 if [ -S "$SOCK_FILE" ]; then
   RESPONSE=$(echo "$INPUT" | curl -sf --unix-socket "$SOCK_FILE" \

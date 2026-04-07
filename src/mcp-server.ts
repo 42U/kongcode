@@ -187,10 +187,10 @@ async function initialize(): Promise<void> {
   registerHookHandler("subagent-stop", handleSubagentStop);
 
   // Start internal HTTP API for hook communication.
-  // Prefer KONGCODE_PROJECT_DIR, fall back to CWD for socket/port file placement.
-  const projectDir = process.env.KONGCODE_PROJECT_DIR || process.cwd();
-  const socketPath = `${projectDir}/.kongcode.sock`;
-  await startHttpApi(globalState, socketPath, projectDir);
+  // Socket lives in user's home dir — stable, project-independent location.
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "/tmp";
+  const socketPath = `${homeDir}/.kongcode.sock`;
+  await startHttpApi(globalState, socketPath, homeDir);
 
   log.info("KongCode MCP server ready");
 }
