@@ -174,6 +174,14 @@ async function initialize(): Promise<void> {
     log.error("SurrealDB connection failed — running in degraded mode:", err);
   }
 
+  // Initialize embedding model
+  try {
+    await embeddings.initialize();
+    log.info("Embedding model loaded");
+  } catch (err) {
+    log.error("Embedding model failed — running without vector search:", err);
+  }
+
   // Register hook handlers
   registerHookHandler("session-start", handleSessionStart);
   registerHookHandler("session-end", handleSessionEnd);

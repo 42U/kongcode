@@ -28,6 +28,7 @@ export async function assembleContextString(
   const { store, embeddings } = state;
 
   if (!store.isAvailable() || !embeddings.isAvailable()) {
+    log.warn(`Context assembly skipped: store=${store.isAvailable()}, embeddings=${embeddings.isAvailable()}`);
     return undefined;
   }
 
