@@ -47,27 +47,28 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
   const thresholds = (raw?.thresholds ?? {}) as Record<string, unknown>;
 
   // Priority: plugin config > env vars > defaults
+  // Use || (not ??) so empty strings from unresolved ${VAR} fall through to defaults
   const url =
-    (typeof surreal.url === "string" ? surreal.url : null) ??
-    process.env.SURREAL_URL ??
+    (typeof surreal.url === "string" && surreal.url ? surreal.url : null) ??
+    (process.env.SURREAL_URL || null) ??
     "ws://localhost:8000/rpc";
 
   return {
     surreal: {
       url,
       get httpUrl() {
-        const override = (typeof surreal.httpUrl === "string" ? surreal.httpUrl : null) ??
-          process.env.SURREAL_HTTP_URL;
+        const override = (typeof surreal.httpUrl === "string" && surreal.httpUrl ? surreal.httpUrl : null) ??
+          (process.env.SURREAL_HTTP_URL || null);
         if (override) return override;
         return this.url
           .replace("ws://", "http://")
           .replace("wss://", "https://")
           .replace("/rpc", "/sql");
       },
-      user: (typeof surreal.user === "string" ? surreal.user : null) ?? process.env.SURREAL_USER ?? "root",
-      pass: (typeof surreal.pass === "string" ? surreal.pass : null) ?? process.env.SURREAL_PASS ?? "root",
-      ns: (typeof surreal.ns === "string" ? surreal.ns : null) ?? process.env.SURREAL_NS ?? "kong",
-      db: (typeof surreal.db === "string" ? surreal.db : null) ?? process.env.SURREAL_DB ?? "memory",
+      user: (typeof surreal.user === "string" && surreal.user ? surreal.user : null) ?? (process.env.SURREAL_USER || null) ?? "root",
+      pass: (typeof surreal.pass === "string" && surreal.pass ? surreal.pass : null) ?? (process.env.SURREAL_PASS || null) ?? "root",
+      ns: (typeof surreal.ns === "string" && surreal.ns ? surreal.ns : null) ?? (process.env.SURREAL_NS || null) ?? "kong",
+      db: (typeof surreal.db === "string" && surreal.db ? surreal.db : null) ?? (process.env.SURREAL_DB || null) ?? "memory",
     },
     embedding: {
       modelPath:
