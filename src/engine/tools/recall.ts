@@ -75,9 +75,15 @@ export function createRecallToolDef(state: GlobalPluginState, session: SessionSt
           } catch (e) { swallow("recall:graphExpand", e); }
         }
 
-        const all = [...results, ...neighbors]
+        // Phase 2: keep neighbors separate so output surfaces graph-walk neighborhood
+        // distinctly from primary vector hits. Gives grounding skills a clearer
+        // signal about which items are direct matches vs. cross-linked context.
+        const primary = [...results]
           .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
           .slice(0, maxResults);
+        const primaryIds = new Set(primary.map(r => r.id));
+        const neighborList = neighbors.filter(n => !primaryIds.has(n.id)).slice(0, 5);
+        const all = primary;
 
         if (all.length === 0) {
           return { content: [{ type: "text" as const, text: `No memories found matching "${params.query}".` }], details: null };
@@ -90,9 +96,18 @@ export function createRecallToolDef(state: GlobalPluginState, session: SessionSt
           return `${i + 1}. ${tag}${time}${score}\n   ${(r.text ?? "").slice(0, 300)}`;
         }).join("\n\n");
 
+        const neighborBlock = neighborList.length > 0
+          ? "\n\n=== GRAPH NEIGHBORS (" + neighborList.length + ") ===\n" +
+            neighborList.map((n, i) => {
+              const tag = `[${n.table}]`;
+              const score = n.score ? ` score:${n.score.toFixed(2)}` : "";
+              return `${i + 1}. ${tag}${score}\n   ${(n.text ?? "").slice(0, 200)}`;
+            }).join("\n\n")
+          : "";
+
         return {
-          content: [{ type: "text" as const, text: `Found ${all.length} results for "${params.query}":\n\n${formatted}` }],
-          details: { count: all.length, ids: all.map((r) => r.id) },
+          content: [{ type: "text" as const, text: `Found ${all.length} results for "${params.query}":\n\n${formatted}${neighborBlock}` }],
+          details: { count: all.length, ids: all.map((r) => r.id), neighbor_count: neighborList.length },
         };
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Memory search failed: ${err}` }], details: null };

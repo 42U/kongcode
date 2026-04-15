@@ -15,6 +15,7 @@ import { getSoul } from "../engine/soul.js";
 import { hasMigratableFiles } from "../engine/workspace-migrate.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
+import { assertRecordId } from "../engine/surreal.js";
 
 export async function handleSessionStart(
   state: GlobalPluginState,
@@ -76,10 +77,15 @@ export async function handleSessionStart(
                 "\nSelf-observations: " + soul.self_observations.join("; "),
             };
             // Mark as acknowledged
-            await store.queryExec(
-              `UPDATE $id SET acknowledged = true, acknowledged_at = time::now(), acknowledged_session = $sid`,
-              { id: evt.id, sid: session.sessionId },
-            ).catch(e => swallow("sessionStart:ackGraduation", e));
+            try {
+              assertRecordId(evt.id);
+              await store.queryExec(
+                `UPDATE ${evt.id} SET acknowledged = true, acknowledged_at = time::now(), acknowledged_session = $sid`,
+                { sid: session.sessionId },
+              );
+            } catch (e) {
+              swallow("sessionStart:ackGraduation", e);
+            }
             log.info("[GRADUATION] Celebration queued for context injection");
           }
         }

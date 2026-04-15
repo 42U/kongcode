@@ -47,6 +47,17 @@ export interface UtilityCacheEntry {
   retrieval_count: number;
 }
 
+/** Phase 3: provenance attached to every concept write so drift audit,
+ * supersede-stale, and "where did this come from" debugging are possible. */
+export interface ConceptProvenance {
+  session_id?: string;
+  turn_id?: string;
+  skill_name?: string;
+  prompt_hash?: string;
+  source_kind?: "daemon" | "skill" | "user" | "gem" | "synthesis";
+}
+
+
 const RECORD_ID_RE = /^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_]+$/;
 
 function assertRecordId(id: string): void {
@@ -743,6 +754,7 @@ export class SurrealStore {
     content: string,
     embedding: number[] | null,
     source?: string,
+    provenance?: ConceptProvenance,
   ): Promise<string> {
     if (!content?.trim()) return "";
     content = content.trim();
@@ -768,6 +780,7 @@ export class SurrealStore {
     const emb = embedding?.length ? embedding : undefined;
     const record: Record<string, unknown> = { content, source: source ?? undefined };
     if (emb) record.embedding = emb;
+    if (provenance) record.provenance = provenance;
     const created = await this.queryFirst<{ id: string }>(
       `CREATE concept CONTENT $record RETURN id`,
       { record },
@@ -1381,9 +1394,11 @@ export class SurrealStore {
   // ── Fibonacci resurfacing ──────────────────────────────────────────────
 
   async markSurfaceable(memoryId: string): Promise<void> {
+    assertRecordId(memoryId);
+    // Direct interpolation safe: assertRecordId validates format above.
+    // SurrealDB rejects `UPDATE $id` with a string param.
     await this.queryExec(
-      `UPDATE $id SET surfaceable = true, fib_index = 0, surface_count = 0, next_surface_at = time::now() + 1d`,
-      { id: memoryId },
+      `UPDATE ${memoryId} SET surfaceable = true, fib_index = 0, surface_count = 0, next_surface_at = time::now() + 1d`,
     );
   }
 
@@ -1495,8 +1510,9 @@ export class SurrealStore {
   private static readonly FIB_DAYS = [1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89];
 
   async advanceSurfaceFade(memoryId: string): Promise<void> {
+    assertRecordId(memoryId);
     const current = await this.queryFirst<{ fib_index: number }>(
-      `SELECT fib_index FROM $id`, { id: memoryId },
+      `SELECT fib_index FROM ${memoryId}`,
     );
     const idx = (current as { fib_index: number }[] | undefined)?.[0]?.fib_index ?? 0;
     const nextIdx = Math.min(idx + 1, SurrealStore.FIB_DAYS.length - 1);
@@ -1504,15 +1520,16 @@ export class SurrealStore {
       ? SurrealStore.FIB_DAYS[nextIdx]
       : SurrealStore.FIB_DAYS[SurrealStore.FIB_DAYS.length - 1];
     await this.queryExec(
-      `UPDATE $id SET fib_index = $nextIdx, surface_count += 1, last_surfaced = time::now(), next_surface_at = time::now() + type::duration($dur)`,
-      { id: memoryId, nextIdx, dur: `${days}d` },
+      `UPDATE ${memoryId} SET fib_index = $nextIdx, surface_count += 1, last_surfaced = time::now(), next_surface_at = time::now() + type::duration($dur)`,
+      { nextIdx, dur: `${days}d` },
     );
   }
 
   async resolveSurfaceMemory(memoryId: string, outcome: "engaged" | "dismissed"): Promise<void> {
+    assertRecordId(memoryId);
     await this.queryExec(
-      `UPDATE $id SET surfaceable = false, last_engaged = time::now(), surface_outcome = $outcome`,
-      { id: memoryId, outcome },
+      `UPDATE ${memoryId} SET surfaceable = false, last_engaged = time::now(), surface_outcome = $outcome`,
+      { outcome },
     );
   }
 

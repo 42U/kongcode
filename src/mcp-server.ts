@@ -35,7 +35,7 @@ import { handleTaskCreated, handleSubagentStop } from "./hook-handlers/subagent.
 import { handleRecall } from "./tools/recall.js";
 import { handleCoreMemory } from "./tools/core-memory.js";
 import { handleIntrospect } from "./tools/introspect.js";
-import { handleFetchPendingWork, handleCommitWorkResults } from "./tools/pending-work.js";
+import { handleFetchPendingWork, handleCommitWorkResults, handleCreateKnowledgeGems } from "./tools/pending-work.js";
 import { log } from "./engine/log.js";
 
 // ── Global state ──────────────────────────────────────────────────────────────
@@ -137,6 +137,45 @@ const TOOLS = [
       required: ["work_id", "results"],
     },
   },
+  {
+    name: "create_knowledge_gems",
+    description: "Direct-write structured knowledge from an external source (PDF, article, doc) into the memory graph. Each gem becomes a concept; a source artifact is created and linked to every gem via 'derived_from'; cross-link edges between gems are created from the 'links' array. Use for foreground extraction tasks where there is no session transcript for the daemon to chew on.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        source: { type: "string", description: "Source identifier (e.g. file path, URL, doc title)" },
+        source_type: { type: "string", description: "Source type (e.g. 'pdf', 'article', 'book')", default: "document" },
+        source_description: { type: "string", description: "One-line description of the source" },
+        gems: {
+          type: "array",
+          description: "Array of knowledge gems. Each gem is one concept.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "Short identifier used for cross-link resolution" },
+              content: { type: "string", description: "The actual insight text — this is what gets embedded and stored" },
+              importance: { type: "number", description: "1-10, defaults to 7" },
+            },
+            required: ["name", "content"],
+          },
+        },
+        links: {
+          type: "array",
+          description: "Cross-link edges between gems. Each link references gems by name.",
+          items: {
+            type: "object",
+            properties: {
+              from: { type: "string", description: "Source gem name" },
+              to: { type: "string", description: "Target gem name" },
+              edge: { type: "string", description: "Relation name, e.g. 'elaborates', 'contrasts_with', 'applies_to', 'prerequisite_for'" },
+            },
+            required: ["from", "to", "edge"],
+          },
+        },
+      },
+      required: ["source", "gems"],
+    },
+  },
 ];
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -168,6 +207,8 @@ async function handleToolCall(
       return handleFetchPendingWork(globalState, session, args);
     case "commit_work_results":
       return handleCommitWorkResults(globalState, session, args);
+    case "create_knowledge_gems":
+      return handleCreateKnowledgeGems(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }

@@ -168,3 +168,26 @@ npm test           # Run tests
 MIT License | Built by [42U](https://github.com/42U)
 
 </div>
+
+## Skill Suite
+
+The kongcode plugin ships a suite of production-grade skills for managing the graph memory across sessions. See `docs/WORKFLOWS.md` for detailed usage.
+
+**Foundation:**
+- `kongcode-health` — pre-flight check before graph writes
+- `ground-on-memory` — enforce grounding discipline on Claude
+
+**Intelligence:**
+- `recall-explain` — cluster and contradict-flag recall output
+- `capture-insight` — mid-session foreground knowledge capture
+
+**Write-time quality:**
+- `supersede-stale` — realtime supersession of stale concepts
+- `extract-knowledge` — source-agnostic extraction (PDF, code, URL, doc, transcript)
+
+**Compound value:**
+- `synthesize-sources` — multi-source meta-concept generation
+- `knowledge-gap-scan` — topic coverage analysis
+- `audit-drift` — periodic stale-knowledge sweep
+
+All skills live in `skills/<name>/SKILL.md` with frontmatter triggers. Canonical edge vocabulary at `src/engine/edge-vocabulary.ts`.

@@ -191,9 +191,12 @@ describe("supersedeOldSkills", () => {
 
     // Only old1 (0.90 >= 0.82) should be deactivated
     expect(store.queryExec).toHaveBeenCalledTimes(1);
+    // Phase 0 fix: UPDATE now uses direct interpolation of the record id
+    // instead of parameterized `$id` (which SurrealDB rejects for string params).
+    // The `id` binding is gone; the id is interpolated into the SQL itself.
     expect(store.queryExec).toHaveBeenCalledWith(
-      expect.stringContaining("active = false"),
-      expect.objectContaining({ id: "skill:old1", newId: "skill:new1" }),
+      expect.stringContaining("UPDATE skill:old1 SET active = false"),
+      expect.objectContaining({ newId: "skill:new1" }),
     );
   });
 

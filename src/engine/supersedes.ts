@@ -15,6 +15,7 @@
  */
 
 import type { SurrealStore } from "./surreal.js";
+import { assertRecordId } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import { swallow } from "./errors.js";
 
@@ -84,10 +85,15 @@ export async function linkSupersedesEdges(
         currentStability * STABILITY_DECAY_FACTOR,
       );
 
-      await store.queryExec(
-        `UPDATE $conceptId SET stability = $newStability, superseded_at = time::now(), superseded_by = $correctionId`,
-        { conceptId, newStability, correctionId: correctionMemId },
-      ).catch(e => swallow("supersedes:decay", e));
+      try {
+        assertRecordId(conceptId);
+        await store.queryExec(
+          `UPDATE ${conceptId} SET stability = $newStability, superseded_at = time::now(), superseded_by = $correctionId`,
+          { newStability, correctionId: correctionMemId },
+        );
+      } catch (e) {
+        swallow("supersedes:decay", e);
+      }
 
       supersededCount++;
     }

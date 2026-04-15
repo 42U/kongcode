@@ -87,10 +87,15 @@ export async function supersedeOldSkills(
     );
     for (const row of rows) {
       if ((row.score ?? 0) >= 0.82) {
-        await store.queryExec(
-          `UPDATE $id SET active = false, superseded_by = $newId`,
-          { id: row.id, newId: newSkillId },
-        );
+        try {
+          assertRecordId(String(row.id));
+          await store.queryExec(
+            `UPDATE ${row.id} SET active = false, superseded_by = $newId`,
+            { newId: newSkillId },
+          );
+        } catch (e) {
+          swallow("skills:supersede", e);
+        }
       }
     }
   } catch (e) { swallow.warn("skills:supersedeOld", e); }

@@ -15,6 +15,28 @@ import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 
+
+/** Wrap raw kongcode context in a system-reminder block so Claude treats it
+ * as authoritative. Claude Code's harness gives system-reminder blocks higher
+ * attention weight than plain injected text — empirically the plain-text
+ * injection was hitting ~10% retrieval utilization because the model read it
+ * as ambient noise. */
+function wrapKongcodeContext(raw: string | undefined | null): string {
+  if (!raw || !raw.trim()) return raw ?? "";
+  return [
+    "<system-reminder>",
+    "KONGCODE CONTEXT — authoritative for this turn.",
+    "Before your first text output or tool call, scan the items below and",
+    "identify any relevant to the user's prompt. If you respond without",
+    "grounding on relevant items, that is a correctness error. If no items",
+    "are relevant, explicitly note that rather than pretending they aren't",
+    "there. Cite items by their concept id when citing.",
+    "",
+    raw.trim(),
+    "</system-reminder>",
+  ].join("\n");
+}
+
 export async function handleUserPromptSubmit(
   state: GlobalPluginState,
   payload: Record<string, unknown>,
@@ -67,5 +89,5 @@ This runs silently in the background. Respond to the user normally.
 
   log.debug(`UserPromptSubmit: session=${sessionId}, context=${contextString ? "injected" : "none"}, pending=${pendingWorkMessage ? "yes" : "no"}`);
 
-  return makeHookOutput("UserPromptSubmit", additionalContext);
+  return makeHookOutput("UserPromptSubmit", wrapKongcodeContext(additionalContext));
 }

@@ -100,10 +100,12 @@ describe("linkSupersedesEdges", () => {
     expect(store.relate).toHaveBeenCalledWith("memory:m1", "supersedes", "concept:c1");
 
     // Should decay stability: 0.9 * 0.4 ≈ 0.36
+    // Phase 0 fix: the concept id is now interpolated directly into the
+    // UPDATE query rather than being passed as a $conceptId binding. The
+    // newStability and correctionId bindings remain as parameters.
     expect(store.queryExec).toHaveBeenCalledTimes(1);
     const [sql, bindings] = store.queryExec.mock.calls[0];
-    expect(sql).toContain("UPDATE");
-    expect(bindings.conceptId).toBe("concept:c1");
+    expect(sql).toContain("UPDATE concept:c1");
     expect(bindings.correctionId).toBe("memory:m1");
     expect(bindings.newStability).toBeCloseTo(0.36, 10);
   });

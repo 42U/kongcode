@@ -18,6 +18,19 @@ import { createSoul, seedSoulAsCoreMemory, reviseSoul, getSoul, checkGraduation,
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Validate a SurrealDB record id before direct interpolation. Same pattern as
+ * surreal.ts assertRecordId (which isn't exported). Prevents injection and
+ * avoids the `UPDATE $id` bug where SurrealDB rejects a string param as an
+ * UPDATE target. */
+const RECORD_ID_RE = /^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_]+$/;
+function assertWorkRecordId(id: string): void {
+  if (!RECORD_ID_RE.test(id)) {
+    throw new Error(`Invalid record ID format: ${id.slice(0, 50)}`);
+  }
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface PendingWorkItem {
@@ -75,9 +88,23 @@ export async function handleFetchPendingWork(
       `UPDATE pending_work SET status = "pending" WHERE status = "processing" AND created_at < time::now() - 10m`,
     ).catch(() => {});
 
-    // Atomically claim the highest-priority pending item
+    // Claim the highest-priority pending item. SurrealDB's UPDATE does not
+    // accept ORDER BY / LIMIT, so we do SELECT-then-UPDATE-by-id. In
+    // single-writer contexts (one daemon) this is race-free; for multi-writer
+    // it would need a transaction.
+    const candidates = await store.queryFirst<{ id: string }>(
+      `SELECT id FROM pending_work WHERE status = "pending" ORDER BY priority ASC, created_at ASC LIMIT 1`,
+    );
+    if (candidates.length === 0) {
+      return text(JSON.stringify({ empty: true, message: "No pending work items. You are done." }));
+    }
+    const claimedId = String(candidates[0].id);
+    assertWorkRecordId(claimedId);
+    // Direct interpolation safe: assertWorkRecordId validates format above.
+    // SurrealDB rejects `UPDATE $id` with a string param — the param has to be
+    // a record-id type, which the JS client doesn't produce for plain strings.
     const items = await store.queryFirst<PendingWorkItem>(
-      `UPDATE pending_work SET status = "processing" WHERE status = "pending" ORDER BY priority ASC, created_at ASC LIMIT 1 RETURN AFTER`,
+      `UPDATE ${claimedId} SET status = "processing" RETURN AFTER`,
     );
 
     if (items.length === 0) {
@@ -149,7 +176,7 @@ async function buildWorkPayload(
       const eligible = groups.filter(g => g.cnt >= 3);
       if (eligible.length === 0) {
         // No chains to graduate — mark complete immediately
-        await store.queryExec(`UPDATE $id SET status = "completed", completed_at = time::now()`, { id: item.id });
+        assertWorkRecordId(item.id); await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
         return { work_id: item.id, work_type: "causal_graduate", empty: true, message: "No causal chains ready for graduation. Already marked complete." };
       }
       return {
@@ -164,7 +191,7 @@ async function buildWorkPayload(
     case "soul_generate": {
       const report = await checkGraduation(store);
       if (!report.ready) {
-        await store.queryExec(`UPDATE $id SET status = "completed", completed_at = time::now()`, { id: item.id });
+        assertWorkRecordId(item.id); await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
         return { work_id: item.id, work_type: "soul_generate", empty: true, message: "Not ready for graduation yet. Already marked complete." };
       }
       const [reflections, causalChains, monologues] = await Promise.all([
@@ -194,7 +221,7 @@ async function buildWorkPayload(
     case "soul_evolve": {
       const soul = await getSoul(store);
       if (!soul) {
-        await store.queryExec(`UPDATE $id SET status = "completed", completed_at = time::now()`, { id: item.id });
+        assertWorkRecordId(item.id); await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
         return { work_id: item.id, work_type: "soul_evolve", empty: true, message: "No soul exists yet. Already marked complete." };
       }
       const [reflections, causalChains, monologues] = await Promise.all([
@@ -203,7 +230,7 @@ async function buildWorkPayload(
         store.queryFirst<{ content: string }>(`SELECT content FROM monologue WHERE timestamp > $since ORDER BY timestamp DESC LIMIT 10`, { since: soul.updated_at }).catch(() => []),
       ]);
       if (reflections.length === 0 && causalChains.length === 0 && monologues.length === 0) {
-        await store.queryExec(`UPDATE $id SET status = "completed", completed_at = time::now()`, { id: item.id });
+        assertWorkRecordId(item.id); await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
         return { work_id: item.id, work_type: "soul_evolve", empty: true, message: "No new experience since last soul update. Already marked complete." };
       }
       return {
@@ -248,7 +275,7 @@ async function buildWorkPayload(
     }
 
     default: {
-      await store.queryExec(`UPDATE $id SET status = "completed", completed_at = time::now()`, { id: item.id });
+      assertWorkRecordId(item.id); await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
       return { work_id: item.id, work_type: item.work_type, empty: true, message: `Unknown work type: ${item.work_type}` };
     }
   }
@@ -269,8 +296,9 @@ export async function handleCommitWorkResults(
   if (!store.isAvailable()) return text("Error: database unavailable");
 
   // Look up the work item to know what type it is
+  assertWorkRecordId(workId);
   const items = await store.queryFirst<PendingWorkItem>(
-    `SELECT * FROM $id`, { id: workId },
+    `SELECT * FROM ${workId}`,
   );
   if (items.length === 0) return text(`Error: work item not found: ${workId}`);
 
@@ -278,18 +306,16 @@ export async function handleCommitWorkResults(
 
   try {
     const outcome = await commitResults(item, results, state);
-    // Mark completed
+    // Mark completed (workId already validated above)
     await store.queryExec(
-      `UPDATE $id SET status = "completed", completed_at = time::now()`,
-      { id: workId },
+      `UPDATE ${workId} SET status = "completed", completed_at = time::now()`,
     );
     log.info(`[pending_work] Completed ${item.work_type} (${workId})`);
     return text(JSON.stringify({ success: true, work_type: item.work_type, ...outcome }));
   } catch (e) {
-    // Mark failed
+    // Mark failed (workId already validated above)
     await store.queryExec(
-      `UPDATE $id SET status = "failed", completed_at = time::now()`,
-      { id: workId },
+      `UPDATE ${workId} SET status = "failed", completed_at = time::now()`,
     ).catch(() => {});
     log.error(`[pending_work] Failed ${item.work_type} (${workId}):`, e);
     return text(JSON.stringify({ success: false, error: String(e) }));
@@ -427,6 +453,141 @@ async function commitResults(
 
     default:
       return { skipped: true, reason: `unknown work_type: ${item.work_type}` };
+  }
+}
+
+// ── create_knowledge_gems ────────────────────────────────────────────────────
+// Direct-write path for structured knowledge extracted from external sources
+// (PDFs, articles, docs). Bypasses the pending_work queue because there is no
+// session transcript — the source is a document and the "extraction" happens
+// in a foreground conversation.
+//
+// Each gem becomes a `concept` record. An `artifact` record is created for
+// the source, and every gem gets a `derived_from` edge to the source artifact.
+// `links` create named edges between gems (by gem name — resolved to record
+// id via the concept id map built during gem creation).
+
+interface GemInput {
+  name: string;        // short identifier, used for link resolution
+  content: string;     // the actual insight text (embedded + stored on concept)
+  importance?: number; // 1-10, defaults to 7
+}
+
+interface GemLink {
+  from: string;   // gem name
+  to: string;     // gem name
+  edge: string;   // relation name (e.g. "elaborates", "contrasts_with", "applies_to")
+}
+
+export async function handleCreateKnowledgeGems(
+  state: GlobalPluginState,
+  session: SessionState,
+  args: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  const { store, embeddings } = state;
+
+  if (!store.isAvailable()) return text("Error: database unavailable");
+
+  const source = String(args.source ?? "").trim();
+  const sourceType = String(args.source_type ?? "document").trim();
+  const sourceDescription = String(args.source_description ?? "").trim();
+  const gems = Array.isArray(args.gems) ? (args.gems as GemInput[]) : [];
+  const links = Array.isArray(args.links) ? (args.links as GemLink[]) : [];
+
+  if (!source) return text("Error: source is required");
+  if (gems.length === 0) return text("Error: at least one gem is required");
+
+  try {
+    // 1. Create artifact for the source document
+    let sourceEmb: number[] | null = null;
+    if (embeddings.isAvailable()) {
+      try { sourceEmb = await embeddings.embed(`${source}: ${sourceDescription}`); } catch { /* ok */ }
+    }
+    const artifactId = await store.createArtifact(
+      source,
+      sourceType,
+      sourceDescription || source,
+      sourceEmb,
+    );
+
+    // 2. Create each gem as a concept, build name -> id map
+    const nameToId = new Map<string, string>();
+    const conceptIds: string[] = [];
+    let skipped = 0;
+
+    for (const gem of gems) {
+      if (!gem?.name || !gem?.content) {
+        skipped++;
+        continue;
+      }
+      let gemEmb: number[] | null = null;
+      if (embeddings.isAvailable()) {
+        try { gemEmb = await embeddings.embed(gem.content); } catch { /* ok */ }
+      }
+      const conceptId = await store.upsertConcept(
+        gem.content,
+        gemEmb,
+        `gem:${source}`,
+        {
+          session_id: session.sessionId,
+          source_kind: "gem",
+          skill_name: "create_knowledge_gems",
+        },
+      );
+      if (!conceptId) {
+        skipped++;
+        continue;
+      }
+      nameToId.set(gem.name, conceptId);
+      conceptIds.push(conceptId);
+
+      // derived_from edge: concept -> source artifact
+      if (artifactId) {
+        await store.relate(conceptId, "derived_from", artifactId).catch(e => {
+          log.warn(`[gems] derived_from failed for ${gem.name}:`, e);
+        });
+      }
+    }
+
+    // 3. Create cross-link edges between gems
+    let edgesCreated = 0;
+    let edgesSkipped = 0;
+    for (const link of links) {
+      if (!link?.from || !link?.to || !link?.edge) {
+        edgesSkipped++;
+        continue;
+      }
+      const fromId = nameToId.get(link.from);
+      const toId = nameToId.get(link.to);
+      if (!fromId || !toId) {
+        edgesSkipped++;
+        log.warn(`[gems] link unresolved: ${link.from} -${link.edge}-> ${link.to}`);
+        continue;
+      }
+      try {
+        await store.relate(fromId, link.edge, toId);
+        edgesCreated++;
+      } catch (e) {
+        edgesSkipped++;
+        log.warn(`[gems] relate failed: ${link.from} -${link.edge}-> ${link.to}:`, e);
+      }
+    }
+
+    log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} skipped=${skipped + edgesSkipped}`);
+
+    return text(JSON.stringify({
+      success: true,
+      source,
+      artifact_id: artifactId,
+      concepts_created: conceptIds.length,
+      concepts_skipped: skipped,
+      edges_created: edgesCreated,
+      edges_skipped: edgesSkipped,
+      concept_ids: conceptIds,
+    }));
+  } catch (e) {
+    log.error("[gems] failed:", e);
+    return text(JSON.stringify({ success: false, error: String(e) }));
   }
 }
 

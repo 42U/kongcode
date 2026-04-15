@@ -116,7 +116,24 @@ export async function assembleContextString(
 
     log.debug(`Context assembled: ${result.stats.graphNodes} nodes, ${result.stats.mode} mode`);
 
-    return parts.join("\n\n");
+    // Phase 2: prepend a RETRIEVAL RATIONALE preamble so Claude can see WHY
+    // this context was retrieved, not just WHAT was retrieved. Keywords echoed
+    // from the prompt make relevance explicit rather than implicit, moving
+    // grounding from inference to reading.
+    const STOP = new Set(["this","that","with","from","have","been","what","when","where","your","their","about","which","would","could","should","will","the","and","for","are","was","were"]);
+    const keywords = userPrompt
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(w => w.length >= 4 && !STOP.has(w))
+      .slice(0, 6);
+    const rationale = "=== RETRIEVAL RATIONALE ===\n" +
+      `Retrieved ${result.stats.graphNodes} graph nodes + ${result.stats.neighborNodes} neighbors ` +
+      `based on prompt keywords: ${keywords.length > 0 ? keywords.join(", ") : "(general)"}.` +
+      (result.stats.mode ? ` Mode: ${result.stats.mode}.` : "") +
+      "\nScan items below; items matching your user's intent should be grounded in your reply.";
+
+    return [rationale, ...parts].join("\n\n");
   } catch (e) {
     swallow.warn("assembleContext:transform", e);
     return undefined;
