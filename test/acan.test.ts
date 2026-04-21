@@ -233,6 +233,18 @@ describe("scoreWithACAN", () => {
 // ── Readiness check ──
 
 describe("checkACANReadiness", () => {
+  // Each test gets its own tmp weights dir, passed through to checkACANReadiness
+  // so the function never reads the developer's real ~/.kongbrain/acan_weights.json.
+  let dir: string;
+
+  beforeEach(() => {
+    dir = makeTmpDir();
+  });
+
+  afterEach(() => {
+    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+  });
+
   it("does nothing when store is undefined", async () => {
     await expect(checkACANReadiness(undefined)).resolves.toBeUndefined();
   });
@@ -243,31 +255,26 @@ describe("checkACANReadiness", () => {
       queryFirst: vi.fn(async () => [{ count: 100 }]),
     } as any;
 
-    await checkACANReadiness(store, 5000);
+    await checkACANReadiness(store, 5000, dir);
     // queryFirst called once (for count), not twice (no training data fetch)
     expect(store.queryFirst).toHaveBeenCalledTimes(1);
   });
 
   it("skips training when weights are fresh and data hasn't grown", async () => {
-    // Preload weights
-    const dir = makeTmpDir();
+    // Preload weights into the isolated tmp dir
     const weights = makeValidWeights();
     weights.trainedOnSamples = 6000;
     weights.trainedAt = Date.now(); // just trained
     writeFileSync(join(dir, "acan_weights.json"), JSON.stringify(weights));
-    initACAN(dir);
 
     const store = {
       isAvailable: () => true,
       queryFirst: vi.fn(async () => [{ count: 6100 }]), // only 100 new samples (< 50% growth)
     } as any;
 
-    await checkACANReadiness(store, 5000);
+    await checkACANReadiness(store, 5000, dir);
     // Count query fires, but no full training data fetch (which would call queryFirst many more times)
-    // initACAN may also trigger a queryFirst internally, so allow 1-2 calls
     expect(store.queryFirst.mock.calls.length).toBeLessThanOrEqual(2);
-
-    rmSync(dir, { recursive: true, force: true });
   });
 });
 

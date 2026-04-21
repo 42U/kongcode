@@ -315,11 +315,16 @@ function trainInBackground(
 const STALENESS_GROWTH_FACTOR = 0.5;
 const STALENESS_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
-export async function checkACANReadiness(store?: SurrealStore, trainingThreshold?: number): Promise<void> {
+export async function checkACANReadiness(
+  store?: SurrealStore,
+  trainingThreshold?: number,
+  weightsDir?: string,
+): Promise<void> {
   if (!store) return;
   const threshold = trainingThreshold ?? TRAINING_THRESHOLD;
-  const weightsPath = join(getKongDir(), WEIGHTS_FILENAME);
-  const hasWeights = initACAN();
+  const dir = weightsDir ?? getKongDir();
+  const weightsPath = join(dir, WEIGHTS_FILENAME);
+  const hasWeights = initACAN(weightsDir);
   const count = await getTrainingDataCount(store);
 
   if (hasWeights && _weights) {
