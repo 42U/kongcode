@@ -107,6 +107,26 @@ describe("extractConceptNames", () => {
     expect(names).not.toContain("ON");
     expect(names).not.toContain("AT");
   });
+
+  it("filters STOPWORDS even when they shape-match ACRONYM", () => {
+    // Stopwords typed in ALLCAPS satisfy the ACRONYM regex but must be stripped.
+    // A real acronym in the same text must still pass through.
+    const names = extractConceptNames("THIS is BETWEEN what THAT wants from the SMTP server");
+    expect(names).not.toContain("THIS");
+    expect(names).not.toContain("BETWEEN");
+    expect(names).not.toContain("THAT");
+    expect(names).toContain("SMTP");
+  });
+
+  it("requires non-identifier CamelCase tokens to appear 2+ times", () => {
+    // CAP_WORD shape (CamelCase w/o _ or -) has no inherent signal, so a single
+    // occurrence should not be promoted. Two occurrences of the same token should.
+    const once = extractConceptNames("we ran OpenClaw last night and went to bed");
+    expect(once).not.toContain("OpenClaw");
+
+    const twice = extractConceptNames("OpenClaw polls hourly. OpenClaw logs to disk.");
+    expect(twice).toContain("OpenClaw");
+  });
 });
 
 // ── upsertAndLinkConcepts ──
