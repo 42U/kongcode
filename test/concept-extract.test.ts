@@ -9,6 +9,7 @@ import {
   upsertAndLinkConcepts,
   linkToRelevantConcepts,
   linkConceptHierarchy,
+  DEFAULT_CONCEPT_CAP,
 } from "../src/engine/concept-extract.js";
 
 // ── Mock helpers ──
@@ -53,22 +54,58 @@ describe("extractConceptNames", () => {
     expect(reactCount).toBe(1);
   });
 
-  it("caps at 10 concepts", () => {
-    const text = "use Alpha implement Beta create Gamma add Delta configure Epsilon setup Zeta import Eta " +
-      "The database schema migration endpoint middleware component service module handler controller";
+  it(`caps at the default of ${DEFAULT_CONCEPT_CAP} concepts`, () => {
+    const text =
+      "use Alpha implement Beta create Gamma add Delta configure Epsilon setup Zeta import Eta " +
+      "fix Theta deploy Iota ship Kappa run Lambda monitor Mu update Nu hedge Xi build Omicron " +
+      "refactor Pi audit Rho extract Sigma classify Tau trigger Upsilon test Phi launch Chi " +
+      "The database schema migration endpoint middleware component service module handler controller " +
+      "smart_mm_bot hedge-lock reply-banner KXETH KXFED SMTP IMAP";
     const names = extractConceptNames(text);
-    expect(names.length).toBeLessThanOrEqual(10);
+    expect(names.length).toBeLessThanOrEqual(DEFAULT_CONCEPT_CAP);
+    expect(names.length).toBeGreaterThan(10); // proves the cap is the new ceiling, not the old one
+  });
+
+  it("respects a configurable cap", () => {
+    const text =
+      "use Alpha implement Beta create Gamma add Delta configure Epsilon setup Zeta " +
+      "smart_mm_bot hedge-lock reply-banner KXETH KXFED SMTP IMAP";
+    expect(extractConceptNames(text, 5).length).toBeLessThanOrEqual(5);
+    expect(extractConceptNames(text, 0).length).toBe(0);
   });
 
   it("returns empty for text with no concepts", () => {
     const names = extractConceptNames("hello world, just a simple message");
     // May match "function" etc. if present, but this text has none
-    expect(names.length).toBeLessThanOrEqual(10);
+    expect(names.length).toBeLessThanOrEqual(DEFAULT_CONCEPT_CAP);
   });
 
   it("extracts multi-word PascalCase concepts", () => {
     const names = extractConceptNames("implement React Router");
     expect(names.some(n => n.includes("React"))).toBe(true);
+  });
+
+  it("extracts snake_case identifiers", () => {
+    const names = extractConceptNames("the smart_mm_bot calls check_replies_imap on every tick");
+    expect(names).toContain("smart_mm_bot");
+    expect(names).toContain("check_replies_imap");
+  });
+
+  it("extracts kebab-case identifiers", () => {
+    const names = extractConceptNames("the hedge-lock mechanic ships with the reply-banner change");
+    expect(names).toContain("hedge-lock");
+    expect(names).toContain("reply-banner");
+  });
+
+  it("extracts ALLCAPS tickers and acronyms (length >= 3)", () => {
+    const names = extractConceptNames("KXETH and KXFED moved on the FOMC print; SMTP and IMAP both blocked");
+    expect(names).toContain("KXETH");
+    expect(names).toContain("KXFED");
+    expect(names).toContain("SMTP");
+    expect(names).toContain("IMAP");
+    // Two-letter tokens must NOT be picked up as acronyms
+    expect(names).not.toContain("ON");
+    expect(names).not.toContain("AT");
   });
 });
 
