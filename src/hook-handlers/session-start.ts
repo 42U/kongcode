@@ -16,7 +16,7 @@ import { hasMigratableFiles } from "../engine/workspace-migrate.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 import { assertRecordId } from "../engine/surreal.js";
-import { checkACANReadiness } from "../engine/acan.js";
+import { runBootstrapMaintenance } from "../engine/maintenance.js";
 
 export async function handleSessionStart(
   state: GlobalPluginState,
@@ -101,21 +101,10 @@ export async function handleSessionStart(
       swallow.warn("sessionStart:bootstrap", e);
     }
 
-    // Background maintenance — ported from the dead ContextEngine.bootstrap()
-    // method in KongBrain, where the OpenClaw framework used to call it on
-    // session lifecycle. KongCode has no such framework call, so the five
-    // jobs below had been silently not running since the port. Each has its
-    // own internal safety floors (count<=200, count<=2000, count<=50) and
-    // LIMITs — safe to run on every session start, safe to race with sibling
-    // MCPs (second mover does wasted work, not corruption). ACAN retrain
-    // carries its own lockfile from src/engine/acan.ts.
-    Promise.all([
-      store.runMemoryMaintenance(),
-      store.archiveOldTurns(),
-      store.consolidateMemories((text) => embeddings.embed(text)),
-      store.garbageCollectMemories(),
-      checkACANReadiness(store, state.config.thresholds.acanTrainingThreshold),
-    ]).catch(e => swallow.warn("sessionStart:maintenance", e));
+    // Also fire bootstrap maintenance on session-start (belt-and-suspenders
+    // with the MCP-boot call in mcp-server.ts). Safe because each job is
+    // internally bounded and idempotent; ACAN retrain is lockfile-protected.
+    runBootstrapMaintenance(state);
   }
 
   // Synthesize wakeup briefing (async, result cached for UserPromptSubmit)

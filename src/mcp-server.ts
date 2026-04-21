@@ -37,6 +37,7 @@ import { handleCoreMemory } from "./tools/core-memory.js";
 import { handleIntrospect } from "./tools/introspect.js";
 import { handleFetchPendingWork, handleCommitWorkResults, handleCreateKnowledgeGems } from "./tools/pending-work.js";
 import { log } from "./engine/log.js";
+import { runBootstrapMaintenance } from "./engine/maintenance.js";
 
 // ── Global state ──────────────────────────────────────────────────────────────
 
@@ -265,6 +266,14 @@ async function initialize(): Promise<void> {
   await startHttpApi(globalState, socketPath, homeDir);
 
   log.info("KongCode MCP server ready");
+
+  // Fire background maintenance once per MCP process boot. This is the
+  // reliable trigger — it fires regardless of whether Claude Code delivers
+  // SessionStart (multi-MCP socket races, hook-proxy transport failures,
+  // --resume edge cases all previously left this dormant). handleSessionStart
+  // also calls it; the ACAN lockfile and per-job safety floors handle the
+  // redundancy safely.
+  runBootstrapMaintenance(globalState);
 }
 
 async function shutdown(): Promise<void> {
