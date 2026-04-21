@@ -6,8 +6,7 @@
  * Use after a DB salvage/migration where embeddings were lost. Safe to re-run — upsertConcept
  * dedupes by lowercase content and backfills missing embeddings.
  *
- * Usage:
- *   cd /mnt/c/Users/charl/kongcode
+ * Usage (from the repo root):
  *   node scripts/rebuild-from-turns.mjs
  */
 import { parsePluginConfig } from "../dist/engine/config.js";

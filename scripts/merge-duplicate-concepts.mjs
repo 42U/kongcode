@@ -5,8 +5,7 @@
  * access_count (ties → older record). All graph edges are re-pointed to the
  * canonical, then the duplicate is deleted.
  *
- * Usage:
- *   cd /mnt/c/Users/charl/kongcode
+ * Usage (from the repo root):
  *   node scripts/merge-duplicate-concepts.mjs           # dry-run, report only
  *   node scripts/merge-duplicate-concepts.mjs --apply   # actually merge
  */

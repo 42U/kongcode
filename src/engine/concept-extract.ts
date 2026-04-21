@@ -33,8 +33,11 @@ const STOPWORDS = new Set([
   "after", "before", "between", "through",
 ]);
 
+/** Default upper bound on concepts returned per text. Override per call. */
+export const DEFAULT_CONCEPT_CAP = 20;
+
 /** Extract concept name strings from free text using regex heuristics. */
-export function extractConceptNames(text: string): string[] {
+export function extractConceptNames(text: string, max: number = DEFAULT_CONCEPT_CAP): string[] {
   const concepts = new Set<string>();
 
   // 1. Verb-triggered concept names (CapitalizedNoun after action verbs)
@@ -77,7 +80,7 @@ export function extractConceptNames(text: string): string[] {
     }
   }
 
-  return [...concepts].slice(0, 20);
+  return [...concepts].slice(0, Math.max(0, max));
 }
 
 /**
