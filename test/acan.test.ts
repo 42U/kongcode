@@ -216,6 +216,35 @@ describe("scoreWithACAN", () => {
     expect(scores[1]).toBeGreaterThan(scores[0]);
   });
 
+  it("hot-reloads weights when file mtime advances (sibling MCP retrain)", () => {
+    // Start with weights where only W_final[0] (attention term) matters
+    const weights1 = makeValidWeights();
+    weights1.W_final = [5.0, 0, 0, 0, 0, 0, 0];
+    weights1.bias = 0;
+    writeFileSync(join(dir, "acan_weights.json"), JSON.stringify(weights1));
+    initACAN(dir);
+
+    const query = Array.from({ length: EMBED_DIM }, () => 0.01);
+    const candidate = makeCandidate({
+      embedding: Array.from({ length: EMBED_DIM }, () => 0.01),
+      importance: 0.9,
+    });
+    const [score1] = scoreWithACAN(query, [candidate]);
+
+    // Simulate a sibling MCP retraining — rewrite weights with a different
+    // W_final layout (now importance dominates), advance mtime to force reload.
+    const weights2 = makeValidWeights();
+    weights2.W_final = [0, 0, 5.0, 0, 0, 0, 0];
+    weights2.bias = 0;
+    writeFileSync(join(dir, "acan_weights.json"), JSON.stringify(weights2));
+    const future = (Date.now() + 5000) / 1000;
+    utimesSync(join(dir, "acan_weights.json"), future, future);
+
+    // scoreWithACAN should detect the newer mtime and hot-reload before scoring.
+    const [score2] = scoreWithACAN(query, [candidate]);
+    expect(score2).not.toBe(score1);
+  });
+
   it("returns empty when weights not loaded", () => {
     // Re-init with empty dir (no weights)
     const emptyDir = makeTmpDir();

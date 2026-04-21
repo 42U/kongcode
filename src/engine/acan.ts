@@ -66,6 +66,10 @@ interface TrainingConfig {
 
 let _weights: ACANWeights | null = null;
 let _active = false;
+// Remembered between initACAN and maybeReloadWeights so a later score call
+// can detect a weights file that's been rewritten by a sibling MCP process.
+let _weightsDir: string | undefined = undefined;
+let _loadedMtime = 0;
 
 const ATTN_DIM = 64;
 const EMBED_DIM = 1024;
@@ -172,14 +176,38 @@ function saveWeights(weights: ACANWeights, path: string): void {
 }
 
 export function initACAN(weightsDir?: string): boolean {
+  _weightsDir = weightsDir;
   const dir = weightsDir ?? getKongDir();
-  _weights = loadWeights(join(dir, WEIGHTS_FILENAME));
+  const path = join(dir, WEIGHTS_FILENAME);
+  _weights = loadWeights(path);
   _active = _weights !== null;
+  try {
+    _loadedMtime = existsSync(path) ? statSync(path).mtimeMs : 0;
+  } catch { _loadedMtime = 0; }
   return _active;
 }
 
 export function isACANActive(): boolean {
   return _active;
+}
+
+/**
+ * Hot-reload weights if the file has been rewritten since we last loaded.
+ * Lets sibling MCP processes' retrains take effect here without a restart.
+ * Cheap when nothing's changed (one statSync per score call).
+ */
+function maybeReloadWeights(): void {
+  if (!_weights) return;
+  const dir = _weightsDir ?? getKongDir();
+  const path = join(dir, WEIGHTS_FILENAME);
+  try {
+    if (!existsSync(path)) return;
+    const mtime = statSync(path).mtimeMs;
+    if (mtime > _loadedMtime) {
+      initACAN(_weightsDir);
+      log.info(`[acan] hot-reloaded weights (sibling MCP retrained)`);
+    }
+  } catch { /* non-fatal, keep current weights */ }
 }
 
 // ── Linear algebra ──
@@ -203,6 +231,7 @@ function projectVec(vec: number[], matrix: number[][]): number[] {
 // ── ACAN inference ──
 
 export function scoreWithACAN(queryEmbedding: number[], candidates: ACANCandidate[]): number[] {
+  maybeReloadWeights();
   if (!_weights || candidates.length === 0) return [];
 
   const q = projectVec(queryEmbedding, _weights.W_q);
