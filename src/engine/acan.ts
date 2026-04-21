@@ -8,7 +8,10 @@
  * Ported from kongbrain — uses SurrealStore instead of module-level DB.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import {
+  readFileSync, writeFileSync, existsSync, mkdirSync, renameSync,
+  openSync, writeSync, closeSync, unlinkSync, statSync, constants,
+} from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -68,7 +71,46 @@ const ATTN_DIM = 64;
 const EMBED_DIM = 1024;
 const FEATURE_COUNT = 7;
 const WEIGHTS_FILENAME = "acan_weights.json";
+const LOCK_FILENAME = "acan_weights.lock";
+// If a lockfile is older than 30min, assume the owner crashed and steal it.
+// Training takes seconds on small samples, at most a couple minutes on large;
+// a legitimately-held lock will never approach 30min.
+const LOCK_MAX_AGE_MS = 30 * 60 * 1000;
 const TRAINING_THRESHOLD = 5000;
+
+/**
+ * Claim an exclusive training lock. Returns a release function, or null if
+ * another process holds the lock. Stale locks (older than LOCK_MAX_AGE_MS)
+ * are stolen automatically.
+ */
+function acquireTrainingLock(lockPath: string): (() => void) | null {
+  const tryCreate = (): (() => void) | null => {
+    try {
+      const fd = openSync(lockPath, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o644);
+      writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+      closeSync(fd);
+      return () => {
+        try { unlinkSync(lockPath); } catch { /* may already be gone */ }
+      };
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+      return null;
+    }
+  };
+
+  const release = tryCreate();
+  if (release) return release;
+
+  // Exists — check age. Stale = steal it.
+  try {
+    const age = Date.now() - statSync(lockPath).mtimeMs;
+    if (age > LOCK_MAX_AGE_MS) {
+      try { unlinkSync(lockPath); } catch { /* raced with another stealer */ }
+      return tryCreate();
+    }
+  } catch { /* raced — lock vanished; fall through */ }
+  return null;
+}
 
 function getKongDir(): string {
   const dir = join(homedir(), ".kongbrain");
@@ -261,6 +303,7 @@ function trainInBackground(
   weightsPath: string,
   warmStart?: ACANWeights,
   config?: Partial<TrainingConfig>,
+  releaseLock?: () => void,
 ): void {
   const cfg = { ...DEFAULT_TRAINING_CONFIG, ...config };
 
@@ -313,11 +356,13 @@ function trainInBackground(
     } catch (e) {
       swallow.warn("acan:saveWeights", e);
     }
+    releaseLock?.();
     worker.terminate();
   });
 
   worker.on("error", (err) => {
     swallow.warn("acan:worker", err);
+    releaseLock?.();
     worker.terminate();
   });
 }
@@ -350,15 +395,27 @@ export async function checkACANReadiness(
     return;
   }
 
+  // Gate training with a cross-process lockfile so concurrent MCPs don't
+  // duplicate work (or race on writing weights). First one in wins; others
+  // skip this cycle and pick up the new weights via mtime-reload next time.
+  const lockPath = join(dir, LOCK_FILENAME);
+  const releaseLock = acquireTrainingLock(lockPath);
+  if (!releaseLock) {
+    log.info(`[acan] training lock held by another process, skipping this cycle`);
+    return;
+  }
+
   try {
     const samples = await fetchTrainingData(store);
     if (samples.length < threshold) {
       log.warn(`[acan] retrain skipped: samples=${samples.length} < threshold=${threshold} (count=${count})`);
+      releaseLock();
       return;
     }
     log.info(`[acan] retrain triggered: samples=${samples.length} prevTrainedOn=${_weights?.trainedOnSamples ?? 0}`);
-    trainInBackground(samples, weightsPath, hasWeights ? _weights ?? undefined : undefined);
+    trainInBackground(samples, weightsPath, hasWeights ? _weights ?? undefined : undefined, undefined, releaseLock);
   } catch (e) {
     swallow.warn("acan:readiness", e);
+    releaseLock();
   }
 }

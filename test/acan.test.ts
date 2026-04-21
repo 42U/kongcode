@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, mkdirSync, rmSync, existsSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -275,6 +275,54 @@ describe("checkACANReadiness", () => {
     await checkACANReadiness(store, 5000, dir);
     // Count query fires, but no full training data fetch (which would call queryFirst many more times)
     expect(store.queryFirst.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+
+  it("skips retraining when another MCP holds the training lock", async () => {
+    // Stale-by-age weights — staleness check would otherwise pass, forcing retrain
+    const weights = makeValidWeights();
+    weights.trainedOnSamples = 25000;
+    weights.trainedAt = Date.now() - 10 * 24 * 60 * 60 * 1000; // 10 days ago
+    writeFileSync(join(dir, "acan_weights.json"), JSON.stringify(weights));
+
+    // Simulate another MCP mid-training by pre-claiming the lockfile
+    writeFileSync(
+      join(dir, "acan_weights.lock"),
+      JSON.stringify({ pid: 999999, startedAt: Date.now() }),
+    );
+
+    const store = {
+      isAvailable: () => true,
+      queryFirst: vi.fn(async () => [{ count: 50000 }]),
+    } as any;
+
+    await checkACANReadiness(store, 5000, dir);
+    // Only the initial count query fires. Lock blocks the fetchTrainingData
+    // call that would have been queryFirst #2.
+    expect(store.queryFirst).toHaveBeenCalledTimes(1);
+  });
+
+  it("steals a lock older than 30 minutes (crashed owner)", async () => {
+    const weights = makeValidWeights();
+    weights.trainedOnSamples = 25000;
+    weights.trainedAt = Date.now() - 10 * 24 * 60 * 60 * 1000;
+    writeFileSync(join(dir, "acan_weights.json"), JSON.stringify(weights));
+
+    // Pre-claim the lock, then backdate its mtime by an hour so it looks stale.
+    const lockPath = join(dir, "acan_weights.lock");
+    writeFileSync(lockPath, JSON.stringify({ pid: 999999, startedAt: Date.now() - 3600_000 }));
+    const hourAgoSec = (Date.now() - 3600_000) / 1000;
+    utimesSync(lockPath, hourAgoSec, hourAgoSec);
+
+    const store = {
+      isAvailable: () => true,
+      queryFirst: vi.fn(async () => [{ count: 50000 }]),
+    } as any;
+
+    await checkACANReadiness(store, 5000, dir);
+    // Stale lock gets stolen → proceeds past the lock → fetchTrainingData fires.
+    // That's the 2nd queryFirst call. (Won't reach trainInBackground because
+    // the mock returns rows without memory_id, so samples.length === 0.)
+    expect(store.queryFirst.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 });
 
