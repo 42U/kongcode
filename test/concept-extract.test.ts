@@ -84,6 +84,29 @@ describe("extractConceptNames", () => {
     const names = extractConceptNames("implement React Router");
     expect(names.some(n => n.includes("React"))).toBe(true);
   });
+
+  it("extracts snake_case identifiers", () => {
+    const names = extractConceptNames("the smart_mm_bot calls check_replies_imap on every tick");
+    expect(names).toContain("smart_mm_bot");
+    expect(names).toContain("check_replies_imap");
+  });
+
+  it("extracts kebab-case identifiers", () => {
+    const names = extractConceptNames("the hedge-lock mechanic ships with the reply-banner change");
+    expect(names).toContain("hedge-lock");
+    expect(names).toContain("reply-banner");
+  });
+
+  it("extracts ALLCAPS tickers and acronyms (length >= 3)", () => {
+    const names = extractConceptNames("KXETH and KXFED moved on the FOMC print; SMTP and IMAP both blocked");
+    expect(names).toContain("KXETH");
+    expect(names).toContain("KXFED");
+    expect(names).toContain("SMTP");
+    expect(names).toContain("IMAP");
+    // Two-letter tokens must NOT be picked up as acronyms
+    expect(names).not.toContain("ON");
+    expect(names).not.toContain("AT");
+  });
 });
 
 // ── upsertAndLinkConcepts ──
