@@ -260,9 +260,12 @@ async function initialize(): Promise<void> {
   registerHookHandler("subagent-stop", handleSubagentStop);
 
   // Start internal HTTP API for hook communication.
-  // Socket lives in user's home dir — stable, project-independent location.
+  // Per-PID socket path so multiple concurrent MCPs don't race on a shared
+  // file. hook-proxy.sh enumerates .kongcode-*.sock in $HOME and picks the
+  // newest one whose owning PID is still alive. Killing one MCP no longer
+  // takes down others' hook routing.
   const homeDir = process.env.HOME || process.env.USERPROFILE || "/tmp";
-  const socketPath = `${homeDir}/.kongcode.sock`;
+  const socketPath = `${homeDir}/.kongcode-${process.pid}.sock`;
   await startHttpApi(globalState, socketPath, homeDir);
 
   log.info("KongCode MCP server ready");
