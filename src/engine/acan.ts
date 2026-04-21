@@ -15,6 +15,7 @@ import { Worker } from "node:worker_threads";
 import type { SurrealStore } from "./surreal.js";
 import { assertRecordId } from "./surreal.js";
 import { swallow } from "./errors.js";
+import { log } from "./log.js";
 
 // ── Types ──
 
@@ -303,11 +304,17 @@ function trainInBackground(
       saveWeights(msg.weights, weightsPath);
       _weights = msg.weights;
       _active = true;
-    } catch { /* non-fatal */ }
+      log.info(`[acan] training complete: trainedOn=${msg.weights.trainedOnSamples} valLoss=${msg.valLoss?.toFixed?.(4) ?? "?"} epochs=${msg.actualEpochs ?? "?"}`);
+    } catch (e) {
+      swallow.warn("acan:saveWeights", e);
+    }
     worker.terminate();
   });
 
-  worker.on("error", () => { worker.terminate(); });
+  worker.on("error", (err) => {
+    swallow.warn("acan:worker", err);
+    worker.terminate();
+  });
 }
 
 // ── Startup: auto-train and activate ──
@@ -340,9 +347,13 @@ export async function checkACANReadiness(
 
   try {
     const samples = await fetchTrainingData(store);
-    if (samples.length < threshold) return;
+    if (samples.length < threshold) {
+      log.warn(`[acan] retrain skipped: samples=${samples.length} < threshold=${threshold} (count=${count})`);
+      return;
+    }
+    log.info(`[acan] retrain triggered: samples=${samples.length} prevTrainedOn=${_weights?.trainedOnSamples ?? 0}`);
     trainInBackground(samples, weightsPath, hasWeights ? _weights ?? undefined : undefined);
-  } catch {
-    // training is best-effort
+  } catch (e) {
+    swallow.warn("acan:readiness", e);
   }
 }
