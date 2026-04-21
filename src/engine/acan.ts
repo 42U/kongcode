@@ -8,7 +8,7 @@
  * Ported from kongbrain — uses SurrealStore instead of module-level DB.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -119,9 +119,14 @@ function loadWeights(path: string): ACANWeights | null {
 }
 
 function saveWeights(weights: ACANWeights, path: string): void {
+  // Atomic write: multiple MCPs can train concurrently, so a partial write
+  // from one process must not be visible to another reading the file.
+  // write-to-tmp then rename() is atomic on the same filesystem.
   const dir = join(path, "..");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(path, JSON.stringify(weights), "utf-8");
+  const tmpPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(weights), "utf-8");
+  renameSync(tmpPath, path);
 }
 
 export function initACAN(weightsDir?: string): boolean {
