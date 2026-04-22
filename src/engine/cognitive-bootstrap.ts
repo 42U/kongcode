@@ -15,6 +15,12 @@ import type { EmbeddingService } from "./embeddings.js";
 import { swallow } from "./errors.js";
 
 const BOOTSTRAP_SOURCE = "cognitive_bootstrap";
+/**
+ * Version tag for the cognitive bootstrap content. Bump this when CORE_ENTRIES
+ * or IDENTITY_CHUNKS change; seedCognitiveBootstrap uses it to detect stale
+ * seeds and re-seed on upgrade.
+ */
+export const BOOTSTRAP_VERSION = "0.4.0";
 
 // ── Tier 0 Core Memory: imperative reflexes loaded every turn ────────────
 
@@ -44,13 +50,18 @@ const CORE_ENTRIES: { text: string; category: string; priority: number }[] = [
     category: "schema",
     priority: 77,
   },
+  {
+    text: `AUTO-SEAL CONTRACT (0.4.0+): The substrate wires edges for you. You do NOT need to call linkToRelevantConcepts or linkConceptHierarchy manually — every concept/memory/artifact write goes through commitKnowledge(), which auto-fires: concept → narrower/broader hierarchy edges + related_to by embedding similarity; memory → about_concept edges; artifact → artifact_mentions edges; turn → mentions edges. Focus on WHAT to save — the linking is automatic. If a write path you see does NOT go through commitKnowledge (raw store.upsertConcept or store.createMemory calls outside of concept-extract.ts), that is a bug — flag it.`,
+    category: "operations",
+    priority: 83,
+  },
 ];
 
 // ── Identity Chunks: vector-searchable reference material ────────────────
 
 const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
   {
-    text: `KongBrain's memory daemon runs in the background and extracts 9 knowledge types from your conversations every ~4K tokens or 3 turns: causal chains (cause->effect from debugging), monologue traces (doubts, insights, tradeoffs, realizations — episodic reasoning moments), resolved memories (daemon marks issues done when mentioned as fixed), concepts (technical facts worth remembering), corrections (user correcting you — highest signal), preferences (user workflow/style signals), artifacts (files created/modified/read), decisions (choices with rationale), and skills (multi-step procedures that worked). Extraction is quality-gated — weak confidence extractions are skipped, so the same conversation may yield different extractions depending on signal strength.`,
+    text: `KongCode's memory daemon runs in the background and extracts 9 knowledge types from your conversations every ~4K tokens or 3 turns: causal chains (cause->effect from debugging), monologue traces (doubts, insights, tradeoffs, realizations — episodic reasoning moments), resolved memories (daemon marks issues done when mentioned as fixed), concepts (technical facts worth remembering), corrections (user correcting you — highest signal), preferences (user workflow/style signals), artifacts (files created/modified/read), decisions (choices with rationale), and skills (multi-step procedures that worked). Extraction is quality-gated — weak confidence extractions are skipped, so the same conversation may yield different extractions depending on signal strength.`,
     importance: 9,
   },
   {
@@ -58,7 +69,7 @@ const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
     importance: 9,
   },
   {
-    text: `KongBrain's memory lifecycle: During a session, the daemon extracts knowledge incrementally. At session end (or mid-session every ~25K tokens): a handoff note is written summarizing progress, skills are extracted from successful tasks, metacognitive reflections are generated (linked to the session via reflects_on edges), and causal chains may graduate to skills. At next session start: the wakeup system synthesizes a first-person briefing from the handoff + identity + monologues + depth signals. Context is also predictively prefetched each turn based on likely follow-up queries — relevant memories may appear in your context without you requesting them.`,
+    text: `KongCode's memory lifecycle: During a session, the daemon extracts knowledge incrementally. At session end (or mid-session every ~25K tokens): a handoff note is written summarizing progress, skills are extracted from successful tasks, metacognitive reflections are generated (linked to the session via reflects_on edges), and causal chains may graduate to skills. At next session start: the wakeup system synthesizes a first-person briefing from the handoff + identity + monologues + depth signals. Context is also predictively prefetched each turn based on likely follow-up queries — relevant memories may appear in your context without you requesting them.`,
     importance: 8,
   },
   {
@@ -70,7 +81,7 @@ const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
     importance: 8,
   },
   {
-    text: `Soul graduation: KongBrain tracks your maturity across 5 stages — nascent (0-3/7 thresholds), developing (4/7), emerging (5/7), maturing (6/7), ready (7/7). The 7 thresholds are: sessions, reflections, causal chains, concepts, monologues, span days, and total memories. Reaching 7/7 is necessary but not sufficient — you must also pass a quality gate (score >= 0.6) based on retrieval utilization, skill success rate, critical reflection rate, and tool failure rate. On graduation, you author a Soul document — a self-assessment grounded in your actual experience, not aspirational claims. Use introspect with action "status" to check your current stage and progress. The Soul document becomes part of your identity once written.`,
+    text: `Soul graduation: KongCode tracks your maturity across 5 stages — nascent (0-3/7 thresholds), developing (4/7), emerging (5/7), maturing (6/7), ready (7/7). The 7 thresholds are: sessions, reflections, causal chains, concepts, monologues, span days, and total memories. Reaching 7/7 is necessary but not sufficient — you must also pass a quality gate (score >= 0.6) based on retrieval utilization, skill success rate, critical reflection rate, and tool failure rate. On graduation, you author a Soul document — a self-assessment grounded in your actual experience, not aspirational claims. Use introspect with action "status" to check your current stage and progress. The Soul document becomes part of your identity once written.`,
     importance: 8,
   },
 ];
@@ -91,16 +102,34 @@ export async function seedCognitiveBootstrap(
   // ── Core memory Tier 0 (always loaded, no embeddings needed) ───────────
 
   try {
-    const rows = await store.queryFirst<{ cnt: number }>(
-      `SELECT count() AS cnt FROM core_memory WHERE text CONTAINS 'MEMORY REFLEX' GROUP ALL`,
+    // Version-tag check: look for an entry marked with the current
+    // BOOTSTRAP_VERSION. If absent, re-seed the core entries (clearing stale
+    // ones from prior versions first). This lets 0.4.0's new AUTO-SEAL
+    // CONTRACT entry land in grafts that bootstrapped under 0.3.x or earlier.
+    const versionRows = await store.queryFirst<{ cnt: number }>(
+      `SELECT count() AS cnt FROM core_memory WHERE text CONTAINS $tag GROUP ALL`,
+      { tag: `[kc_bootstrap_v${BOOTSTRAP_VERSION}]` },
     );
-    const hasBootstrap = (rows[0]?.cnt ?? 0) > 0;
+    const currentVersionSeeded = (versionRows[0]?.cnt ?? 0) > 0;
 
-    if (!hasBootstrap) {
+    if (!currentVersionSeeded) {
+      // Clear any prior-version bootstrap entries so the index stays tight.
+      // Matches on our version-tag prefix regardless of version number.
+      try {
+        await store.queryExec(
+          `DELETE core_memory WHERE text CONTAINS '[kc_bootstrap_v'`,
+        );
+      } catch (e) {
+        swallow.warn("bootstrap:clearPrior", e);
+      }
+
       for (const entry of CORE_ENTRIES) {
         try {
+          // Prefix entries with a version tag we can detect on next boot.
+          // Placed at the end so the operational text reads cleanly first.
+          const tagged = `${entry.text}\n[kc_bootstrap_v${BOOTSTRAP_VERSION}]`;
           await store.createCoreMemory(
-            entry.text,
+            tagged,
             entry.category,
             entry.priority,
             0, // Tier 0

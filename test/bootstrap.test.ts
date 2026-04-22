@@ -34,7 +34,8 @@ function mockStore(identityCount = 0, coreHasBootstrap = false) {
     isAvailable: () => true,
     queryFirst: vi.fn(async (sql: string) => {
       if (sql.includes("FROM identity_chunk") && sql.includes("count()")) return [{ count: identityCount }];
-      if (sql.includes("FROM core_memory") && sql.includes("MEMORY REFLEX")) return [{ cnt: coreHasBootstrap ? 1 : 0 }];
+      // 0.4.0+ uses a version-tag check instead of content-match on MEMORY REFLEX.
+      if (sql.includes("FROM core_memory") && sql.includes("kc_bootstrap_v")) return [{ cnt: coreHasBootstrap ? 1 : 0 }];
       return [];
     }),
     queryExec: vi.fn(async () => {}),
@@ -228,9 +229,9 @@ describe("seedCognitiveBootstrap", () => {
 
     const result = await seedCognitiveBootstrap(store, embeddings);
 
-    expect(result.coreSeeded).toBe(5); // 5 CORE_ENTRIES
+    expect(result.coreSeeded).toBe(6); // 6 CORE_ENTRIES (added AUTO-SEAL CONTRACT in 0.4.0)
     expect(result.identitySeeded).toBe(6); // 6 IDENTITY_CHUNKS in cognitive-bootstrap
-    expect(store.createCoreMemory).toHaveBeenCalledTimes(5);
+    expect(store.createCoreMemory).toHaveBeenCalledTimes(6);
   });
 
   it("skips core memory when already seeded", async () => {
@@ -258,7 +259,7 @@ describe("seedCognitiveBootstrap", () => {
 
     const result = await seedCognitiveBootstrap(store, embeddings);
 
-    expect(result.coreSeeded).toBe(5); // core memory doesn't need embeddings
+    expect(result.coreSeeded).toBe(6); // 6 core entries (doesn't need embeddings)
     expect(result.identitySeeded).toBe(0); // skipped
   });
 
