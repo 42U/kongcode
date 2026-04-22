@@ -17,6 +17,7 @@ import { buildSystemPrompt, buildTranscript, writeExtractionResults } from "../e
 import { createSoul, seedSoulAsCoreMemory, reviseSoul, getSoul, checkGraduation, getQualitySignals } from "../engine/soul.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
+import { commitKnowledge } from "../engine/commit.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -524,16 +525,21 @@ export async function handleCreateKnowledgeGems(
       if (embeddings.isAvailable()) {
         try { gemEmb = await embeddings.embed(gem.content); } catch { /* ok */ }
       }
-      const conceptId = await store.upsertConcept(
-        gem.content,
-        gemEmb,
-        `gem:${source}`,
-        {
+      // Route through commitKnowledge so the gem auto-seals into the graph
+      // (linkConceptHierarchy + linkToRelevantConcepts fire automatically).
+      // Previously this path wrote the concept row but left it unlinked —
+      // the root cause PR #1's merge-duplicate-concepts.mjs was cleaning up.
+      const { id: conceptId } = await commitKnowledge(state, {
+        kind: "concept",
+        name: gem.content,
+        source: `gem:${source}`,
+        provenance: {
           session_id: session.sessionId,
           source_kind: "gem",
           skill_name: "create_knowledge_gems",
         },
-      );
+        precomputedVec: gemEmb,
+      });
       if (!conceptId) {
         skipped++;
         continue;

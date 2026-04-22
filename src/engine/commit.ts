@@ -17,6 +17,7 @@
  */
 
 import type { GlobalPluginState } from "./state.js";
+import type { ConceptProvenance } from "./surreal.js";
 import {
   linkToRelevantConcepts,
   linkConceptHierarchy,
@@ -35,6 +36,8 @@ export interface CommitConceptData {
   edgeName?: string;
   /** Tag passed to upsertConcept as `source` — used in provenance. */
   source?: string;
+  /** Rich provenance (session_id, source_kind, skill_name). Preserved across migration. */
+  provenance?: ConceptProvenance;
   /** Run linkConceptHierarchy (broader/narrower) — default true. */
   linkHierarchy?: boolean;
   /** Run linkToRelevantConcepts against other concepts — default true. */
@@ -94,8 +97,8 @@ async function commitConcept(
     catch (e) { swallow(`${logTag}:embed`, e); }
   }
 
-  // 2. Upsert the concept row.
-  const conceptId = await store.upsertConcept(data.name, embedding, data.source);
+  // 2. Upsert the concept row (provenance passed through when supplied).
+  const conceptId = await store.upsertConcept(data.name, embedding, data.source, data.provenance);
   let edges = 0;
 
   // 3. Link source → concept via the requested edge, if caller provided one.
