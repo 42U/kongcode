@@ -10,6 +10,7 @@ import type { GlobalPluginState, SessionState } from "./engine/state.js";
 import type { AgentMessage, UserMessage, TextContent } from "./engine/types.js";
 import { graphTransformContext } from "./engine/graph-context.js";
 import { preflight } from "./engine/orchestrator.js";
+import { upsertAndLinkConcepts } from "./engine/concept-extract.js";
 import { swallow } from "./engine/errors.js";
 import { log } from "./engine/log.js";
 
@@ -188,6 +189,17 @@ export async function ingestTurn(
         await store.relate(turnId, "responds_to", session.lastUserTurnId)
           .catch(e => swallow("ingest:responds_to", e));
       }
+
+      // Auto-seal: extract concept names from the turn text and wire
+      // `mentions` edges (turn → concept). Previously this linking was
+      // only done by the dormant memory-daemon, so live-session turns
+      // left the concept graph unaware of what was being discussed.
+      // Bounded to 10 concepts/turn via upsertAndLinkConcepts's internal
+      // extractConceptNames cap — hot path, but cheap per call.
+      upsertAndLinkConcepts(
+        turnId, "mentions", text, store, embeddings, "ingest:turn",
+        { taskId: session.taskId, projectId: session.projectId },
+      ).catch(e => swallow("ingest:mentions", e));
     }
 
     if (role === "user") {
