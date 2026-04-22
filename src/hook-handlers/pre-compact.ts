@@ -102,5 +102,16 @@ export async function handlePreCompact(
 
   session._compactionSummary = parts.join("\n");
 
+  // Record the compaction in compaction_checkpoint for observability. The
+  // writer (store.createCompactionCheckpoint) existed since the port but
+  // was only called from ContextEngine.compact() which is dead code —
+  // a second regression alongside the signal-extraction gap fixed in
+  // 7d8fef5. rangeStart=0 because Claude Code doesn't give us the actual
+  // pre-compact turn range; rangeEnd is the current cumulative turn count.
+  if (store.isAvailable()) {
+    store.createCompactionCheckpoint(sessionId, 0, session.userTurnCount)
+      .catch(e => swallow.warn("preCompact:checkpoint", e));
+  }
+
   return {};
 }

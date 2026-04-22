@@ -542,6 +542,27 @@ export async function attemptGraduation(store: SurrealStore, userSoulNudge?: str
     await seedSoulAsCoreMemory(soul, store);
   }
 
+  // Record graduation event so next session-start's unacknowledged-events
+  // lookup surfaces the celebration. Table schema defined in schema.surql
+  // but had no writer in KongCode — port regression from KongBrain, fixed
+  // here. session-start.ts:69 already reads this.
+  try {
+    await store.queryExec(
+      `CREATE graduation_event CONTENT $data`,
+      {
+        data: {
+          session_id: "graduation",  // graduation is global, not per-session
+          acknowledged: false,
+          quality_score: report.qualityScore,
+          volume_score: report.volumeScore,
+          stage: report.stage,
+        },
+      },
+    );
+  } catch (e) {
+    swallow.warn("soul:recordGraduationEvent", e);
+  }
+
   return { graduated: true, soul, report };
 }
 
