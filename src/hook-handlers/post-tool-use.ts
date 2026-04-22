@@ -7,6 +7,7 @@
 import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
 import { swallow } from "../engine/errors.js";
+import { commitKnowledge } from "../engine/commit.js";
 
 export async function handlePostToolUse(
   state: GlobalPluginState,
@@ -32,11 +33,20 @@ export async function handlePostToolUse(
     const filePath = toolInput?.file_path as string | undefined;
     if (filePath) {
       try {
-        let embedding: number[] | null = null;
-        if (embeddings.isAvailable()) {
-          embedding = await embeddings.embed(filePath);
-        }
-        await store.createArtifact(filePath, "file", `${toolName}: ${filePath}`, embedding);
+        // Route through commitKnowledge so the file artifact auto-seals
+        // artifact_mentions edges to concepts. Previously this write was
+        // a bare createArtifact; the artifact landed without any edges
+        // to the concept graph, so "what concepts is this file about?"
+        // queries returned nothing.
+        await commitKnowledge(
+          { store, embeddings },
+          {
+            kind: "artifact",
+            path: filePath,
+            type: "file",
+            description: `${toolName}: ${filePath}`,
+          },
+        );
       } catch (e) {
         swallow("postToolUse:artifact", e);
       }

@@ -5,7 +5,7 @@
 import type { GlobalPluginState } from "../state.js";
 import { recordToolOutcome } from "../retrieval-quality.js";
 import { swallow } from "../errors.js";
-import { linkToRelevantConcepts } from "../concept-extract.js";
+import { commitKnowledge } from "../commit.js";
 
 export function createAfterToolCallHandler(state: GlobalPluginState) {
   return async (
@@ -110,14 +110,16 @@ async function trackArtifact(
 
   if (!description) return;
 
-  let emb: number[] | null = null;
-  if (state.embeddings.isAvailable()) {
-    try { emb = await state.embeddings.embed(description); } catch { /* ok */ }
-  }
-
   const ext = (args.path as string)?.split(".").pop() ?? "unknown";
-  const artifactId = await state.store.createArtifact(
-    (args.path as string) ?? "shell", ext, description, emb,
+  // Route through commitKnowledge — auto-seals artifact_mentions edges.
+  const { id: artifactId } = await commitKnowledge(
+    { store: state.store, embeddings: state.embeddings },
+    {
+      kind: "artifact",
+      path: (args.path as string) ?? "shell",
+      type: ext,
+      description,
+    },
   );
   if (artifactId) {
     if (taskId) {
@@ -129,11 +131,5 @@ async function trackArtifact(
       await state.store.relate(artifactId, "used_in", projectId)
         .catch(e => swallow.warn("artifact:used_in", e));
     }
-    // Link artifact to concepts it mentions (embedding-based similarity)
-    await linkToRelevantConcepts(
-      artifactId, "artifact_mentions", description,
-      state.store, state.embeddings, "artifact:concepts",
-      5, 0.65, emb,
-    );
   }
 }

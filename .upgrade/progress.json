@@ -1,0 +1,98 @@
+{
+  "run_started": "2026-04-22",
+  "goal": "KongCode 0.4.0 — substrate-does-the-work. Every write auto-seals. Every substrate ships wired. Better than a brain.",
+  "feedback_loop_gates": [
+    "typecheck_clean",
+    "all_tests_pass",
+    "build_clean",
+    "no_regression_on_prior_tests",
+    "commit_message_matches_actual_result",
+    "multi_mcp_safe",
+    "behavior_verifiable_post_deploy"
+  ],
+  "stages": {
+    "A_commit_scaffold": {
+      "status": "done",
+      "commits": ["ae5695a"],
+      "notes": "commitKnowledge(deps, data) with concept kind + tests"
+    },
+    "B_write_path_migrations": {
+      "status": "in_progress",
+      "items": [
+        {"id": "B1", "title": "gem writer (pending-work.ts:527)", "status": "done", "commits": ["a536098", "0081c36"]},
+        {"id": "B2", "title": "causal.ts createMemory (3 sites)", "status": "done", "commits": ["782cf0d"]},
+        {"id": "B3", "title": "context-assembler.ts:ingestTurn", "status": "pending_audit", "notes": "verify if it already links before migrating"},
+        {"id": "B4", "title": "hook-handlers/subagent.ts skill creation", "status": "pending_audit"},
+        {"id": "B5", "title": "workspace-migrate.ts:614 createMemory", "status": "pending"},
+        {"id": "B6", "title": "post-tool-use.ts createArtifact", "status": "pending_audit"},
+        {"id": "B7", "title": "after-tool-call.ts createArtifact", "status": "pending_audit", "notes": "confirmed already calls linkToRelevantConcepts — may be no-op migration"},
+        {"id": "B8", "title": "pending-work.ts:507 createArtifact (gem source)", "status": "pending_audit"},
+        {"id": "B9", "title": "Add artifact kind to commitKnowledge", "status": "pending", "depends_on": "B6-B8"},
+        {"id": "B10", "title": "Add skill kind to commitKnowledge", "status": "pending", "depends_on": "B4"},
+        {"id": "B11", "title": "Add correction kind (fires linkSupersedesEdges)", "status": "pending"},
+        {"id": "B12", "title": "grep-test: no direct upsertConcept/createMemory/createArtifact outside commit.ts + helpers + dormant daemon", "status": "pending_gate"}
+      ]
+    },
+    "C_time_relative_maintenance": {
+      "status": "pending",
+      "items": [
+        {"id": "C1", "title": "Add maintenance_runs table to schema.surql", "status": "pending"},
+        {"id": "C2", "title": "Track last-run timestamps in SurrealStore maintenance methods", "status": "pending"},
+        {"id": "C3", "title": "Swap count-floor gates for time-since-last gates", "status": "pending"}
+      ]
+    },
+    "D_six_built_in_tools": {
+      "status": "pending",
+      "items": [
+        {"id": "D1", "title": "record_finding MCP tool", "status": "pending"},
+        {"id": "D2", "title": "link_hierarchy MCP tool", "status": "pending"},
+        {"id": "D3", "title": "supersede MCP tool", "status": "pending"},
+        {"id": "D4", "title": "cluster_scan MCP tool", "status": "pending"},
+        {"id": "D5", "title": "memory_health MCP tool", "status": "pending"},
+        {"id": "D6", "title": "what_is_missing MCP tool", "status": "pending"}
+      ]
+    },
+    "E_observability": {
+      "status": "pending",
+      "items": [
+        {"id": "E1", "title": "orchestrator_metrics writes at session-end", "status": "pending"},
+        {"id": "E2", "title": "introspect trends action", "status": "pending"},
+        {"id": "E3", "title": "UserPromptSubmit health-warning injection (YELLOW/RED only)", "status": "pending"}
+      ]
+    },
+    "F_bootstrap_refresh": {
+      "status": "pending",
+      "items": [
+        {"id": "F1", "title": "KongBrain → KongCode rename in cognitive-bootstrap.ts", "status": "pending"},
+        {"id": "F2", "title": "Add core entry teaching the 6 new tools", "status": "pending", "depends_on": "D1-D6"},
+        {"id": "F3", "title": "Add identity chunk about auto-seal contract", "status": "pending"},
+        {"id": "F4", "title": "Version-tag bootstrap so future migrations can re-seed", "status": "pending"}
+      ]
+    },
+    "G_zero_row_audit": {
+      "status": "pending_investigation",
+      "items": [
+        {"id": "G1", "title": "Investigate why soul/graduation_event/maturity_stage are all 0 (user hinted gated together)", "status": "pending"},
+        {"id": "G2", "title": "Investigate orchestrator_metrics (may be wired in E1)", "status": "pending"},
+        {"id": "G3", "title": "Investigate subagent table", "status": "pending"},
+        {"id": "G4", "title": "Investigate compaction_checkpoint table", "status": "pending"},
+        {"id": "G5", "title": "File audit report + remediation plan", "status": "pending"}
+      ],
+      "policy": "audit only — do not modify wiring without explicit approval per user: 'nothing should be dead code'"
+    },
+    "H_write_time_dedup": {
+      "status": "pending",
+      "items": [
+        {"id": "H1", "title": "In commitConcept: vector search for cosine >=0.93 before insert", "status": "pending"},
+        {"id": "H2", "title": "Feature flag it default-off; enable after observation", "status": "pending"}
+      ]
+    }
+  },
+  "flags_for_review": [],
+  "deferred_to_user": [],
+  "notes": {
+    "verification_policy": "Every commit runs typecheck + full test suite + build BEFORE push. No shortcut commits that claim green when they're not.",
+    "rollback_strategy": "Each commit is atomic and independent. Feature flags on risky behavior (write-time dedup). No long-lived branches.",
+    "multi_mcp_safety": "All new writes must be idempotent or lockfile-protected. No assumptions about being the only writer."
+  }
+}

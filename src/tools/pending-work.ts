@@ -499,16 +499,16 @@ export async function handleCreateKnowledgeGems(
   if (gems.length === 0) return text("Error: at least one gem is required");
 
   try {
-    // 1. Create artifact for the source document
-    let sourceEmb: number[] | null = null;
-    if (embeddings.isAvailable()) {
-      try { sourceEmb = await embeddings.embed(`${source}: ${sourceDescription}`); } catch { /* ok */ }
-    }
-    const artifactId = await store.createArtifact(
-      source,
-      sourceType,
-      sourceDescription || source,
-      sourceEmb,
+    // 1. Create artifact for the source document via commitKnowledge so the
+    //    artifact auto-seals artifact_mentions edges to the concept graph.
+    const { id: artifactId } = await commitKnowledge(
+      { store, embeddings },
+      {
+        kind: "artifact",
+        path: source,
+        type: sourceType,
+        description: sourceDescription || source,
+      },
     );
 
     // 2. Create each gem as a concept, build name -> id map

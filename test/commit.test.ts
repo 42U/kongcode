@@ -16,6 +16,7 @@ function mockState(): GlobalPluginState {
     isAvailable: () => true,
     upsertConcept: vi.fn(async () => "concept:c1"),
     createMemory: vi.fn(async () => "memory:m1"),
+    createArtifact: vi.fn(async () => "artifact:a1"),
     relate: vi.fn(async () => {}),
     queryFirst: vi.fn(async () => []),
   };
@@ -162,5 +163,46 @@ describe("commitKnowledge — memory kind", () => {
     expect(state.store.createMemory).toHaveBeenCalledWith(
       "precomputed case", vec, 5, "test", undefined,
     );
+  });
+});
+
+describe("commitKnowledge — artifact kind", () => {
+  it("creates the artifact and returns an id", async () => {
+    const state = mockState();
+    const result = await commitKnowledge(state, {
+      kind: "artifact",
+      path: "/src/auth/login.ts",
+      type: "file",
+      description: "Edit: refactored to use jwt lib",
+    });
+    expect(result.id).toBe("artifact:a1");
+    expect(state.store.createArtifact).toHaveBeenCalledWith(
+      "/src/auth/login.ts",
+      "file",
+      "Edit: refactored to use jwt lib",
+      expect.any(Array),
+    );
+  });
+
+  it("fires artifact_mentions linking by default", async () => {
+    const state = mockState();
+    const result = await commitKnowledge(state, {
+      kind: "artifact",
+      path: "/foo/bar.ts",
+      type: "file",
+      description: "Edit",
+    });
+    expect(result.edges).toBeGreaterThan(0);
+    expect(state.store.queryFirst).toHaveBeenCalled();
+  });
+
+  it("skips artifact_mentions when linkConcepts: false", async () => {
+    const state = mockState();
+    await commitKnowledge(state, {
+      kind: "artifact",
+      path: "/x", type: "file", description: "d",
+      linkConcepts: false,
+    });
+    expect(state.store.queryFirst).not.toHaveBeenCalled();
   });
 });

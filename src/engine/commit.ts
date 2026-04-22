@@ -73,15 +73,28 @@ export interface CommitMemoryData {
   precomputedVec?: number[] | null;
 }
 
+export interface CommitArtifactData {
+  kind: "artifact";
+  /** Path or identifier of the artifact (file path, URL, etc). */
+  path: string;
+  /** Kind tag — e.g. "file", "created", "modified", "read", "discussed". */
+  type: string;
+  /** Short description — used as the embedding target. */
+  description: string;
+  /** Run linkToRelevantConcepts via `artifact_mentions` edge — default true. */
+  linkConcepts?: boolean;
+  /** Precomputed embedding vector. Skip embed() if provided. */
+  precomputedVec?: number[] | null;
+}
+
 // Future kinds will extend this union:
-// | CommitArtifactData
 // | CommitSkillData
 // | CommitReflectionData
 // | CommitMonologueData
 // | CommitCorrectionData
 // | CommitPreferenceData
 // | CommitDecisionData
-export type CommitData = CommitConceptData | CommitMemoryData;
+export type CommitData = CommitConceptData | CommitMemoryData | CommitArtifactData;
 
 export interface CommitResult {
   /** The record ID written (e.g. "concept:abc123"). */
@@ -101,6 +114,8 @@ export async function commitKnowledge(
       return commitConcept(deps, data);
     case "memory":
       return commitMemory(deps, data);
+    case "artifact":
+      return commitArtifact(deps, data);
     default: {
       // Exhaustiveness check — new kinds must add a case here.
       const _exhaustive: never = data;
@@ -217,4 +232,49 @@ async function commitMemory(
   }
 
   return { id: memoryId, edges };
+}
+
+async function commitArtifact(
+  deps: CommitDeps,
+  data: CommitArtifactData,
+): Promise<CommitResult> {
+  const { store, embeddings } = deps;
+  const logTag = `commit:artifact:${data.type}`;
+
+  // Embed the description (richer than the path alone for similarity).
+  let embedding: number[] | null = data.precomputedVec ?? null;
+  if (!embedding && embeddings.isAvailable()) {
+    try { embedding = await embeddings.embed(`${data.path} ${data.description}`); }
+    catch (e) { swallow(`${logTag}:embed`, e); }
+  }
+
+  // Insert the artifact row.
+  const artifactId = await store.createArtifact(
+    data.path,
+    data.type,
+    data.description,
+    embedding,
+  );
+  let edges = 0;
+
+  // Auto-seal: artifact → concepts (artifact_mentions) by similarity.
+  // Previously only the dormant memory-daemon did this for artifact writes;
+  // hot-path artifact creation from post-tool-use.ts left artifacts
+  // disconnected from the concept graph.
+  if (artifactId && data.linkConcepts !== false && embedding && embedding.length > 0) {
+    const before = edges;
+    try {
+      await linkToRelevantConcepts(
+        artifactId, "artifact_mentions", `${data.path} ${data.description}`,
+        store, embeddings, logTag,
+        5, 0.65, embedding,
+      );
+      edges += 1;
+    } catch (e) {
+      swallow(`${logTag}:artifact_mentions`, e);
+      edges = before;
+    }
+  }
+
+  return { id: artifactId, edges };
 }

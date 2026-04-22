@@ -27,6 +27,7 @@ import { join, basename, extname, relative, dirname, sep } from "node:path";
 import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import { swallow } from "./errors.js";
+import { commitKnowledge } from "./commit.js";
 
 // ── Allowlists ───────────────────────────────────────────────────────────────
 // Only files and directories OpenClaw's default engine creates.
@@ -607,11 +608,17 @@ async function ingestAsMemories(
   let created = 0;
   for (const chunk of chunks.slice(0, 20)) {
     try {
-      let embedding: number[] | null = null;
-      if (embeddings.isAvailable()) {
-        try { embedding = await embeddings.embed(chunk); } catch { /* ok */ }
-      }
-      await store.createMemory(chunk, embedding, 50, category);
+      // Route through commitKnowledge so workspace-migration memories
+      // auto-seal about_concept edges like any other memory write.
+      await commitKnowledge(
+        { store, embeddings },
+        {
+          kind: "memory",
+          text: chunk,
+          importance: 50,
+          category,
+        },
+      );
       created++;
     } catch (e) {
       swallow("migrate:createMemory", e);
