@@ -368,11 +368,15 @@ export class SurrealStore {
       artifact: limits.artifact ?? 10,
       monologue: limits.monologue ?? 8,
     };
-    const sessionTurnLim = Math.ceil(lim.turn / 2);
-    const crossTurnLim = lim.turn - sessionTurnLim;
+    // Split the turn budget: 50% current session, 30% cross-session live,
+    // 20% cross-session archived. Archive fraction is intentionally small —
+    // archived turns are older/colder, so they back-stop rather than dominate.
+    const sessionTurnLim = Math.ceil(lim.turn * 0.5);
+    const crossTurnLim = Math.ceil(lim.turn * 0.3);
+    const archiveTurnLim = Math.max(1, lim.turn - sessionTurnLim - crossTurnLim);
     const emb = withEmbeddings ? ", embedding" : "";
 
-    // Batch all 7 vector searches into a single round-trip (limits inlined — per-table)
+    // Batch all 8 vector searches into a single round-trip (limits inlined — per-table)
     const stmts = [
       `SELECT id, text, role, timestamp, 0 AS accessCount, 'turn' AS table,
               vector::similarity::cosine(embedding, $vec) AS score${emb}
@@ -382,6 +386,14 @@ export class SurrealStore {
               vector::similarity::cosine(embedding, $vec) AS score${emb}
        FROM turn WHERE embedding != NONE AND array::len(embedding) > 0
          AND session_id != $sid ORDER BY score DESC LIMIT ${crossTurnLim}`,
+      // Archived turns: surfaced at a smaller budget so old content stays
+      // reachable after archiveOldTurns drains the live turn table. Without
+      // this, mass archival would silently make historical conversation
+      // content un-recallable via turn-scope queries.
+      `SELECT id, text, role, timestamp, 0 AS accessCount, 'turn' AS table,
+              vector::similarity::cosine(embedding, $vec) AS score${emb}
+       FROM turn_archive WHERE embedding != NONE AND array::len(embedding) > 0
+       ORDER BY score DESC LIMIT ${archiveTurnLim}`,
       `SELECT id, content AS text, stability AS importance, access_count AS accessCount,
               created_at AS timestamp, 'concept' AS table,
               vector::similarity::cosine(embedding, $vec) AS score${emb}
@@ -416,11 +428,14 @@ export class SurrealStore {
       swallow.warn("surreal:vectorSearch:batch", e);
       return [];
     }
-    const [sessionTurns = [], crossTurns = [], concepts = [], memories = [], artifacts = [], monologues = [], identityChunks = []] =
-      batchResults as VectorSearchResult[][];
+    const [
+      sessionTurns = [], crossTurns = [], archiveTurns = [],
+      concepts = [], memories = [], artifacts = [], monologues = [], identityChunks = [],
+    ] = batchResults as VectorSearchResult[][];
     return [
       ...sessionTurns,
       ...crossTurns,
+      ...archiveTurns,
       ...concepts,
       ...memories,
       ...artifacts,
