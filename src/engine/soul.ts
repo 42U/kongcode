@@ -433,6 +433,13 @@ export async function createSoul(
 ): Promise<boolean> {
   if (!store.isAvailable()) return false;
   try {
+    // Do NOT pass created_at / updated_at as ISO strings — schema is
+    // SCHEMAFULL with both fields typed `datetime DEFAULT time::now()`
+    // and SurrealDB refuses to coerce string bindings. The `revisions`
+    // inner-object timestamp stays as a string because revisions is
+    // `array<object>` (unconstrained inner types), not a datetime field.
+    // This coercion bug was the real reason soul: 0 persisted even after
+    // the graduation gate cleared historically (Apr 12 log evidence).
     const now = new Date().toISOString();
     await store.queryExec(`CREATE soul:kongbrain CONTENT $data`, {
       data: {
@@ -444,8 +451,6 @@ export async function createSoul(
           change: "Initial soul document created at graduation",
           rationale: "Agent accumulated sufficient experiential data and demonstrated quality performance to meaningfully self-observe",
         }],
-        created_at: now,
-        updated_at: now,
       },
     });
     return true;
