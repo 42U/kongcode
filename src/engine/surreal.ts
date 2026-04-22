@@ -1155,7 +1155,60 @@ export class SurrealStore {
 
   // ── Maintenance operations ─────────────────────────────────────────────
 
+  /**
+   * Time-relative scheduling gate for maintenance jobs. Returns true when
+   * either (a) no prior run is recorded, (b) the last run is older than
+   * maxDaysSince, or (c) the row count exceeds the absolute floor.
+   *
+   * Without this gate, absolute-count floors (count<=200/2000/50) meant
+   * brand-new installs got zero maintenance for weeks or months until the
+   * graph organically grew large enough to cross the floor. Now a fresh
+   * install runs each job once in the first session (baselining), then
+   * weekly, plus any time volume crosses the legacy floor.
+   */
+  private async shouldRunMaintenance(
+    job: string,
+    countFloor: number,
+    maxDaysSince: number,
+    currentCount: number,
+  ): Promise<boolean> {
+    try {
+      const rows = await this.queryFirst<{ ran_at: string }>(
+        `SELECT ran_at FROM maintenance_runs WHERE job = $job ORDER BY ran_at DESC LIMIT 1`,
+        { job },
+      );
+      if (rows.length === 0) return true; // baseline
+      const lastRanAt = Date.parse(rows[0].ran_at);
+      const ageDays = (Date.now() - lastRanAt) / (1000 * 60 * 60 * 24);
+      if (ageDays >= maxDaysSince) return true;
+      return currentCount > countFloor;
+    } catch (e) {
+      // On query failure, fall back to absolute-count behavior so we're
+      // never worse than the pre-0.4.0 gate.
+      swallow("surreal:shouldRunMaintenance", e);
+      return currentCount > countFloor;
+    }
+  }
+
+  private async recordMaintenanceRun(
+    job: string,
+    rowsAffected: number,
+    durationMs: number,
+  ): Promise<void> {
+    try {
+      await this.queryExec(
+        `CREATE maintenance_runs CONTENT $data`,
+        { data: { job, rows_affected: rowsAffected, duration_ms: durationMs } },
+      );
+    } catch (e) {
+      swallow("surreal:recordMaintenanceRun", e);
+    }
+  }
+
   async runMemoryMaintenance(): Promise<void> {
+    // runMemoryMaintenance is cheap (two UPDATEs) so the floor is 0 — always
+    // run, but still record the execution so observability is consistent.
+    const started = Date.now();
     try {
       // Single round-trip to reduce transaction conflict window
       await this.queryExec(`
@@ -1164,6 +1217,7 @@ export class SurrealStore {
           SELECT VALUE avg_utilization FROM memory_utility_cache WHERE memory_id = string::concat(meta::tb(id), ":", meta::id(id)) LIMIT 1
         )[0] ?? 0) * 4]) WHERE importance < 7;
       `);
+      await this.recordMaintenanceRun("runMemoryMaintenance", 0, Date.now() - started);
     } catch (e) {
       // Transaction conflicts expected when daemon writes concurrently — silent
       swallow("surreal:runMemoryMaintenance", e);
@@ -1171,12 +1225,14 @@ export class SurrealStore {
   }
 
   async garbageCollectMemories(): Promise<number> {
+    const started = Date.now();
     try {
       const countRows = await this.queryFirst<{ count: number }>(
         `SELECT count() AS count FROM memory GROUP ALL`,
       );
       const count = countRows[0]?.count ?? 0;
-      if (count <= 200) return 0;
+      // Floor lowered to 50 and scheduled weekly so new installs benefit.
+      if (!(await this.shouldRunMaintenance("garbageCollectMemories", 50, 7, count))) return 0;
 
       const pruned = await this.db.query(
         `LET $stale = (
@@ -1196,7 +1252,9 @@ export class SurrealStore {
         FOR $m IN $stale { DELETE $m.id; };
         RETURN array::len($stale);`,
       );
-      return Number(pruned ?? 0);
+      const n = Number(pruned ?? 0);
+      await this.recordMaintenanceRun("garbageCollectMemories", n, Date.now() - started);
+      return n;
     } catch (e) {
       swallow.warn("surreal:garbageCollectMemories", e);
       return 0;
@@ -1204,12 +1262,15 @@ export class SurrealStore {
   }
 
   async archiveOldTurns(): Promise<number> {
+    const started = Date.now();
     try {
       const countRows = await this.queryFirst<{ count: number }>(
         `SELECT count() AS count FROM turn GROUP ALL`,
       );
       const count = countRows[0]?.count ?? 0;
-      if (count <= 2000) return 0;
+      // Floor lowered to 500 and scheduled weekly — new installs archive
+      // after week 1 regardless of volume.
+      if (!(await this.shouldRunMaintenance("archiveOldTurns", 500, 7, count))) return 0;
 
       const archived = await this.queryMulti<number>(
         `LET $stale = (SELECT id FROM turn WHERE timestamp < time::now() - 7d AND id NOT IN (SELECT VALUE memory_id FROM retrieval_outcome WHERE memory_table = 'turn'));
@@ -1219,7 +1280,9 @@ export class SurrealStore {
          };
          RETURN array::len($stale);`,
       );
-      return Number(archived ?? 0);
+      const n = Number(archived ?? 0);
+      await this.recordMaintenanceRun("archiveOldTurns", n, Date.now() - started);
+      return n;
     } catch (e) {
       swallow.warn("surreal:archiveOldTurns", e);
       return 0;
@@ -1227,12 +1290,15 @@ export class SurrealStore {
   }
 
   async consolidateMemories(embedFn: (text: string) => Promise<number[]>): Promise<number> {
+    const started = Date.now();
     try {
       const countRows = await this.queryFirst<{ count: number }>(
         `SELECT count() AS count FROM memory GROUP ALL`,
       );
       const count = countRows[0]?.count ?? 0;
-      if (count <= 50) return 0;
+      // Floor lowered to 10 and scheduled weekly — consolidation runs even
+      // on small graphs to keep near-duplicates from compounding.
+      if (!(await this.shouldRunMaintenance("consolidateMemories", 10, 7, count))) return 0;
 
       let merged = 0;
       const seen = new Set<string>();
@@ -1357,6 +1423,7 @@ export class SurrealStore {
         }
       }
 
+      await this.recordMaintenanceRun("consolidateMemories", merged, Date.now() - started);
       return merged;
     } catch (e) {
       swallow.warn("surreal:consolidateMemories", e);

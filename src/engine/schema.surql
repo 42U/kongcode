@@ -119,6 +119,18 @@ DEFINE FIELD IF NOT EXISTS resolved_by ON memory TYPE option<string>;
 DEFINE INDEX IF NOT EXISTS memory_vec_idx ON memory FIELDS embedding HNSW DIMENSION 1024 DIST COSINE;
 DEFINE INDEX IF NOT EXISTS memory_category_idx ON memory FIELDS category;
 
+-- Maintenance runs — observability for the 4 bootstrap maintenance jobs.
+-- One row per (job, run). Used by time-relative threshold gates so new
+-- installs get maintenance from session 1 instead of waiting for absolute
+-- count floors (count<=2000, count<=200, count<=50) that never fire until
+-- weeks in.
+DEFINE TABLE IF NOT EXISTS maintenance_runs SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS job ON maintenance_runs TYPE string;
+DEFINE FIELD IF NOT EXISTS ran_at ON maintenance_runs TYPE datetime DEFAULT time::now();
+DEFINE FIELD IF NOT EXISTS rows_affected ON maintenance_runs TYPE int DEFAULT 0;
+DEFINE FIELD IF NOT EXISTS duration_ms ON maintenance_runs TYPE int DEFAULT 0;
+DEFINE INDEX IF NOT EXISTS maintenance_runs_job_idx ON maintenance_runs FIELDS job;
+
 -- ============================================================
 -- GRAPH EDGES: Turn-level
 -- ============================================================
