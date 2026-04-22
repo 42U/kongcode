@@ -16,13 +16,24 @@
  * migrated off their bespoke paths.
  */
 
-import type { GlobalPluginState } from "./state.js";
-import type { ConceptProvenance } from "./surreal.js";
+import type { SurrealStore, ConceptProvenance } from "./surreal.js";
+import type { EmbeddingService } from "./embeddings.js";
 import {
   linkToRelevantConcepts,
   linkConceptHierarchy,
 } from "./concept-extract.js";
 import { swallow } from "./errors.js";
+
+/**
+ * Minimal dependency shape commitKnowledge needs. GlobalPluginState satisfies
+ * this structurally, but leaf modules (causal.ts, workspace-migrate.ts, etc.)
+ * that only receive raw {store, embeddings} can call us without plumbing a
+ * full state through.
+ */
+export interface CommitDeps {
+  store: SurrealStore;
+  embeddings: EmbeddingService;
+}
 
 // ── Payload shapes (discriminated union) ──────────────────────────────────
 
@@ -46,8 +57,23 @@ export interface CommitConceptData {
   precomputedVec?: number[] | null;
 }
 
+export interface CommitMemoryData {
+  kind: "memory";
+  /** The memory text (also used as the embedding target). */
+  text: string;
+  /** Graph importance (1-10). */
+  importance: number;
+  /** Category label (e.g. "correction", "preference", "decision", "causal_trigger_debug"). */
+  category: string;
+  /** Session owning this memory. */
+  sessionId?: string;
+  /** Run linkToRelevantConcepts via `about_concept` edge — default true. */
+  linkConcepts?: boolean;
+  /** Precomputed embedding vector. Skip embed() if provided. */
+  precomputedVec?: number[] | null;
+}
+
 // Future kinds will extend this union:
-// | CommitMemoryData
 // | CommitArtifactData
 // | CommitSkillData
 // | CommitReflectionData
@@ -55,7 +81,7 @@ export interface CommitConceptData {
 // | CommitCorrectionData
 // | CommitPreferenceData
 // | CommitDecisionData
-export type CommitData = CommitConceptData;
+export type CommitData = CommitConceptData | CommitMemoryData;
 
 export interface CommitResult {
   /** The record ID written (e.g. "concept:abc123"). */
@@ -67,16 +93,18 @@ export interface CommitResult {
 // ── Entry point ───────────────────────────────────────────────────────────
 
 export async function commitKnowledge(
-  state: GlobalPluginState,
+  deps: CommitDeps,
   data: CommitData,
 ): Promise<CommitResult> {
   switch (data.kind) {
     case "concept":
-      return commitConcept(state, data);
+      return commitConcept(deps, data);
+    case "memory":
+      return commitMemory(deps, data);
     default: {
       // Exhaustiveness check — new kinds must add a case here.
-      const _exhaustive: never = data.kind;
-      throw new Error(`commitKnowledge: unsupported kind ${String(_exhaustive)}`);
+      const _exhaustive: never = data;
+      throw new Error(`commitKnowledge: unsupported kind ${String((_exhaustive as { kind: string }).kind)}`);
     }
   }
 }
@@ -84,10 +112,10 @@ export async function commitKnowledge(
 // ── Per-kind implementations ──────────────────────────────────────────────
 
 async function commitConcept(
-  state: GlobalPluginState,
+  deps: CommitDeps,
   data: CommitConceptData,
 ): Promise<CommitResult> {
-  const { store, embeddings } = state;
+  const { store, embeddings } = deps;
   const logTag = `commit:concept:${data.source ?? "anon"}`;
 
   // 1. Embed the name (or reuse caller's vec).
@@ -142,4 +170,51 @@ async function commitConcept(
   }
 
   return { id: conceptId, edges };
+}
+
+async function commitMemory(
+  deps: CommitDeps,
+  data: CommitMemoryData,
+): Promise<CommitResult> {
+  const { store, embeddings } = deps;
+  const logTag = `commit:memory:${data.category}`;
+
+  // 1. Embed the text (or reuse caller's vec).
+  let embedding: number[] | null = data.precomputedVec ?? null;
+  if (!embedding && embeddings.isAvailable()) {
+    try { embedding = await embeddings.embed(data.text); }
+    catch (e) { swallow(`${logTag}:embed`, e); }
+  }
+
+  // 2. Insert the memory row. createMemory signature is
+  //    (text, embedding, importance, category, sessionId?).
+  const memoryId = await store.createMemory(
+    data.text,
+    embedding,
+    data.importance,
+    data.category,
+    data.sessionId,
+  );
+  let edges = 0;
+
+  // 3. Auto-seal: memory → concepts (about_concept) by semantic similarity.
+  //    Previously this linking was only done inside the dormant memory-daemon;
+  //    hot paths like causal.ts created memory nodes that never got
+  //    concept edges, leaving them as islands in the graph.
+  if (memoryId && data.linkConcepts !== false && embedding && embedding.length > 0) {
+    const before = edges;
+    try {
+      await linkToRelevantConcepts(
+        memoryId, "about_concept", data.text,
+        store, embeddings, logTag,
+        5, 0.65, embedding,
+      );
+      edges += 1;
+    } catch (e) {
+      swallow(`${logTag}:about_concept`, e);
+      edges = before;
+    }
+  }
+
+  return { id: memoryId, edges };
 }

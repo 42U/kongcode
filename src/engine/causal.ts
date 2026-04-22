@@ -13,6 +13,7 @@ import type { EmbeddingService } from "./embeddings.js";
 import type { SurrealStore, VectorSearchResult } from "./surreal.js";
 import { swallow } from "./errors.js";
 import { assertRecordId } from "./surreal.js";
+import { commitKnowledge } from "./commit.js";
 
 // --- Types ---
 
@@ -39,22 +40,31 @@ export async function linkCausalEdges(
 
   for (const chain of chains) {
     try {
-      // Create trigger memory
-      let triggerEmb: number[] | null = null;
-      if (embeddings.isAvailable()) {
-        try { triggerEmb = await embeddings.embed(chain.triggerText); } catch (e) { swallow("causal:ok", e); }
-      }
-      const triggerId = await store.createMemory(
-        chain.triggerText, triggerEmb, 5, `causal_trigger_${chain.chainType}`, sessionId,
+      // Create trigger + outcome memories via commitKnowledge so each one
+      // auto-seals about_concept edges. Previously these memories landed as
+      // island nodes — connected to each other via causal edges but never
+      // wired to the concept graph, so recalling "debug" or "timeout" never
+      // surfaced the causal chain.
+      const { id: triggerId } = await commitKnowledge(
+        { store, embeddings },
+        {
+          kind: "memory",
+          text: chain.triggerText,
+          importance: 5,
+          category: `causal_trigger_${chain.chainType}`,
+          sessionId,
+        },
       );
 
-      // Create outcome memory
-      let outcomeEmb: number[] | null = null;
-      if (embeddings.isAvailable()) {
-        try { outcomeEmb = await embeddings.embed(chain.outcomeText); } catch (e) { swallow("causal:ok", e); }
-      }
-      const outcomeId = await store.createMemory(
-        chain.outcomeText, outcomeEmb, 6, `causal_outcome_${chain.chainType}`, sessionId,
+      const { id: outcomeId } = await commitKnowledge(
+        { store, embeddings },
+        {
+          kind: "memory",
+          text: chain.outcomeText,
+          importance: 6,
+          category: `causal_outcome_${chain.chainType}`,
+          sessionId,
+        },
       );
 
       if (!triggerId || !outcomeId) continue;
@@ -71,13 +81,17 @@ export async function linkCausalEdges(
       let descriptionId: string | null = null;
       if (chain.description && chain.description.length > 10) {
         const descText = `[${chain.chainType}${chain.success ? "" : " FAILED"}] ${chain.description}`;
-        let descEmb: number[] | null = null;
-        if (embeddings.isAvailable()) {
-          try { descEmb = await embeddings.embed(descText); } catch (e) { swallow("causal:ok", e); }
-        }
-        descriptionId = await store.createMemory(
-          descText, descEmb, 5, `causal_description_${chain.chainType}`, sessionId,
+        const descResult = await commitKnowledge(
+          { store, embeddings },
+          {
+            kind: "memory",
+            text: descText,
+            importance: 5,
+            category: `causal_description_${chain.chainType}`,
+            sessionId,
+          },
         );
+        descriptionId = descResult.id;
         if (descriptionId) {
           await store.relate(descriptionId, "describes", triggerId).catch(e => swallow.warn("causal:relateDescTrigger", e));
           await store.relate(descriptionId, "describes", outcomeId).catch(e => swallow.warn("causal:relateDescOutcome", e));
