@@ -470,15 +470,19 @@ export async function reviseSoul(
   const ALLOWED_SECTIONS = new Set(["working_style", "emotional_dimensions", "self_observations", "earned_values"]);
   if (!ALLOWED_SECTIONS.has(section)) return false;
   try {
+    // Use SurrealDB's time::now() inline for updated_at — passing an ISO
+    // string via binding triggers the datetime coercion error that was
+    // silently killing maturity_stage and createSoul writes. The revisions
+    // inner-object timestamp stays as a string (array<object>, untyped
+    // inner fields).
     const now = new Date().toISOString();
     await store.queryExec(
       `UPDATE soul:kongbrain SET
         ${section} = $newValue,
-        updated_at = $now,
+        updated_at = time::now(),
         revisions += $revision`,
       {
         newValue,
-        now,
         revision: {
           timestamp: now,
           section,
