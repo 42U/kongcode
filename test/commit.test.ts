@@ -38,6 +38,7 @@ describe("commitKnowledge — concept kind", () => {
       "rate limiting",
       expect.any(Array),
       "test",
+      undefined,
     );
   });
 
@@ -83,7 +84,7 @@ describe("commitKnowledge — concept kind", () => {
       precomputedVec: vec,
     });
     expect(state.embeddings.embed).not.toHaveBeenCalled();
-    expect(state.store.upsertConcept).toHaveBeenCalledWith("with-vec", vec, "test");
+    expect(state.store.upsertConcept).toHaveBeenCalledWith("with-vec", vec, "test", undefined);
   });
 
   it("still commits the concept row even when linking fails", async () => {
