@@ -41,6 +41,7 @@ import { handleLinkHierarchy } from "./tools/link-hierarchy.js";
 import { handleSupersede } from "./tools/supersede.js";
 import { handleRecordFinding } from "./tools/record-finding.js";
 import { handleClusterScan } from "./tools/cluster-scan.js";
+import { handleWhatIsMissing } from "./tools/what-is-missing.js";
 import { log } from "./engine/log.js";
 import { runBootstrapMaintenance } from "./engine/maintenance.js";
 
@@ -234,6 +235,19 @@ const TOOLS = [
     },
   },
   {
+    name: "what_is_missing",
+    description: "Proactive gap detection. Given the current context, seeds concepts via similarity, then surfaces graph-neighbor concepts (broader/narrower/related_to) NOT in the similarity top-N. Answers 'what might I be forgetting?' — the prospective counterpart to recall's reactive shape.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        context: { type: "string", description: "Description of the current focus or topic (min 10 chars)" },
+        seed_limit: { type: "number", description: "Top-N concept seeds to traverse from (3-10, default 6)", minimum: 3, maximum: 10 },
+        gap_limit: { type: "number", description: "Max gaps to return (5-20, default 10)", minimum: 5, maximum: 20 },
+      },
+      required: ["context"],
+    },
+  },
+  {
     name: "supersede",
     description: "Mark a stale belief as superseded by a new understanding. Writes a correction memory and creates supersedes edges to the concept(s) that matched the old belief, decaying their stability so they lose priority in recall. Use when you KNOW a prior belief is wrong.",
     inputSchema: {
@@ -289,6 +303,8 @@ async function handleToolCall(
       return handleRecordFinding(globalState, session, args);
     case "cluster_scan":
       return handleClusterScan(globalState, session, args);
+    case "what_is_missing":
+      return handleWhatIsMissing(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }
