@@ -17,6 +17,7 @@ import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 import { assertRecordId } from "../engine/surreal.js";
 import { runBootstrapMaintenance } from "../engine/maintenance.js";
+import { checkStageTransition } from "../engine/soul.js";
 
 export async function handleSessionStart(
   state: GlobalPluginState,
@@ -105,6 +106,19 @@ export async function handleSessionStart(
     // with the MCP-boot call in mcp-server.ts). Safe because each job is
     // internally bounded and idempotent; ACAN retrain is lockfile-protected.
     runBootstrapMaintenance(state);
+
+    // Record maturity stage at every session-start. Previously this only
+    // fired from midSessionCleanup (gated on 25K+ tokens in one session),
+    // so short/frequent sessions never wrote a maturity_stage row — the
+    // table stayed empty. Now every session baselines the current stage,
+    // and transitions are captured in real time.
+    checkStageTransition(store)
+      .then(t => {
+        if (t.transitioned) {
+          log.info(`[MATURITY] ${t.previousStage ?? "nascent"} → ${t.currentStage}. Quality ${t.report.qualityScore.toFixed(2)}`);
+        }
+      })
+      .catch(e => swallow.warn("sessionStart:maturity", e));
   }
 
   // Synthesize wakeup briefing (async, result cached for UserPromptSubmit)
