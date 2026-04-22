@@ -756,6 +756,13 @@ export async function checkStageTransition(store: SurrealStore): Promise<{
   // Always record current stage (upsert pattern)
   try {
     if (previousStage === null || transitioned) {
+      // Do NOT pass created_at as an ISO string — SurrealDB's `datetime`
+      // type rejects string bindings with "Couldn't coerce value for field
+      // `created_at` ... Expected `datetime` but found '...'" (swallowed
+      // pre-fix). The schema has DEFAULT time::now() so letting the DB
+      // fill this works correctly. This was the root cause of
+      // maturity_stage having 0 rows despite the writer being wired —
+      // every CREATE silently failed on the ISO-string coercion.
       await store.queryExec(
         `CREATE maturity_stage CONTENT $data`,
         {
@@ -764,7 +771,6 @@ export async function checkStageTransition(store: SurrealStore): Promise<{
             volume_score: report.volumeScore,
             quality_score: report.qualityScore,
             met_count: report.met.length,
-            created_at: new Date().toISOString(),
           },
         },
       );
