@@ -36,6 +36,9 @@ import { handleRecall } from "./tools/recall.js";
 import { handleCoreMemory } from "./tools/core-memory.js";
 import { handleIntrospect } from "./tools/introspect.js";
 import { handleFetchPendingWork, handleCommitWorkResults, handleCreateKnowledgeGems } from "./tools/pending-work.js";
+import { handleMemoryHealth } from "./tools/memory-health.js";
+import { handleLinkHierarchy } from "./tools/link-hierarchy.js";
+import { handleSupersede } from "./tools/supersede.js";
 import { log } from "./engine/log.js";
 import { runBootstrapMaintenance } from "./engine/maintenance.js";
 
@@ -177,6 +180,40 @@ const TOOLS = [
       required: ["source", "gems"],
     },
   },
+  {
+    name: "memory_health",
+    description: "Substrate self-audit. Returns structured JSON with status (green/yellow/red), connection state, record counts, embedding-gap percentage, pending-work backlog, and diagnostic warnings. Use this to check whether the memory system is healthy before heavy writes or when debugging stale retrievals.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+    },
+  },
+  {
+    name: "link_hierarchy",
+    description: "Explicitly assert a parent→child concept relationship. Writes broader/narrower edges between the two concepts (creating them via commitKnowledge if they don't exist). Use when you KNOW 'X is a kind of Y' and want to seal the hierarchy rather than hoping embedding-similarity detection finds it.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        parent: { type: "string", description: "The broader concept (e.g. 'authentication')" },
+        child: { type: "string", description: "The narrower concept (e.g. 'JWT validation')" },
+        source: { type: "string", description: "Optional provenance tag" },
+      },
+      required: ["parent", "child"],
+    },
+  },
+  {
+    name: "supersede",
+    description: "Mark a stale belief as superseded by a new understanding. Writes a correction memory and creates supersedes edges to the concept(s) that matched the old belief, decaying their stability so they lose priority in recall. Use when you KNOW a prior belief is wrong.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        old_text: { type: "string", description: "The stale belief — phrase it similarly to how the concept was originally saved for best match" },
+        new_text: { type: "string", description: "The corrected understanding" },
+        importance: { type: "number", description: "Importance of the correction memory (1-10, default 9)" },
+      },
+      required: ["old_text", "new_text"],
+    },
+  },
 ];
 
 // ── Tool handlers ─────────────────────────────────────────────────────────────
@@ -210,6 +247,12 @@ async function handleToolCall(
       return handleCommitWorkResults(globalState, session, args);
     case "create_knowledge_gems":
       return handleCreateKnowledgeGems(globalState, session, args);
+    case "memory_health":
+      return handleMemoryHealth(globalState, session, args);
+    case "link_hierarchy":
+      return handleLinkHierarchy(globalState, session, args);
+    case "supersede":
+      return handleSupersede(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }

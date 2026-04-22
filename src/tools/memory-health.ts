@@ -1,0 +1,140 @@
+/**
+ * memory_health MCP tool — machine-readable substrate self-audit.
+ *
+ * Returns a structured JSON report covering connectivity, record counts,
+ * embedding coverage gaps, pending-work backlog, and the quality signals
+ * used for soul graduation. Bots can consume this to self-diagnose, and
+ * the response is compact enough to inject into a hook turn if things go
+ * sideways.
+ *
+ * This is the programmatic counterpart to the skills/kongcode-health
+ * text-based skill — same data, structured output.
+ */
+
+import type { GlobalPluginState, SessionState } from "../engine/state.js";
+import { swallow } from "../engine/errors.js";
+
+interface HealthMetrics {
+  concept_count: number;
+  concept_embedded: number;
+  memory_count: number;
+  memory_embedded: number;
+  turn_count: number;
+  turn_embedded: number;
+  artifact_count: number;
+  artifact_embedded: number;
+  retrieval_outcome_count: number;
+  pending_work_count: number;
+  embedding_gap_pct: number;
+}
+
+interface HealthReport {
+  status: "green" | "yellow" | "red";
+  connection: "ok" | "degraded" | "down";
+  metrics: HealthMetrics;
+  diagnostics: Array<{ severity: "info" | "warn" | "error"; area: string; message: string }>;
+}
+
+async function countRow(
+  state: GlobalPluginState,
+  sql: string,
+  defaultVal = 0,
+): Promise<number> {
+  try {
+    const rows = await state.store.queryFirst<{ n: number }>(sql);
+    return Number(rows[0]?.n ?? defaultVal);
+  } catch (e) {
+    swallow("memoryHealth:count", e);
+    return defaultVal;
+  }
+}
+
+export async function handleMemoryHealth(
+  state: GlobalPluginState,
+  _session: SessionState,
+  _args: Record<string, unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  const diagnostics: HealthReport["diagnostics"] = [];
+  const connection = state.store.isAvailable() ? "ok" : "down";
+
+  if (connection === "down") {
+    const report: HealthReport = {
+      status: "red",
+      connection,
+      metrics: {
+        concept_count: 0, concept_embedded: 0,
+        memory_count: 0, memory_embedded: 0,
+        turn_count: 0, turn_embedded: 0,
+        artifact_count: 0, artifact_embedded: 0,
+        retrieval_outcome_count: 0, pending_work_count: 0,
+        embedding_gap_pct: 0,
+      },
+      diagnostics: [
+        { severity: "error", area: "connection", message: "SurrealDB store is not available." },
+      ],
+    };
+    return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+  }
+
+  // Parallel counts where possible.
+  const [
+    concept_count, concept_embedded,
+    memory_count, memory_embedded,
+    turn_count, turn_embedded,
+    artifact_count, artifact_embedded,
+    retrieval_outcome_count, pending_work_count,
+  ] = await Promise.all([
+    countRow(state, "SELECT count() AS n FROM concept GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM concept WHERE embedding != NONE AND array::len(embedding) > 0 GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM memory GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM memory WHERE embedding != NONE AND array::len(embedding) > 0 GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM turn GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM turn WHERE embedding != NONE AND array::len(embedding) > 0 GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM artifact GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM artifact WHERE embedding != NONE AND array::len(embedding) > 0 GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM retrieval_outcome GROUP ALL"),
+    countRow(state, "SELECT count() AS n FROM pending_work WHERE status = 'pending' GROUP ALL"),
+  ]);
+
+  // Compute an aggregate embedding gap percentage across the main embedded tables.
+  const total = concept_count + memory_count + turn_count + artifact_count;
+  const totalEmbedded = concept_embedded + memory_embedded + turn_embedded + artifact_embedded;
+  const embedding_gap_pct = total > 0 ? Math.round(((total - totalEmbedded) / total) * 100) : 0;
+
+  const metrics: HealthMetrics = {
+    concept_count, concept_embedded,
+    memory_count, memory_embedded,
+    turn_count, turn_embedded,
+    artifact_count, artifact_embedded,
+    retrieval_outcome_count, pending_work_count,
+    embedding_gap_pct,
+  };
+
+  // Diagnostics — tuned for the substrate-healthiness framing.
+  if (embedding_gap_pct > 15) {
+    diagnostics.push({
+      severity: "warn", area: "embedding",
+      message: `embedding gap is ${embedding_gap_pct}% across concept/memory/turn/artifact — embedder may be lagging`,
+    });
+  }
+  if (pending_work_count > 50) {
+    diagnostics.push({
+      severity: "warn", area: "pending_work",
+      message: `${pending_work_count} items in pending_work queue — subagent drainer may be slow`,
+    });
+  }
+  if (retrieval_outcome_count < 100 && turn_count > 200) {
+    diagnostics.push({
+      severity: "warn", area: "acan",
+      message: "retrieval_outcome count is low relative to turn count — ACAN may not have enough training data",
+    });
+  }
+
+  // Overall status.
+  let status: HealthReport["status"] = "green";
+  if (diagnostics.some(d => d.severity === "error")) status = "red";
+  else if (diagnostics.some(d => d.severity === "warn")) status = "yellow";
+
+  const report: HealthReport = { status, connection, metrics, diagnostics };
+  return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+}
