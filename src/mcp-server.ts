@@ -40,6 +40,7 @@ import { handleMemoryHealth } from "./tools/memory-health.js";
 import { handleLinkHierarchy } from "./tools/link-hierarchy.js";
 import { handleSupersede } from "./tools/supersede.js";
 import { handleRecordFinding } from "./tools/record-finding.js";
+import { handleClusterScan } from "./tools/cluster-scan.js";
 import { log } from "./engine/log.js";
 import { runBootstrapMaintenance } from "./engine/maintenance.js";
 
@@ -221,6 +222,18 @@ const TOOLS = [
     },
   },
   {
+    name: "cluster_scan",
+    description: "Recall with grouped output. Returns results organized into clusters by shared concept neighbors instead of a flat score-sorted list. Use for 'what do I know about X?' queries where structure matters more than rank.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: { type: "string", description: "Natural language query" },
+        limit: { type: "number", description: "Max results to cluster (5-15, default 10)", minimum: 5, maximum: 15 },
+      },
+      required: ["query"],
+    },
+  },
+  {
     name: "supersede",
     description: "Mark a stale belief as superseded by a new understanding. Writes a correction memory and creates supersedes edges to the concept(s) that matched the old belief, decaying their stability so they lose priority in recall. Use when you KNOW a prior belief is wrong.",
     inputSchema: {
@@ -274,6 +287,8 @@ async function handleToolCall(
       return handleSupersede(globalState, session, args);
     case "record_finding":
       return handleRecordFinding(globalState, session, args);
+    case "cluster_scan":
+      return handleClusterScan(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }
