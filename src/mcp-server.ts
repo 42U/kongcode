@@ -39,6 +39,7 @@ import { handleFetchPendingWork, handleCommitWorkResults, handleCreateKnowledgeG
 import { handleMemoryHealth } from "./tools/memory-health.js";
 import { handleLinkHierarchy } from "./tools/link-hierarchy.js";
 import { handleSupersede } from "./tools/supersede.js";
+import { handleRecordFinding } from "./tools/record-finding.js";
 import { log } from "./engine/log.js";
 import { runBootstrapMaintenance } from "./engine/maintenance.js";
 
@@ -202,6 +203,24 @@ const TOOLS = [
     },
   },
   {
+    name: "record_finding",
+    description: "Structured save for findings you want to remember permanently. Routes through commitKnowledge so the memory auto-seals about_concept edges. Use when you have a decision, correction, preference, or fact worth preserving across sessions.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        finding_type: {
+          type: "string",
+          enum: ["decision", "correction", "preference", "fact"],
+          description: "decision = choice-with-rationale; correction = user corrected a belief; preference = user workflow signal; fact = technical knowledge",
+        },
+        text: { type: "string", description: "The finding itself — specific, standalone, useful when recalled in isolation" },
+        why: { type: "string", description: "Optional rationale — appended to text as 'Rationale: ...'" },
+        importance: { type: "number", description: "1-10. Defaults to type-appropriate: correction=9, decision=7, preference=7, fact=6" },
+      },
+      required: ["finding_type", "text"],
+    },
+  },
+  {
     name: "supersede",
     description: "Mark a stale belief as superseded by a new understanding. Writes a correction memory and creates supersedes edges to the concept(s) that matched the old belief, decaying their stability so they lose priority in recall. Use when you KNOW a prior belief is wrong.",
     inputSchema: {
@@ -253,6 +272,8 @@ async function handleToolCall(
       return handleLinkHierarchy(globalState, session, args);
     case "supersede":
       return handleSupersede(globalState, session, args);
+    case "record_finding":
+      return handleRecordFinding(globalState, session, args);
     default:
       return { content: [{ type: "text", text: `Unknown tool: ${name}` }] };
   }
