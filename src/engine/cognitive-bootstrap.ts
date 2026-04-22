@@ -113,11 +113,23 @@ export async function seedCognitiveBootstrap(
     const currentVersionSeeded = (versionRows[0]?.cnt ?? 0) > 0;
 
     if (!currentVersionSeeded) {
-      // Clear any prior-version bootstrap entries so the index stays tight.
-      // Matches on our version-tag prefix regardless of version number.
+      // Clear prior bootstrap entries so the index stays tight. Matches
+      // (a) any previously version-tagged entries (0.4.0+ style), AND
+      // (b) the untagged pre-0.4.0 entries that we can recognize by the
+      //     CORE_ENTRIES fingerprint prefixes ("MEMORY REFLEX:",
+      //     "RECALL BEFORE GUESSING:", "GRAPH-AWARE SAVING:",
+      //     "MEMORY TOOLS:", "GRAPH SCHEMA REFERENCE:"). Without (b),
+      //     first-ever 0.4.0 boot left old entries in place, doubling the
+      //     core-memory count to 11 instead of migrating to 6.
       try {
         await store.queryExec(
-          `DELETE core_memory WHERE text CONTAINS '[kc_bootstrap_v'`,
+          `DELETE core_memory WHERE
+             text CONTAINS '[kc_bootstrap_v' OR
+             string::starts_with(text, 'MEMORY REFLEX:') OR
+             string::starts_with(text, 'RECALL BEFORE GUESSING:') OR
+             string::starts_with(text, 'GRAPH-AWARE SAVING:') OR
+             string::starts_with(text, 'MEMORY TOOLS:') OR
+             string::starts_with(text, 'GRAPH SCHEMA REFERENCE:')`,
         );
       } catch (e) {
         swallow.warn("bootstrap:clearPrior", e);
@@ -149,20 +161,24 @@ export async function seedCognitiveBootstrap(
   if (!embeddings.isAvailable()) return { identitySeeded, coreSeeded };
 
   try {
-    const rows = await store.queryFirst<{ count: number }>(
-      `SELECT count() AS count FROM identity_chunk WHERE source = $source GROUP ALL`,
-      { source: BOOTSTRAP_SOURCE },
+    // Version-tag identity chunks the same way we do core entries. Without
+    // this, existing installs kept pre-0.4.0 identity chunks (referencing
+    // "KongBrain", not "KongCode") because the old count-match heuristic
+    // saw 6 chunks present and skipped re-seeding even when content changed.
+    const vrows = await store.queryFirst<{ count: number }>(
+      `SELECT count() AS count FROM identity_chunk
+         WHERE source = $source AND bootstrap_version = $v GROUP ALL`,
+      { source: BOOTSTRAP_SOURCE, v: BOOTSTRAP_VERSION },
     );
-    const count = rows[0]?.count ?? 0;
+    const currentVersionSeeded = (vrows[0]?.count ?? 0) > 0;
 
-    if (count < IDENTITY_CHUNKS.length) {
-      // Clear and re-seed (idempotent on content changes)
-      if (count > 0) {
-        await store.queryExec(
-          `DELETE identity_chunk WHERE source = $source`,
-          { source: BOOTSTRAP_SOURCE },
-        );
-      }
+    if (!currentVersionSeeded) {
+      // Clear ALL prior bootstrap identity chunks (any version, including
+      // the pre-versioning pre-0.4.0 ones that had no bootstrap_version field).
+      await store.queryExec(
+        `DELETE identity_chunk WHERE source = $source`,
+        { source: BOOTSTRAP_SOURCE },
+      );
 
       for (let i = 0; i < IDENTITY_CHUNKS.length; i++) {
         const chunk = IDENTITY_CHUNKS[i];
@@ -170,8 +186,9 @@ export async function seedCognitiveBootstrap(
           const vec = await embeddings.embed(chunk.text);
           await store.queryExec(`CREATE identity_chunk CONTENT $data`, {
             data: {
-              agent_id: "kongbrain",
+              agent_id: "kongcode",
               source: BOOTSTRAP_SOURCE,
+              bootstrap_version: BOOTSTRAP_VERSION,
               chunk_index: i,
               text: chunk.text,
               embedding: vec,

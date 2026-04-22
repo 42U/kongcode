@@ -33,6 +33,10 @@ function mockStore(identityCount = 0, coreHasBootstrap = false) {
   return {
     isAvailable: () => true,
     queryFirst: vi.fn(async (sql: string) => {
+      // Identity-chunk version-tag check (0.4.0+): source = $source AND bootstrap_version = $v.
+      // Treat identityCount as "chunks under the current version" for version-matched queries.
+      if (sql.includes("FROM identity_chunk") && sql.includes("bootstrap_version")) return [{ count: identityCount }];
+      // Legacy identity-chunk count query for the seedIdentity (agent self-knowledge) flow.
       if (sql.includes("FROM identity_chunk") && sql.includes("count()")) return [{ count: identityCount }];
       // 0.4.0+ uses a version-tag check (SQL: `... WHERE text CONTAINS $tag ...`).
       if (sql.includes("FROM core_memory") && sql.includes("CONTAINS $tag")) return [{ cnt: coreHasBootstrap ? 1 : 0 }];
