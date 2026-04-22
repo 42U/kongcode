@@ -13,7 +13,7 @@ import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import { swallow } from "./errors.js";
 import { assertRecordId } from "./surreal.js";
-import { linkConceptHierarchy, linkToRelevantConcepts } from "./concept-extract.js";
+import { linkConceptHierarchy, linkToRelevantConcepts } from "./concept-links.js";
 import { linkSupersedesEdges } from "./supersedes.js";
 
 // --- Build the extraction prompt ---

@@ -21,7 +21,7 @@ import type { EmbeddingService } from "./embeddings.js";
 import {
   linkToRelevantConcepts,
   linkConceptHierarchy,
-} from "./concept-extract.js";
+} from "./concept-links.js";
 import { swallow } from "./errors.js";
 
 /**

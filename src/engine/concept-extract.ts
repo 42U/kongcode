@@ -8,6 +8,11 @@
 import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import { swallow } from "./errors.js";
+import { commitKnowledge } from "./commit.js";
+
+// Re-exports so downstream callers that imported these from concept-extract.js
+// don't break after the 0.4.0 split (the functions moved to concept-links.ts).
+export { linkToRelevantConcepts, linkConceptHierarchy } from "./concept-links.js";
 
 // Verb-triggered extractor: captures a CapitalizedNoun (or two) that follows
 // an action verb. Expanded beyond the original handful to cover conversational
@@ -105,21 +110,30 @@ export async function upsertAndLinkConcepts(
 
   for (const name of names) {
     try {
-      let embedding: number[] | null = null;
-      if (embeddings.isAvailable()) {
-        try { embedding = await embeddings.embed(name); } catch { /* ok */ }
-      }
-      const conceptId = await store.upsertConcept(name, embedding, logTag);
-      if (conceptId) {
-        await store.relate(sourceId, edgeName, conceptId)
-          .catch(e => swallow(`${logTag}:relate`, e));
+      // Route every concept creation through commitKnowledge so hierarchy
+      // (narrower/broader) + related_to auto-seal for this concept. Before
+      // 0.4.0 this function called store.upsertConcept directly and only
+      // wired the source→concept edge — every caller (ingestTurn,
+      // after-tool-call, gems pre-Stage-B, etc.) was silently leaving
+      // concepts unlinked within the concept graph itself.
+      const { id: conceptId } = await commitKnowledge(
+        { store, embeddings },
+        {
+          kind: "concept",
+          name,
+          sourceId,
+          edgeName,
+          source: logTag,
+        },
+      );
 
-        // derived_from: concept → task
+      if (conceptId) {
+        // Outgoing task/project relations aren't part of generic auto-seal;
+        // they're route-specific semantics that callers opt into.
         if (opts?.taskId) {
           await store.relate(conceptId, "derived_from", opts.taskId)
             .catch(e => swallow(`${logTag}:derived_from`, e));
         }
-        // relevant_to: concept → project
         if (opts?.projectId) {
           await store.relate(conceptId, "relevant_to", opts.projectId)
             .catch(e => swallow(`${logTag}:relevant_to`, e));
@@ -131,120 +145,7 @@ export async function upsertAndLinkConcepts(
   }
 }
 
-/**
- * Embedding-based concept linking — replaces batch-local linkToConcepts.
- *
- * Given a source node (memory, artifact, turn, skill) and its text content,
- * embeds the text and finds the top-N most similar concepts in the graph,
- * then creates edges from source → concept via the specified relation.
- *
- * This ensures linking works even when relevant concepts were created in
- * prior batches or sessions — no batch-timing dependency.
- */
-export async function linkToRelevantConcepts(
-  sourceId: string,
-  edgeName: string,
-  text: string,
-  store: SurrealStore,
-  embeddings: EmbeddingService,
-  logTag: string,
-  limit = 5,
-  threshold = 0.65,
-  precomputedVec?: number[] | null,
-): Promise<void> {
-  if (!embeddings.isAvailable() || !text) return;
-  try {
-    const vec = precomputedVec?.length ? precomputedVec : await embeddings.embed(text);
-    if (!vec?.length) return;
-    const matches = await store.queryFirst<{ id: string; score: number }>(
-      `SELECT id, vector::similarity::cosine(embedding, $vec) AS score
-       FROM concept
-       WHERE embedding != NONE AND array::len(embedding) > 0
-       ORDER BY score DESC
-       LIMIT $lim`,
-      { vec, lim: limit },
-    );
-    for (const m of matches) {
-      if (m.score < threshold) break;
-      await store.relate(sourceId, edgeName, String(m.id))
-        .catch(e => swallow(`${logTag}:relate`, e));
-    }
-  } catch (e) {
-    swallow(`${logTag}:embed`, e);
-  }
-}
-
-/**
- * Link a newly-upserted concept to existing concepts via narrower/broader
- * edges when one concept's name is a substring of the other (indicating a
- * parent-child hierarchy, e.g. "React" → "React hooks").
- */
-export async function linkConceptHierarchy(
-  conceptId: string,
-  conceptName: string,
-  store: SurrealStore,
-  embeddings: EmbeddingService,
-  logTag: string,
-): Promise<void> {
-  try {
-    const existing = await store.queryFirst<{ id: string; content: string }>(
-      `SELECT id, content FROM concept WHERE id != $cid LIMIT 50`,
-      { cid: conceptId },
-    );
-    if (existing.length === 0) return;
-
-    const lowerName = conceptName.toLowerCase();
-    let relatedCount = 0;
-
-    for (const other of existing) {
-      const otherLower = (other.content ?? "").toLowerCase();
-      if (!otherLower || otherLower === lowerName) continue;
-
-      const otherId = String(other.id);
-
-      if (lowerName.includes(otherLower) && lowerName !== otherLower) {
-        // New concept is more specific (e.g. "React hooks" contains "React")
-        await store.relate(conceptId, "narrower", otherId)
-          .catch(e => swallow(`${logTag}:narrower`, e));
-        await store.relate(otherId, "broader", conceptId)
-          .catch(e => swallow(`${logTag}:broader`, e));
-      } else if (otherLower.includes(lowerName) && otherLower !== lowerName) {
-        // New concept is more general (e.g. "React" contained in "React hooks")
-        await store.relate(conceptId, "broader", otherId)
-          .catch(e => swallow(`${logTag}:broader`, e));
-        await store.relate(otherId, "narrower", conceptId)
-          .catch(e => swallow(`${logTag}:narrower`, e));
-      }
-    }
-
-    // related_to: peer-level semantic association via embedding similarity
-    if (embeddings.isAvailable()) {
-      try {
-        const conceptEmb = await embeddings.embed(conceptName);
-        if (conceptEmb?.length) {
-          const similar = await store.queryFirst<{ id: string; score: number }>(
-            `SELECT id, vector::similarity::cosine(embedding, $vec) AS score
-             FROM concept
-             WHERE id != $cid
-               AND embedding != NONE AND array::len(embedding) > 0
-             ORDER BY score DESC
-             LIMIT 3`,
-            { vec: conceptEmb, cid: conceptId },
-          );
-          for (const s of similar) {
-            if (s.score < 0.75) break;
-            const simId = String(s.id);
-            await store.relate(conceptId, "related_to", simId)
-              .catch(e => swallow(`${logTag}:related_to`, e));
-            await store.relate(simId, "related_to", conceptId)
-              .catch(e => swallow(`${logTag}:related_to`, e));
-          }
-        }
-      } catch (e) {
-        swallow(`${logTag}:related_to_search`, e);
-      }
-    }
-  } catch (e) {
-    swallow(`${logTag}:hierarchy`, e);
-  }
-}
+// linkToRelevantConcepts and linkConceptHierarchy moved to concept-links.ts
+// in 0.4.0 to break the potential circular import between this file and
+// commit.ts. They remain re-exported from this module at the top so
+// existing callers don't need to change imports.
