@@ -34,8 +34,8 @@ function mockStore(identityCount = 0, coreHasBootstrap = false) {
     isAvailable: () => true,
     queryFirst: vi.fn(async (sql: string) => {
       if (sql.includes("FROM identity_chunk") && sql.includes("count()")) return [{ count: identityCount }];
-      // 0.4.0+ uses a version-tag check instead of content-match on MEMORY REFLEX.
-      if (sql.includes("FROM core_memory") && sql.includes("kc_bootstrap_v")) return [{ cnt: coreHasBootstrap ? 1 : 0 }];
+      // 0.4.0+ uses a version-tag check (SQL: `... WHERE text CONTAINS $tag ...`).
+      if (sql.includes("FROM core_memory") && sql.includes("CONTAINS $tag")) return [{ cnt: coreHasBootstrap ? 1 : 0 }];
       return [];
     }),
     queryExec: vi.fn(async () => {}),
