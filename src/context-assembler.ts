@@ -40,6 +40,16 @@ export async function assembleContextString(
     if (preflightResult.config.toolLimit != null) {
       session.toolLimit = preflightResult.config.toolLimit;
     }
+    // Stash preflight result + turn-start timestamps so handleStop can
+    // feed postflight(), which writes orchestrator_metrics. Without this
+    // bridge postflight had no data across the hook boundary and the
+    // table stayed at 0 rows.
+    session._pendingPreflight = preflightResult;
+    session._pendingPreflightAt = Date.now();
+    session._pendingPreflightInput = userPrompt;
+    session._turnToolCalls = 0;
+    session._turnTokensInStart = session._pendingInputTokens;
+    session._turnTokensOutStart = session._pendingOutputTokens;
   } catch (e) {
     swallow.warn("assembleContext:preflight", e);
   }

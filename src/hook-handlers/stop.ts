@@ -9,6 +9,7 @@ import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
 import { ingestTurn } from "../context-assembler.js";
 import { evaluateRetrieval } from "../engine/retrieval-quality.js";
+import { postflight } from "../engine/orchestrator.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 
@@ -38,6 +39,32 @@ export async function handleStop(
     } catch (e) {
       swallow("stop:retrievalQuality", e);
     }
+  }
+
+  // Postflight: write the per-turn orchestrator_metrics row. The writer
+  // in orchestrator.ts had been intact since the port but with zero
+  // callers — the preflight side stashed fields on session at context
+  // assembly time so we could reach them here across the hook boundary.
+  // Table had 0 rows pre-0.4.0 entirely because of this missing call.
+  if (store.isAvailable() && session._pendingPreflight) {
+    const pending = session._pendingPreflight;
+    const tokensIn = session._pendingInputTokens - session._turnTokensInStart;
+    const tokensOut = session._pendingOutputTokens - session._turnTokensOutStart;
+    const turnDurationMs = Date.now() - session._pendingPreflightAt;
+    postflight(
+      session._pendingPreflightInput,
+      pending,
+      session._turnToolCalls,
+      Math.max(0, tokensIn),
+      Math.max(0, tokensOut),
+      turnDurationMs,
+      session,
+      store,
+    ).catch(e => swallow("stop:postflight", e));
+    // Clear the pending stash so the next turn starts fresh
+    session._pendingPreflight = null;
+    session._pendingPreflightInput = "";
+    session._turnToolCalls = 0;
   }
 
   log.debug(`Stop: turn=${session.userTurnCount}, tokens=${session.cumulativeTokens}`);

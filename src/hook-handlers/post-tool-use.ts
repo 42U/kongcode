@@ -27,6 +27,10 @@ export async function handlePostToolUse(
     session.cumulativeTokens += resultTokens;
   }
 
+  // Count tool calls for this turn — consumed by handleStop to feed
+  // postflight()'s orchestrator_metrics write. Reset at preflight time.
+  session._turnToolCalls += 1;
+
   // Track file artifacts from Write/Edit tools
   if ((toolName === "Write" || toolName === "Edit") && store.isAvailable()) {
     const toolInput = session.pendingToolArgs.get(toolName) as Record<string, unknown> | undefined;

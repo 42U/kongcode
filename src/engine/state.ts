@@ -48,6 +48,17 @@ export class SessionState {
   // Current adaptive config (set by orchestrator preflight each turn)
   currentConfig: AdaptiveConfig | null = null;
 
+  // Turn-boundary telemetry — stashed at preflight, consumed at Stop to
+  // drive postflight() which writes orchestrator_metrics. Without these
+  // fields postflight had nothing to work with across hook boundaries, so
+  // orchestrator_metrics stayed at 0 rows despite the writer being intact.
+  _pendingPreflight: import("./orchestrator.js").PreflightResult | null = null;
+  _pendingPreflightAt = 0;
+  _pendingPreflightInput = "";
+  _turnToolCalls = 0;
+  _turnTokensInStart = 0;
+  _turnTokensOutStart = 0;
+
   // Pending tool args for artifact tracking
   readonly pendingToolArgs = new Map<string, unknown>();
 
