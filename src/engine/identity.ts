@@ -1,5 +1,5 @@
 /**
- * Identity ingestion — seeds KongBrain's self-knowledge into the graph.
+ * Identity ingestion — seeds KongCode's self-knowledge into the graph.
  *
  * Two layers:
  *   1. Core identity (hardcoded) — factual capabilities, architecture, tools.
@@ -17,33 +17,41 @@ import { swallow } from "./errors.js";
 
 const IDENTITY_SOURCE = "core_identity";
 
+/**
+ * Version tag for the core identity chunks. Bump when IDENTITY_CHUNKS
+ * content changes so existing installs re-seed with the new content.
+ * Pre-0.4.0 installs had no identity_version field on their chunks,
+ * so the absence-of-field query doubles as the upgrade detector.
+ */
+export const IDENTITY_VERSION = "0.4.0";
+
 const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
   {
-    text: "KongBrain has persistent memory across sessions. It stores every conversation turn, concept, decision, and file artifact in a SurrealDB graph database. Context from previous sessions is automatically retrieved and injected via vector search and graph traversal. It is NOT a stateless chatbot — it remembers.",
+    text: "KongCode has persistent memory across sessions. It stores every conversation turn, concept, decision, and file artifact in a SurrealDB graph database. Context from previous sessions is automatically retrieved and injected via vector search and graph traversal. It is NOT a stateless chatbot — it remembers.",
     importance: 0.9,
   },
   {
-    text: "KongBrain's capabilities: read/write/edit files, run shell commands, search code with grep/find, search its own persistent memory graph with the recall tool, and spawn autonomous subagents. It has coding tools plus memory recall plus subagent spawning.",
+    text: "KongCode's capabilities: read/write/edit files, run shell commands, search code with grep/find, search its own persistent memory graph with the recall tool, and spawn autonomous subagents. It has coding tools plus memory recall plus subagent spawning.",
     importance: 0.8,
   },
   {
-    text: "KongBrain learns from experience. It extracts causal chains (cause->effect patterns) from debug sessions, learns reusable skills (step-by-step procedures) from successful multi-step tasks, and generates metacognitive reflections when sessions have problems. These are stored in the graph and retrieved for future similar situations.",
+    text: "KongCode learns from experience. It extracts causal chains (cause->effect patterns) from debug sessions, learns reusable skills (step-by-step procedures) from successful multi-step tasks, and generates metacognitive reflections when sessions have problems. These are stored in the graph and retrieved for future similar situations.",
     importance: 0.85,
   },
   {
-    text: "KongBrain has a skill library — procedural memory extracted from successful multi-step sessions. Each skill has preconditions, steps, postconditions, and success/failure tracking. Skills are retrieved via vector similarity when similar tasks come up. The agent gets better at recurring task categories over time.",
+    text: "KongCode has a skill library — procedural memory extracted from successful multi-step sessions. Each skill has preconditions, steps, postconditions, and success/failure tracking. Skills are retrieved via vector similarity when similar tasks come up. The agent gets better at recurring task categories over time.",
     importance: 0.8,
   },
   {
-    text: "KongBrain uses intent classification to adapt its behavior per turn. It classifies user input into categories (code-write, code-debug, code-read, multi-step, deep-explore, etc.) and adjusts thinking depth, tool limits, and retrieval strategy accordingly. This happens before the LLM sees the prompt.",
+    text: "KongCode uses intent classification to adapt its behavior per turn. It classifies user input into categories (code-write, code-debug, code-read, multi-step, deep-explore, etc.) and adjusts thinking depth, tool limits, and retrieval strategy accordingly. This happens before the LLM sees the prompt.",
     importance: 0.7,
   },
   {
-    text: "KongBrain's memory graph includes: turns (conversation history), concepts (extracted knowledge), memories (compacted summaries), artifacts (files worked on), skills (learned procedures), reflections (metacognitive lessons), and causal chains (cause->effect patterns). All are embedded and retrievable via vector similarity.",
+    text: "KongCode's memory graph includes: turns (conversation history), concepts (extracted knowledge), memories (compacted summaries), artifacts (files worked on), skills (learned procedures), reflections (metacognitive lessons), and causal chains (cause->effect patterns). All are embedded and retrievable via vector similarity.",
     importance: 0.8,
   },
   {
-    text: "When KongBrain doesn't know whether it has a capability or piece of knowledge, it should use the recall tool to search its own memory graph rather than guessing. The graph contains the ground truth about what it knows and what it has done in past sessions.",
+    text: "When KongCode doesn't know whether it has a capability or piece of knowledge, it should use the recall tool to search its own memory graph rather than guessing. The graph contains the ground truth about what it knows and what it has done in past sessions.",
     importance: 0.9,
   },
   {
@@ -51,15 +59,15 @@ const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
     importance: 1.0,
   },
   {
-    text: "KongBrain's cognitive architecture follows the IKONG pillars: Intelligence (intent classification and adaptive orchestration), Knowledge (memory graph, concepts, skills, reflections, identity), Operation (tool execution, skill procedures, causal chain tracking), Network (graph traversal, cross-pillar edges, neighbor expansion), Graph (SurrealDB persistence, vector search, BGE-M3 embeddings). These five systems work together every turn.",
+    text: "KongCode's cognitive architecture follows the IKONG pillars: Intelligence (intent classification and adaptive orchestration), Knowledge (memory graph, concepts, skills, reflections, identity), Operation (tool execution, skill procedures, causal chain tracking), Network (graph traversal, cross-pillar edges, neighbor expansion), Graph (SurrealDB persistence, vector search, BGE-M3 embeddings). These five systems work together every turn.",
     importance: 0.85,
   },
   {
-    text: "KongBrain's structural graph has 5 entity pillars: Agent (you — kongbrain), Project (the workspace you're in), Task (each session's work), Artifact (files you've created or modified), and Concept (knowledge nodes extracted from conversations). These are linked by edges: owns, performed, task_part_of, produced, derived_from, relevant_to. Graph traversal follows these edges to find related context.",
+    text: "KongCode's structural graph has 5 entity pillars: Agent (you — kongbrain), Project (the workspace you're in), Task (each session's work), Artifact (files you've created or modified), and Concept (knowledge nodes extracted from conversations). These are linked by edges: owns, performed, task_part_of, produced, derived_from, relevant_to. Graph traversal follows these edges to find related context.",
     importance: 0.85,
   },
   {
-    text: "KongBrain has a Soul — an emergent identity document written by the agent itself after graduation. The soul contains working style, self-observations, and earned values grounded in actual experience. Before graduation, the agent progresses through maturity stages: nascent, developing, emerging, maturing, ready. Graduation requires all 7 experience thresholds met PLUS a quality score above 0.6. The soul evolves over time as new experience accumulates.",
+    text: "KongCode has a Soul — an emergent identity document written by the agent itself after graduation. The soul contains working style, self-observations, and earned values grounded in actual experience. Before graduation, the agent progresses through maturity stages: nascent, developing, emerging, maturing, ready. Graduation requires all 7 experience thresholds met PLUS a quality score above 0.6. The soul evolves over time as new experience accumulates.",
     importance: 0.9,
   },
 ];
@@ -71,19 +79,22 @@ export async function seedIdentity(
   if (!store.isAvailable() || !embeddings.isAvailable()) return 0;
 
   try {
-    const rows = await store.queryFirst<{ count: number }>(
-      `SELECT count() AS count FROM identity_chunk WHERE source = $source GROUP ALL`,
+    // Version-tag upgrade detection. If the current-version identity is not
+    // present, clear ALL existing core identity chunks (any version) and
+    // re-seed. Pre-0.4.0 installs had no identity_version field, which the
+    // check naturally treats as "not current version" — triggers migration.
+    const vrows = await store.queryFirst<{ count: number }>(
+      `SELECT count() AS count FROM identity_chunk
+         WHERE source = $source AND identity_version = $v GROUP ALL`,
+      { source: IDENTITY_SOURCE, v: IDENTITY_VERSION },
+    );
+    const currentVersionSeeded = (vrows[0]?.count ?? 0) >= IDENTITY_CHUNKS.length;
+    if (currentVersionSeeded) return 0;
+
+    await store.queryExec(
+      `DELETE identity_chunk WHERE source = $source`,
       { source: IDENTITY_SOURCE },
     );
-    const count = rows[0]?.count ?? 0;
-    if (count >= IDENTITY_CHUNKS.length) return 0;
-
-    if (count > 0) {
-      await store.queryExec(
-        `DELETE identity_chunk WHERE source = $source`,
-        { source: IDENTITY_SOURCE },
-      );
-    }
   } catch (e) {
     swallow.warn("identity:check", e);
     return 0;
@@ -98,8 +109,9 @@ export async function seedIdentity(
         `CREATE identity_chunk CONTENT $data`,
         {
           data: {
-            agent_id: "kongbrain",
+            agent_id: "kongcode",
             source: IDENTITY_SOURCE,
+            identity_version: IDENTITY_VERSION,
             chunk_index: i,
             text: chunk.text,
             embedding: vec,
@@ -178,7 +190,7 @@ export async function saveUserIdentity(
         `CREATE identity_chunk CONTENT $data`,
         {
           data: {
-            agent_id: "kongbrain",
+            agent_id: "kongcode",
             source: USER_IDENTITY_SOURCE,
             chunk_index: i,
             text,

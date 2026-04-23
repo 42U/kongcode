@@ -101,6 +101,28 @@ export async function seedCognitiveBootstrap(
 
   // ── Core memory Tier 0 (always loaded, no embeddings needed) ───────────
 
+  // One-shot migration (runs every boot, but is a no-op once clean):
+  // delete untagged pre-0.4.0 entries matching known fingerprints. Needed
+  // because some installs seeded v0.4.0-tagged entries ON TOP OF the
+  // untagged pre-0.4.0 ones, leaving 11 rows instead of 6. The version
+  // check below can't fix that case because it sees the tag and skips
+  // cleanup. This migration runs outside the version check so the cleanup
+  // fires regardless. Condition is narrow: text must NOT contain the
+  // version tag AND must start with a known pre-0.4.0 fingerprint.
+  try {
+    await store.queryExec(
+      `DELETE core_memory WHERE
+         NOT text CONTAINS '[kc_bootstrap_v' AND
+         (string::starts_with(text, 'MEMORY REFLEX:') OR
+          string::starts_with(text, 'RECALL BEFORE GUESSING:') OR
+          string::starts_with(text, 'GRAPH-AWARE SAVING:') OR
+          string::starts_with(text, 'MEMORY TOOLS:') OR
+          string::starts_with(text, 'GRAPH SCHEMA REFERENCE:'))`,
+    );
+  } catch (e) {
+    swallow.warn("bootstrap:migrateLegacyCore", e);
+  }
+
   try {
     // Version-tag check: look for an entry marked with the current
     // BOOTSTRAP_VERSION. If absent, re-seed the core entries (clearing stale
