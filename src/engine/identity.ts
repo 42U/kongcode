@@ -23,7 +23,7 @@ const IDENTITY_SOURCE = "core_identity";
  * Pre-0.4.0 installs had no identity_version field on their chunks,
  * so the absence-of-field query doubles as the upgrade detector.
  */
-export const IDENTITY_VERSION = "0.4.0";
+export const IDENTITY_VERSION = "0.4.1";
 
 const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
   {
@@ -63,7 +63,7 @@ const IDENTITY_CHUNKS: { text: string; importance: number }[] = [
     importance: 0.85,
   },
   {
-    text: "KongCode's structural graph has 5 entity pillars: Agent (you — kongbrain), Project (the workspace you're in), Task (each session's work), Artifact (files you've created or modified), and Concept (knowledge nodes extracted from conversations). These are linked by edges: owns, performed, task_part_of, produced, derived_from, relevant_to. Graph traversal follows these edges to find related context.",
+    text: "KongCode's structural graph has 5 entity pillars: Agent (you — kongcode), Project (the workspace you're in), Task (each session's work), Artifact (files you've created or modified), and Concept (knowledge nodes extracted from conversations). These are linked by edges: owns, performed, task_part_of, produced, derived_from, relevant_to. Graph traversal follows these edges to find related context.",
     importance: 0.85,
   },
   {
