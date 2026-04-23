@@ -59,6 +59,10 @@ export class SessionState {
   _turnTokensInStart = 0;
   _turnTokensOutStart = 0;
 
+  // Subagent tracking — map tool_use_id → subagent record id so SubagentStop
+  // can find the row written by PreToolUse(Agent) and mark it complete.
+  readonly _activeSubagents = new Map<string, string>();
+
   // Pending tool args for artifact tracking
   readonly pendingToolArgs = new Map<string, unknown>();
 
