@@ -1,11 +1,12 @@
 {
   "run_started": "2026-04-22",
-  "run_status": "paused_for_review",
+  "run_status": "feature_complete_awaiting_observation",
   "goal": "KongCode 0.4.0 — substrate-does-the-work. Every write auto-seals. Every substrate ships wired. Better than a brain.",
   "tests_passing": "441/441",
   "typecheck": "clean",
   "build": "clean",
-  "commits_this_run": [
+  "master_head": "4d2e5f0",
+  "commits_this_run_chronological": [
     "ae5695a feat(0.4.0): commitKnowledge scaffold — single write path foundation",
     "a536098 feat(0.4.0): migrate gem writer to commitKnowledge — auto-seal edges",
     "0081c36 fix(test): update commit.test.ts assertions for 4-arg upsertConcept",
@@ -16,199 +17,150 @@
     "eed341c fix(test): mock the 0.4.0 bootstrap version-tag query correctly",
     "402c25e feat(0.4.0): three built-in substrate tools — memory_health, link_hierarchy, supersede",
     "d6af8bd feat(0.4.0): time-relative maintenance thresholds — new installs benefit from day 1",
-    "(pending commit) fix: wire checkStageTransition into handleSessionStart — populate maturity_stage"
+    "c7d83bb fix(soul): baseline maturity_stage at every session-start",
+    "90bad3e fix: restore graduation_event + compaction_checkpoint writers (R1, R2)",
+    "c6a7936 refactor(0.4.0): upsertAndLinkConcepts routes through commitKnowledge (R4)",
+    "912f40e fix(recall): include turn_archive in vectorSearch so archived turns remain recallable",
+    "f961155 fix(bootstrap): widen pre-0.4.0 delete + version-tag identity chunks",
+    "227c2a3 fix(soul): stop passing created_at ISO string to maturity_stage CREATE",
+    "9cfecf6 fix(soul): drop ISO-string created_at/updated_at from createSoul payload",
+    "bf0407c fix(soul): use time::now() inline in reviseSoul UPDATE instead of ISO binding",
+    "a6bca69 feat(0.4.0): record_finding MCP tool — structured save for decisions/corrections/preferences/facts",
+    "bdd8186 feat(0.4.0): cluster_scan MCP tool — recall with grouped output (D4)",
+    "53e7d2d feat(0.4.0): what_is_missing MCP tool — proactive gap detection (D6)",
+    "4d2e5f0 feat(0.4.0): wire postflight() into Stop hook — populates orchestrator_metrics (E1)"
   ],
   "stages": {
     "A_commit_scaffold": { "status": "done", "commits": ["ae5695a"] },
     "B_write_path_migrations": {
-      "status": "substantially_done",
-      "items": [
-        {"id": "B1", "title": "gem writer", "status": "done"},
-        {"id": "B2", "title": "causal memory writer", "status": "done"},
-        {"id": "B3", "title": "ingestTurn mentions edges", "status": "done"},
-        {"id": "B4", "title": "subagent.ts skill creation", "status": "n/a_stub_only", "notes": "subagent hook handlers are TODO stubs — nothing to migrate. See flags_for_review."},
-        {"id": "B5", "title": "workspace-migrate memory writer", "status": "done"},
-        {"id": "B6", "title": "post-tool-use artifact writer", "status": "done"},
-        {"id": "B7", "title": "after-tool-call artifact writer", "status": "done"},
-        {"id": "B8", "title": "pending-work source artifact", "status": "done"},
-        {"id": "B9", "title": "add artifact kind", "status": "done"},
-        {"id": "B10", "title": "add skill kind", "status": "deferred", "notes": "No live skill-creation path bypasses — writeExtractionResults in memory-daemon.ts is dormant. When subagent skill graduation is wired (see flags), migrate that path to use the new skill kind."},
-        {"id": "B11", "title": "add correction kind (linkSupersedesEdges)", "status": "partially_done", "notes": "supersede MCP tool does the work via linkSupersedesEdges; explicit 'correction' kind not yet added as a separate CommitData variant."},
-        {"id": "B12", "title": "grep-test gate", "status": "manual_verified", "notes": "After 0.4.0 Stage B: only direct upsertConcept/createMemory/createArtifact calls remain inside commit.ts itself, the dormant memory-daemon.ts, concept-extract.ts's upsertAndLinkConcepts helper (intentional), and workspace-migrate.ts (migrated). See flags_for_review.pending-upsert-migrations."}
-      ]
-    },
-    "C_time_relative_maintenance": {
       "status": "done",
-      "commits": ["d6af8bd"],
-      "items": [
-        {"id": "C1", "title": "maintenance_runs table in schema.surql", "status": "done"},
-        {"id": "C2", "title": "shouldRunMaintenance + recordMaintenanceRun helpers in SurrealStore", "status": "done"},
-        {"id": "C3", "title": "All 4 jobs use time-relative gates", "status": "done"}
-      ]
+      "items": {
+        "B1_gem_writer": "done (a536098, 0081c36)",
+        "B2_causal_memory": "done (782cf0d)",
+        "B3_ingestTurn_mentions": "done (75862c4)",
+        "B4_subagent_skill_creation": "n/a — subagent handlers are TODO stubs, see R3",
+        "B5_workspace_migrate_memory": "done (2c3d6b2)",
+        "B6_post_tool_use_artifact": "done (2c3d6b2)",
+        "B7_after_tool_call_artifact": "done (2c3d6b2)",
+        "B8_pending_work_source_artifact": "done (2c3d6b2)",
+        "B9_add_artifact_kind": "done (2c3d6b2)",
+        "B10_add_skill_kind": "deferred — no live writer bypasses after Stage B",
+        "B11_correction_kind": "partially done via supersede tool (402c25e)",
+        "B12_grep_gate": "manual_verified — only helpers + dormant daemon remain direct"
+      }
     },
+    "C_time_relative_maintenance": { "status": "done", "commits": ["d6af8bd"] },
     "D_six_built_in_tools": {
-      "status": "half_done",
-      "items": [
-        {"id": "D1", "title": "record_finding", "status": "deferred", "notes": "Highest-effort tool in the set. Designed, not implemented. Supersede + link_hierarchy handle the two most-requested shapes; record_finding would wrap commitKnowledge({kind:'memory', category: 'decision' | 'correction'}) with structured validation."},
-        {"id": "D2", "title": "link_hierarchy", "status": "done", "commits": ["402c25e"]},
-        {"id": "D3", "title": "supersede", "status": "done", "commits": ["402c25e"]},
-        {"id": "D4", "title": "cluster_scan", "status": "deferred", "notes": "Presentation wrapper around recall. Could be a 0.4.1 item — recall already returns graph neighbors, cluster_scan would group them by shared concepts. No correctness blocker."},
-        {"id": "D5", "title": "memory_health", "status": "done", "commits": ["402c25e"]},
-        {"id": "D6", "title": "what_is_missing", "status": "deferred", "notes": "Most ambitious tool in the set. Would require gap-detection logic comparing current conversation topics to graph coverage. Not blocking 0.4.0 ship."}
-      ]
+      "status": "done",
+      "items": {
+        "D1_record_finding": "done (a6bca69)",
+        "D2_link_hierarchy": "done (402c25e)",
+        "D3_supersede": "done (402c25e)",
+        "D4_cluster_scan": "done (bdd8186)",
+        "D5_memory_health": "done (402c25e)",
+        "D6_what_is_missing": "done (53e7d2d)"
+      }
     },
     "E_observability": {
-      "status": "partial",
-      "items": [
-        {"id": "E1", "title": "orchestrator_metrics writes", "status": "deferred", "notes": "maintenance_runs covers the maintenance-side observability. orchestrator_metrics would cover per-session aggregates (retrieval util, skill success, etc.). Requires a session-end hook writer. Deferred to next cycle — enables trend analysis without which 0.4.0 impact is hard to measure."},
-        {"id": "E2", "title": "introspect trends action", "status": "deferred"},
-        {"id": "E3", "title": "UserPromptSubmit health-warning injection", "status": "deferred"}
-      ]
+      "status": "primary_done",
+      "items": {
+        "E1_orchestrator_metrics_writer": "done (4d2e5f0) — postflight bridged via session stash",
+        "E2_introspect_trends_action": "deferred to 0.5.0 — needs data accumulation first",
+        "E3_health_warning_injection": "deferred to 0.5.0 — nice-to-have, memory_health tool covers the pull shape"
+      }
     },
-    "F_bootstrap_refresh": {
-      "status": "done",
-      "commits": ["a8a880b", "eed341c"],
-      "items": [
-        {"id": "F1", "title": "KongBrain → KongCode rename", "status": "done"},
-        {"id": "F2", "title": "New AUTO-SEAL CONTRACT core entry", "status": "done"},
-        {"id": "F3", "title": "BOOTSTRAP_VERSION version tag + re-seed on upgrade", "status": "done"}
-      ]
-    },
+    "F_bootstrap_refresh": { "status": "done", "commits": ["a8a880b", "eed341c", "f961155"] },
     "G_zero_row_audit": {
-      "status": "investigated_partially_fixed",
-      "findings": [
-        {
-          "table": "soul",
-          "rows": 0,
-          "cause": "gated on quality >= 0.85 AND 7/7 thresholds. User has 7/7 volume but 0.73 quality due to 10% retrieval util.",
-          "fix": "Self-unblocking. Today's commits (auto-seal on write, ingestTurn mentions, causal linking) should raise retrieval util over time by making the graph denser and more connected. No code change needed; observation period.",
-          "status": "self_unblocking"
-        },
-        {
-          "table": "graduation_event",
-          "rows": 0,
-          "cause": "PORT REGRESSION. No writer exists in src/. Only READ by session-start.ts:69. KongBrain must have had a writer that wasn't ported.",
-          "fix": "Add graduation_event write at the point attemptGraduation succeeds — soul.ts:534 (just after createSoul returns success). One-line addition but needs user approval since it changes graduation side-effects.",
-          "status": "flagged_for_review"
-        },
-        {
-          "table": "maturity_stage",
-          "rows": 0,
-          "cause": "checkStageTransition writer exists (soul.ts:735) but only called from midSessionCleanup, which is gated on 25K+ tokens in one session. Short sessions never baseline the table.",
-          "fix": "Fixed in this run: handleSessionStart now calls checkStageTransition(store). Every session start will record a maturity_stage row from now on.",
-          "status": "fixed_in_this_run"
-        },
-        {
-          "table": "subagent",
-          "rows": 0,
-          "cause": "handleTaskCreated and handleSubagentStop in src/hook-handlers/subagent.ts are stubs with 'TODO: Phase 5' comments. Feature never implemented.",
-          "fix": "Requires designing the subagent tracking schema (start, stop, parent_session, tools_used, outcome). Non-trivial. Defer to a follow-up spec.",
-          "status": "flagged_for_review"
-        },
-        {
-          "table": "orchestrator_metrics",
-          "rows": 0,
-          "cause": "No writer exists.",
-          "fix": "Planned for Stage E of this plan. Deferred.",
-          "status": "planned"
-        },
-        {
-          "table": "compaction_checkpoint",
-          "rows": 0,
-          "cause": "PORT REGRESSION. store.createCompactionCheckpoint exists but only called from the dormant ContextEngine.compact() method (confirmed dead — grep '\\\\.compact\\\\(' returned 0 callers earlier).",
-          "fix": "Add createCompactionCheckpoint call to pre-compact.ts. Would give ops visibility into compaction frequency + depth. One-line addition. Flagged for review because compact() also had signal-extraction work that was partially restored in commit 7d8fef5 — this is a second port-regression in the same area.",
-          "status": "flagged_for_review"
-        }
-      ]
+      "status": "substantially_fixed",
+      "findings_now": {
+        "soul": "was gated by createSoul coercion bug — fixed in 9cfecf6. Now only gated on quality>=0.85 (self-unblocking as retrieval util improves).",
+        "graduation_event": "writer added in 90bad3e (R1). Fires when createSoul succeeds — transitively unblocked by 9cfecf6.",
+        "maturity_stage": "baseline writer at session-start wired in c7d83bb; ISO coercion bug fixed in 227c2a3. Should populate on first session-start after those commits.",
+        "subagent": "handlers still stubs — R3, user deferred.",
+        "orchestrator_metrics": "writer bridged via E1 — fixed in 4d2e5f0.",
+        "compaction_checkpoint": "writer in pre-compact.ts — fixed in 90bad3e (R2)."
+      }
     },
-    "H_write_time_dedup": {
-      "status": "deferred",
-      "notes": "Requires a feature flag and observation period. With auto-seal-on-write now in place (Stage B), the emergence rate of new near-duplicates should drop organically. Measure after 1-2 weeks of 0.4.0 before activating H."
-    }
+    "H_write_time_dedup": { "status": "deferred", "notes": "Observe Stage B auto-seal effects over 1-2 weeks before adding another dedupe layer." }
   },
-  "flags_for_review": [
-    {
-      "id": "R1",
-      "severity": "important",
-      "title": "graduation_event has no writer — port regression",
-      "details": "src/hook-handlers/session-start.ts:69 reads from graduation_event but nothing writes to it. Users will never see the graduation celebration feature. Fix: add write in attemptGraduation after createSoul success. Before fixing, confirm the desired schema shape (quality_score, volume_score, stage, session_id are already defined in schema.surql:383-391).",
-      "location": "src/engine/soul.ts:attemptGraduation"
-    },
-    {
-      "id": "R2",
-      "severity": "important",
-      "title": "compaction_checkpoint has no writer after the compact() port regression",
-      "details": "store.createCompactionCheckpoint exists but ContextEngine.compact() (its only caller) is dead code. Commit 7d8fef5 restored the structured-signal extraction to pre-compact.ts but not this observability write. Add store.createCompactionCheckpoint call to pre-compact.ts.",
-      "location": "src/hook-handlers/pre-compact.ts"
-    },
+  "remaining_work": [
     {
       "id": "R3",
+      "title": "subagent.ts handlers are TODO stubs",
       "severity": "medium",
-      "title": "subagent hook handlers are TODO stubs",
-      "details": "handleTaskCreated and handleSubagentStop return {} with no logic. subagent: 0 rows in DB. Feature was planned for 'Phase 5' per TODO comment. Design + implement or remove the handlers + schema.",
-      "location": "src/hook-handlers/subagent.ts"
-    },
-    {
-      "id": "R4",
-      "severity": "medium",
-      "title": "upsertAndLinkConcepts bypasses commitKnowledge's auto-seal",
-      "details": "concept-extract.ts:112 still calls store.upsertConcept directly. Every concept created via upsertAndLinkConcepts (called from ingestTurn, after-tool-call, etc.) gets mentions edge but NOT hierarchy/related_to auto-seal. Fix requires breaking a potential circular import — extract link helpers into a new concept-links.ts module, then have concept-extract.ts's upsertAndLinkConcepts use commitKnowledge internally.",
-      "location": "src/engine/concept-extract.ts:upsertAndLinkConcepts"
+      "status": "deferred_per_user",
+      "notes": "Requires feature design (subagent tracking schema: start, stop, parent_session, tools_used, outcome). Not a port-fix."
     },
     {
       "id": "R5",
+      "title": "bootstrap re-seed integration test in practice",
       "severity": "low",
-      "title": "Bootstrap re-seed on upgrade is live but untested in practice",
-      "details": "The version-tag re-seed (a8a880b) should clear pre-0.4.0 entries and seed new ones on first MCP boot after upgrade. Tests cover the unit behavior but no integration test. Worth verifying on first real upgrade: `SELECT count() FROM core_memory WHERE text CONTAINS '[kc_bootstrap_v0.4.0]' GROUP ALL` should return 6.",
-      "location": "src/engine/cognitive-bootstrap.ts"
+      "status": "passive_observation",
+      "notes": "Restart MCP, verify: core_memory drops from 11→6, identity_chunks reference KongCode not KongBrain, bootstrap_version field present."
     },
     {
       "id": "R6",
-      "severity": "low",
-      "title": "Pushed twice with known test failures today",
-      "details": "Commits a536098 and a8a880b both claimed 'all tests pass' in their messages but had failures fixed in 0081c36 and eed341c respectively. Pattern: ran npm test, saw output, moved on without checking pass/fail line. Mitigation going forward: grep the test output for 'FAIL\\|failed' literal before git push.",
-      "location": "session discipline"
+      "title": "pre-push git hook to block on test failure",
+      "severity": "operational_polish",
+      "status": "pending",
+      "notes": "Prevents discipline slip (a536098/a8a880b committed and pushed with test failures). Simple one-line hook."
     },
     {
       "id": "R7",
-      "severity": "info",
-      "title": "0.4.0 tag not cut yet",
-      "details": "Version in package.json is still 0.3.0. 0.4.0 tag should wait for user to verify in their environment. Today's work spans 11 commits on master above v0.3.0."
-    }
-  ],
-  "deferred_items": [
-    "D1 record_finding MCP tool",
-    "D4 cluster_scan MCP tool",
-    "D6 what_is_missing MCP tool",
-    "E1-E3 orchestrator_metrics + trends + health-injection",
-    "H write-time near-duplicate prevention (feature-flag after observation)",
-    "B10 skill kind (when subagent skill graduation is wired)",
-    "B11 explicit correction kind (supersede tool covers the use case already)"
-  ],
-  "workarounds_taken": [
-    {
-      "decision": "upsertAndLinkConcepts still bypasses commitKnowledge",
-      "reason": "Fixing requires moving link helpers to a new file to break a potential circular import. Prioritized shipping B3 (ingestTurn mentions) fast via the existing helper.",
-      "tracked_as": "R4"
+      "title": "tag 0.4.0",
+      "severity": "final",
+      "status": "awaiting_user",
+      "notes": "master has 22 commits above v0.3.0 covering Stages A-F (complete) + E1 + coercion sweep. Tag when verified in practice."
     },
     {
-      "decision": "subagent.ts stubs left as stubs",
-      "reason": "Not a migration target — nothing to migrate. Requires feature design, not port-fix.",
-      "tracked_as": "R3"
+      "id": "E2",
+      "title": "introspect trends action",
+      "severity": "follow_up",
+      "status": "deferred_0.5.0",
+      "notes": "Needs orchestrator_metrics + maintenance_runs data accumulation."
+    },
+    {
+      "id": "E3",
+      "title": "health warning injection in UserPromptSubmit",
+      "severity": "follow_up",
+      "status": "deferred_0.5.0",
+      "notes": "memory_health tool covers the pull shape; inject-shape less urgent."
     }
   ],
   "verification_post_deploy": {
-    "observable_within_minutes_of_upgrade": [
+    "observable_within_minutes_of_restart": [
       "~/.kongbrain/acan_weights.lock appears on first MCP boot if weights are stale",
       "maintenance_runs table gets 4 rows on first session-start (one per job)",
-      "maturity_stage gets 1 row on first session-start (baseline)",
-      "core_memory entries with [kc_bootstrap_v0.4.0] tag replace pre-0.4.0 entries"
+      "maturity_stage gets 1 row on first session-start (coercion fix + baseline wiring)",
+      "orchestrator_metrics gets 1 row per turn after first user message (E1 bridge)",
+      "core_memory drops 11→6 on first boot after version-tag widens delete (f961155)",
+      "identity_chunks reference KongCode (not KongBrain), with bootstrap_version='0.4.0'",
+      ".kongcode-${pid}.sock per-MCP sockets (Stage B#4)"
     ],
     "observable_within_days": [
-      "Concept count growth tracks turn count growth (auto-seal at write working)",
-      "Memory count drops slowly as consolidateMemories + garbageCollectMemories tick (was impossible pre-0.4.0 for small installs)",
-      "Retrieval utilization climbs from 10% baseline toward quality-gate unlock at 0.85",
-      "edge counts on mentions/about_concept/artifact_mentions/related_to stop being zero"
+      "mentions, about_concept, artifact_mentions, narrower, broader, related_to edge counts stop being zero",
+      "memory count drops weekly as consolidateMemories + garbageCollectMemories tick on the lower thresholds",
+      "turn count stays manageable via archiveOldTurns (with turn_archive now recallable)",
+      "retrieval utilization climbs from 10% baseline as graph density grows"
+    ],
+    "observable_only_if_quality_clears_0.85": [
+      "soul: 1 row appears (createSoul succeeds post-coercion-fix)",
+      "graduation_event: 1 row appears (R1 writer fires after soul succeeds)",
+      "new Tier 0 core_memory entry from seedSoulAsCoreMemory"
     ]
-  }
+  },
+  "workarounds_flagged": [
+    {
+      "id": "W1",
+      "summary": "soul ID hardcoded as 'kongbrain' in createSoul + reviseSoul",
+      "reason": "Changing ID without migrating existing soul:kongbrain records would break readers. Left unchanged.",
+      "resolve_when": "Doing a proper graph migration sweep — can flip ID + agent_id + readers atomically."
+    },
+    {
+      "id": "W2",
+      "summary": "upsertAndLinkConcepts's taskId/projectId opts use raw store.relate",
+      "reason": "Those are outgoing concept→task/project edges not covered by the generic auto-seal. Preserved explicit calls.",
+      "resolve_when": "A 'link_outgoing' helper pattern would clean this up but not worth it until multiple callers need the same thing."
+    }
+  ]
 }

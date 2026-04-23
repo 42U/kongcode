@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+# Pre-push guard for kongcode.
+#
+# Enforces the discipline invariant that kept slipping during the 0.4.0
+# autonomous run: two commits (a536098, a8a880b) were pushed claiming
+# "all tests pass" in the commit message but actually had test failures.
+# Root cause each time: ran `npm test`, saw output, didn't grep the
+# pass/fail summary before `git push`.
+#
+# This hook:
+#   1. Runs `npm test` (full suite)
+#   2. Greps the output for FAIL or "failed" literal
+#   3. Blocks the push on either
+#
+# To install on a clone:
+#   git config core.hooksPath hooks/scripts/git
+#
+# To skip (rarely — only for clearly non-code pushes like docs, or when
+# CI will re-run anyway):
+#   git push --no-verify
+
+set -euo pipefail
+
+echo "[pre-push] running npm test before push..."
+
+# Tee to a log so a diagnostic tail is available if the hook aborts.
+LOG=$(mktemp -t kongcode-pre-push.XXXXXX)
+if npm test 2>&1 | tee "$LOG"; then
+  # npm test exited 0, but still grep for FAIL — some test runners pass
+  # with individual failures or produce summary lines that mean "no".
+  if grep -qE "^\s*(FAIL|[^a-zA-Z_]failed)" "$LOG"; then
+    echo ""
+    echo "[pre-push] FAIL grep matched even though npm test exited 0:"
+    grep -E "^\s*(FAIL|[^a-zA-Z_]failed)" "$LOG" | head -5
+    echo "[pre-push] Push blocked. Fix the failure or use --no-verify if this is a false positive."
+    rm -f "$LOG"
+    exit 1
+  fi
+else
+  echo ""
+  echo "[pre-push] npm test exited non-zero. Push blocked."
+  echo "[pre-push] Last 20 lines of test output:"
+  tail -20 "$LOG"
+  rm -f "$LOG"
+  exit 1
+fi
+
+rm -f "$LOG"
+echo "[pre-push] all tests pass — push proceeding."
