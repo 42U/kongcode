@@ -110,14 +110,20 @@ export async function seedCognitiveBootstrap(
   // fires regardless. Condition is narrow: text must NOT contain the
   // version tag AND must start with a known pre-0.4.0 fingerprint.
   try {
+    // SurQL precedence + string::starts_with arity can be finicky; use
+    // explicit parens + CONTAINS so the planner has nothing to misinterpret.
+    // The fingerprint prefixes are all unique-enough phrases that a naive
+    // CONTAINS match is safe — no user-authored core_memory entry would
+    // embed "MEMORY REFLEX" verbatim in its operational text.
     await store.queryExec(
       `DELETE core_memory WHERE
-         NOT text CONTAINS '[kc_bootstrap_v' AND
-         (string::starts_with(text, 'MEMORY REFLEX:') OR
-          string::starts_with(text, 'RECALL BEFORE GUESSING:') OR
-          string::starts_with(text, 'GRAPH-AWARE SAVING:') OR
-          string::starts_with(text, 'MEMORY TOOLS:') OR
-          string::starts_with(text, 'GRAPH SCHEMA REFERENCE:'))`,
+         (!(text CONTAINS '[kc_bootstrap_v'))
+         AND
+         (text CONTAINS 'MEMORY REFLEX'
+           OR text CONTAINS 'RECALL BEFORE GUESSING'
+           OR text CONTAINS 'GRAPH-AWARE SAVING'
+           OR text CONTAINS 'MEMORY TOOLS:'
+           OR text CONTAINS 'GRAPH SCHEMA REFERENCE')`,
     );
   } catch (e) {
     swallow.warn("bootstrap:migrateLegacyCore", e);
