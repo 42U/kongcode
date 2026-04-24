@@ -115,6 +115,9 @@ export async function seedCognitiveBootstrap(
     // The fingerprint prefixes are all unique-enough phrases that a naive
     // CONTAINS match is safe — no user-authored core_memory entry would
     // embed "MEMORY REFLEX" verbatim in its operational text.
+    // SELF-TEACHING CYCLE was a transient pre-0.4.0 CORE_ENTRY (dropped
+    // before a8a880b landed) that survived on installs bootstrapped in
+    // that window; include it so those installs migrate cleanly to 6.
     await store.queryExec(
       `DELETE core_memory WHERE
          (!(text CONTAINS '[kc_bootstrap_v'))
@@ -123,7 +126,8 @@ export async function seedCognitiveBootstrap(
            OR text CONTAINS 'RECALL BEFORE GUESSING'
            OR text CONTAINS 'GRAPH-AWARE SAVING'
            OR text CONTAINS 'MEMORY TOOLS:'
-           OR text CONTAINS 'GRAPH SCHEMA REFERENCE')`,
+           OR text CONTAINS 'GRAPH SCHEMA REFERENCE'
+           OR text CONTAINS 'SELF-TEACHING CYCLE')`,
     );
   } catch (e) {
     swallow.warn("bootstrap:migrateLegacyCore", e);
@@ -157,7 +161,8 @@ export async function seedCognitiveBootstrap(
              string::starts_with(text, 'RECALL BEFORE GUESSING:') OR
              string::starts_with(text, 'GRAPH-AWARE SAVING:') OR
              string::starts_with(text, 'MEMORY TOOLS:') OR
-             string::starts_with(text, 'GRAPH SCHEMA REFERENCE:')`,
+             string::starts_with(text, 'GRAPH SCHEMA REFERENCE:') OR
+             string::starts_with(text, 'SELF-TEACHING CYCLE:')`,
         );
       } catch (e) {
         swallow.warn("bootstrap:clearPrior", e);
