@@ -122,6 +122,16 @@ async function handleRequest(
 /**
  * Remove `.kongcode-<pid>.sock` files in `dir` whose PID is no longer alive.
  * Skips ownPid and any PID that exists but we can't signal (EPERM).
+ *
+ * Also reaps live sibling MCPs by sending SIGTERM to their PIDs (default on).
+ * The hook proxy routes to whichever per-PID socket has the newest mtime, so
+ * older MCPs become unreachable after a Claude Code restart and just sit
+ * holding memory until killed manually. Reaping closes that loop.
+ *
+ * Set `KONGCODE_KEEP_SIBLINGS=1` to opt out — required when running multiple
+ * Claude Code windows simultaneously, since each window has its own MCP and
+ * killing siblings would orphan the others. Single-window users (the common
+ * case) want default-on behavior so no zombies linger.
  */
 export function sweepStaleSockets(dir: string, ownPid: number): void {
   let entries: string[];
@@ -130,26 +140,41 @@ export function sweepStaleSockets(dir: string, ownPid: number): void {
   } catch {
     return;
   }
-  let removed = 0;
+  const keepSiblings = process.env.KONGCODE_KEEP_SIBLINGS === "1";
+  let removedFiles = 0;
+  let reapedLive = 0;
   for (const name of entries) {
     const m = /^\.kongcode-(\d+)\.sock$/.exec(name);
     if (!m) continue;
     const pid = Number(m[1]);
     if (!Number.isFinite(pid) || pid === ownPid) continue;
     let alive = true;
+    let foreign = false;
     try {
       process.kill(pid, 0);
     } catch (e: unknown) {
       const code = (e as NodeJS.ErrnoException)?.code;
       alive = code !== "ESRCH";
+      foreign = code === "EPERM";
+    }
+    if (alive && !foreign && !keepSiblings) {
+      try {
+        process.kill(pid, "SIGTERM");
+        reapedLive++;
+        // Sibling will unlink its own socket on graceful shutdown; remove
+        // here too in case SIGTERM handling is slow or absent.
+        try { unlinkSync(`${dir}/${name}`); removedFiles++; } catch { /* ignore */ }
+      } catch { /* ignore — race or perms */ }
+      continue;
     }
     if (alive) continue;
     try {
       unlinkSync(`${dir}/${name}`);
-      removed++;
+      removedFiles++;
     } catch { /* ignore */ }
   }
-  if (removed > 0) log.info(`Swept ${removed} stale kongcode socket file(s)`);
+  if (removedFiles > 0) log.info(`Swept ${removedFiles} stale kongcode socket file(s)`);
+  if (reapedLive > 0) log.info(`Reaped ${reapedLive} sibling MCP process(es) (set KONGCODE_KEEP_SIBLINGS=1 to opt out)`);
 }
 
 /**
