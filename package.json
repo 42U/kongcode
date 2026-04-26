@@ -1,12 +1,12 @@
 {
   "name": "kongcode",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Graph-backed persistent memory engine for Claude Code. SurrealDB + BGE-M3 vector embeddings that learn across sessions.",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/voidorigin/kongcode.git"
+    "url": "https://github.com/42U/kongcode.git"
   },
   "keywords": [
     "claude-code",

@@ -403,10 +403,8 @@ async function main(): Promise<void> {
     return handleToolCall(name, (args ?? {}) as Record<string, unknown>);
   });
 
-  // Initialize services
-  await initialize();
-
-  // Graceful shutdown
+  // Register signal handlers BEFORE the long init so SIGTERM/SIGINT during
+  // startup still triggers graceful shutdown.
   process.on("SIGTERM", async () => {
     await shutdown();
     process.exit(0);
@@ -416,10 +414,19 @@ async function main(): Promise<void> {
     process.exit(0);
   });
 
-  // Start MCP stdio transport
+  // Connect transport FIRST so the Claude Code stdio handshake completes
+  // immediately. initialize() can take tens of seconds (cold sentence-
+  // transformer load), and Claude Code marks the MCP failed if `initialize`
+  // JSON-RPC isn't answered within its handshake window. Tool calls that
+  // arrive before initialize() finishes hit the null-guard at line 277-279
+  // and return a friendly "not initialized" message — the model retries
+  // a moment later and gets a working tool. Issue #4.
   const transport = new StdioServerTransport();
   await server.connect(transport);
   log.info("KongCode MCP server running on stdio");
+
+  // Now initialize services — slow embedding load no longer blocks handshake.
+  await initialize();
 }
 
 main().catch((err) => {
