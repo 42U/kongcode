@@ -1,14 +1,23 @@
 {
-  "current_version": "0.4.4",
+  "current_version": "0.4.5",
   "released": "2026-04-26",
   "goal": "KongCode — substrate-does-the-work. Every write auto-seals. Every hook fires end-to-end. Every signal lands.",
-  "tests_passing": "479/479",
+  "tests_passing": "483/483",
   "typecheck": "clean",
   "build": "clean",
-  "master_head": "3b9a452",
+  "master_head": "5ecb513",
   "pre_push_hook_enforced": true,
 
   "recent_releases": {
+    "0.4.5": {
+      "date": "2026-04-26",
+      "theme": "Per-turn token accounting via transcript_path",
+      "ships": [
+        "orchestrator_metrics.actual_tokens_in/out now populate from the transcript instead of staying at 0 — readTurnTokenUsage() walks the JSONL bottom-up summing assistant output_tokens until the previous user prompt and captures latest input_tokens (incl. cache_read + cache_creation)",
+        "Stop hook calls it after readLatestAssistantText so the same tail-read serves both",
+        "4 new transcript-reader tests covering input/output split, turn boundary detection, missing-fields fallback, missing-file safety"
+      ]
+    },
     "0.4.4": {
       "date": "2026-04-26",
       "theme": "Windowed retrieval-util quality signal",

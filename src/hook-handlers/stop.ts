@@ -12,7 +12,7 @@ import { evaluateRetrieval } from "../engine/retrieval-quality.js";
 import { postflight } from "../engine/orchestrator.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
-import { readLatestAssistantText } from "../engine/transcript-reader.js";
+import { readLatestAssistantText, readTurnTokenUsage } from "../engine/transcript-reader.js";
 
 export async function handleStop(
   state: GlobalPluginState,
@@ -33,6 +33,20 @@ export async function handleStop(
   const transcriptPath = (payload.transcript_path as string) ?? "";
   const assistantText = transcriptPath ? readLatestAssistantText(transcriptPath) : "";
   if (assistantText) session.lastAssistantText = assistantText;
+
+  // Pull per-turn token usage from the transcript and bump the cumulative
+  // session counters. Without this, _pendingInputTokens stays at 0 (the
+  // engine-side llm-output handler that bumps it is test-only), the delta
+  // math below always yields 0, and postflight stamps every
+  // orchestrator_metrics row with actual_tokens_in/out=0. Same dead-code
+  // pattern as the v0.4.2 Stop fix — close the loop via transcript_path.
+  if (transcriptPath) {
+    const usage = readTurnTokenUsage(transcriptPath);
+    if (usage) {
+      session._pendingInputTokens += usage.inputTokens;
+      session._pendingOutputTokens += usage.outputTokens;
+    }
+  }
 
   // Ingest assistant response (await — evaluateRetrieval below needs the
   // assistant turn id this call sets on the session). Previously this was
