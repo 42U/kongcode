@@ -177,10 +177,27 @@ async function statusAction(store: any, sessionId: string, embeddings: any) {
 
 // Probe the in-process BGE-M3 service. isAvailable() only checks the `ready`
 // flag; a real one-token embed proves the runtime path actually works (catches
-// native-binding crashes that leave `ready=true` but throw on use).
+// native-binding crashes that leave `ready=true` but throw on use). When down,
+// pull from getDiagnostics() to name the actual init failure instead of just
+// reporting `isAvailable=false`.
 async function probeEmbeddingService(embeddings: any): Promise<{ status: "ok" | "down" | "degraded"; label: string }> {
-  if (!embeddings || typeof embeddings.isAvailable !== "function" || !embeddings.isAvailable()) {
-    return { status: "down", label: "DOWN — recall and any embed-dependent ops will fail (isAvailable=false)" };
+  if (!embeddings || typeof embeddings.isAvailable !== "function") {
+    return { status: "down", label: "DOWN — embedding service not present" };
+  }
+  if (!embeddings.isAvailable()) {
+    const diag = typeof embeddings.getDiagnostics === "function" ? embeddings.getDiagnostics() : null;
+    if (diag?.initError) {
+      const msg = String(diag.initError.message ?? "").split("\n")[0].slice(0, 200);
+      return { status: "down", label: `DOWN — initialize() threw: ${msg}` };
+    }
+    if (diag?.initStartedAt != null && diag.initFinishedAt == null) {
+      const ageS = Math.floor((Date.now() - diag.initStartedAt) / 1000);
+      return { status: "down", label: `DOWN — initialize() in progress (${ageS}s elapsed; native build may be running)` };
+    }
+    if (diag?.initStartedAt == null) {
+      return { status: "down", label: "DOWN — initialize() never called (boot path may have skipped embedding init)" };
+    }
+    return { status: "down", label: "DOWN — isAvailable=false (no diagnostics captured)" };
   }
   try {
     const probe = embeddings.embed("ping").then((v: number[]) => v?.length ?? 0);

@@ -8,6 +8,16 @@ import { log } from "./log.js";
 type LlamaEmbeddingContext = import("node-llama-cpp").LlamaEmbeddingContext;
 type LlamaModel = import("node-llama-cpp").LlamaModel;
 
+/** Snapshot of the embedding service's init state, surfaced via diagnostics. */
+export interface EmbeddingDiagnostics {
+  ready: boolean;
+  modelPath: string;
+  initStartedAt: number | null;
+  initFinishedAt: number | null;
+  initDurationMs: number | null;
+  initError: { message: string; stack?: string } | null;
+}
+
 /** BGE-M3 embedding service (1024-dim via GGUF) with an LRU cache of up to 512 entries. */
 export class EmbeddingService {
   private model: LlamaModel | null = null;
@@ -16,30 +26,65 @@ export class EmbeddingService {
   /** LRU embedding cache keyed by text, capped at maxCacheSize entries. */
   private cache = new Map<string, number[]>();
   private readonly maxCacheSize = 512;
+  // Init lifecycle telemetry. Captured here so the introspect probe can name
+  // the failure reason instead of just reporting "isAvailable=false". Without
+  // this, callers that swallow init() errors (mcp-server boot path) leave the
+  // service silently unavailable with no breadcrumb.
+  private initStartedAt: number | null = null;
+  private initFinishedAt: number | null = null;
+  private initError: Error | null = null;
 
   constructor(private readonly config: EmbeddingConfig) {}
 
   /** Initialize the embedding model. Returns true if freshly loaded, false if already ready. */
   async initialize(): Promise<boolean> {
     if (this.ready) return false;
-    if (!existsSync(this.config.modelPath)) {
-      throw new Error(
-        `Embedding model not found at: ${this.config.modelPath}\n  Download BGE-M3 GGUF or set EMBED_MODEL_PATH`,
-      );
+    this.initStartedAt = Date.now();
+    this.initError = null;
+    try {
+      if (!existsSync(this.config.modelPath)) {
+        throw new Error(
+          `Embedding model not found at: ${this.config.modelPath}\n  Download BGE-M3 GGUF or set EMBED_MODEL_PATH`,
+        );
+      }
+      const { getLlama, LlamaLogLevel } = await import("node-llama-cpp");
+      const llama = await getLlama({
+        logLevel: LlamaLogLevel.error,
+        logger: (level, message) => {
+          if (message.includes("missing newline token")) return;
+          if (level === LlamaLogLevel.error) log.error(`[llama] ${message}`);
+          else if (level === LlamaLogLevel.warn) log.warn(`[llama] ${message}`);
+        },
+      });
+      this.model = await llama.loadModel({ modelPath: this.config.modelPath });
+      this.ctx = await this.model.createEmbeddingContext();
+      this.ready = true;
+      this.initFinishedAt = Date.now();
+      return true;
+    } catch (err) {
+      this.initError = err instanceof Error ? err : new Error(String(err));
+      this.initFinishedAt = Date.now();
+      // Log loudly so anyone tailing MCP stderr sees it immediately, even if
+      // the caller swallows the throw.
+      log.error(`[embeddings] initialize() failed: ${this.initError.message}`);
+      throw this.initError;
     }
-    const { getLlama, LlamaLogLevel } = await import("node-llama-cpp");
-    const llama = await getLlama({
-      logLevel: LlamaLogLevel.error,
-      logger: (level, message) => {
-        if (message.includes("missing newline token")) return;
-        if (level === LlamaLogLevel.error) log.error(`[llama] ${message}`);
-        else if (level === LlamaLogLevel.warn) log.warn(`[llama] ${message}`);
-      },
-    });
-    this.model = await llama.loadModel({ modelPath: this.config.modelPath });
-    this.ctx = await this.model.createEmbeddingContext();
-    this.ready = true;
-    return true;
+  }
+
+  /** Snapshot init state — used by introspect/memory_health probes to name failures. */
+  getDiagnostics(): EmbeddingDiagnostics {
+    const start = this.initStartedAt;
+    const end = this.initFinishedAt;
+    return {
+      ready: this.ready,
+      modelPath: this.config.modelPath,
+      initStartedAt: start,
+      initFinishedAt: end,
+      initDurationMs: start != null && end != null ? end - start : null,
+      initError: this.initError
+        ? { message: this.initError.message, stack: this.initError.stack }
+        : null,
+    };
   }
 
   /** Return the embedding vector for text, serving from LRU cache on repeat calls. */

@@ -37,9 +37,27 @@ interface HealthReport {
 }
 
 async function probeEmbeddings(embeddings: unknown): Promise<{ status: "ok" | "degraded" | "down"; detail?: string }> {
-  const e = embeddings as { isAvailable?: () => boolean; embed?: (s: string) => Promise<number[]> } | null;
-  if (!e || typeof e.isAvailable !== "function" || !e.isAvailable()) {
-    return { status: "down", detail: "isAvailable=false" };
+  const e = embeddings as {
+    isAvailable?: () => boolean;
+    embed?: (s: string) => Promise<number[]>;
+    getDiagnostics?: () => { ready: boolean; initStartedAt: number | null; initFinishedAt: number | null; initError: { message: string } | null };
+  } | null;
+  if (!e || typeof e.isAvailable !== "function") {
+    return { status: "down", detail: "embedding service not present" };
+  }
+  if (!e.isAvailable()) {
+    const diag = typeof e.getDiagnostics === "function" ? e.getDiagnostics() : null;
+    if (diag?.initError) {
+      return { status: "down", detail: `initialize() threw: ${String(diag.initError.message ?? "").split("\n")[0].slice(0, 200)}` };
+    }
+    if (diag?.initStartedAt != null && diag.initFinishedAt == null) {
+      const ageS = Math.floor((Date.now() - diag.initStartedAt) / 1000);
+      return { status: "down", detail: `initialize() in progress (${ageS}s elapsed; native build may be running)` };
+    }
+    if (diag?.initStartedAt == null) {
+      return { status: "down", detail: "initialize() never called" };
+    }
+    return { status: "down", detail: "isAvailable=false (no diagnostics)" };
   }
   try {
     const probe = e.embed!("ping").then(v => v?.length ?? 0);
