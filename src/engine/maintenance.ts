@@ -26,6 +26,7 @@ export function runBootstrapMaintenance(state: GlobalPluginState): void {
     store.archiveOldTurns(),
     store.consolidateMemories((text) => embeddings.embed(text)),
     store.garbageCollectMemories(),
+    store.purgeStalePendingWork(),
     checkACANReadiness(store, config.thresholds.acanTrainingThreshold),
   ]).catch(e => swallow.warn("bootstrap:maintenance", e));
 }

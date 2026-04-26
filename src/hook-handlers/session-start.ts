@@ -138,5 +138,27 @@ export async function handleSessionStart(
     } catch { /* wakeup will be injected on next UserPromptSubmit */ }
   }
 
-  return makeHookOutput("SessionStart", wakeupText ?? undefined);
+  // Surface pending_work backlog so the assistant knows to drain. The queue
+  // is consumer-pull (subagents call fetch_pending_work), and without a
+  // signal here it sits invisible until something else asks. Threshold of 5
+  // avoids noise on healthy sessions; purgeStalePendingWork keeps the count
+  // honest by dropping items older than 7d.
+  let pendingNote: string | null = null;
+  if (store.isAvailable()) {
+    try {
+      const rows = await store.queryFirst<{ count: number }>(
+        `SELECT count() AS count FROM pending_work WHERE status = "pending" GROUP ALL`,
+      );
+      const count = rows[0]?.count ?? 0;
+      if (count >= 5) {
+        pendingNote = `[PENDING WORK]\n${count} background items waiting. Call fetch_pending_work to claim one, then commit_work_results when done. Heavy types (extraction, causal_graduate) need an Opus subagent; light types (reflection, handoff_note) can run inline.`;
+      }
+    } catch (e) {
+      swallow("sessionStart:pendingWorkCheck", e);
+    }
+  }
+
+  const parts = [wakeupText, pendingNote].filter((p): p is string => !!p);
+  const additionalContext = parts.join("\n\n") || undefined;
+  return makeHookOutput("SessionStart", additionalContext);
 }

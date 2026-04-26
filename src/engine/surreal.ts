@@ -1276,6 +1276,38 @@ export class SurrealStore {
     }
   }
 
+  /**
+   * Drop pending_work rows older than 7 days, regardless of status.
+   *
+   * The queue is consumer-pull (subagents call fetch_pending_work). Without
+   * this purge, stale items from long-gone sessions accumulate and pollute
+   * health metrics. 7d is well past the useful window — extraction work for
+   * a week-old session has missed its tagging window, and graduation work
+   * will be re-enqueued by future maintenance if still relevant.
+   */
+  async purgeStalePendingWork(): Promise<number> {
+    const started = Date.now();
+    try {
+      const countRows = await this.queryFirst<{ count: number }>(
+        `SELECT count() AS count FROM pending_work GROUP ALL`,
+      );
+      const count = countRows[0]?.count ?? 0;
+      if (!(await this.shouldRunMaintenance("purgeStalePendingWork", 10, 1, count))) return 0;
+
+      const purged = await this.queryMulti<number>(
+        `LET $stale = (SELECT id FROM pending_work WHERE created_at < time::now() - 7d);
+         FOR $p IN $stale { DELETE $p.id; };
+         RETURN array::len($stale);`,
+      );
+      const n = Number(purged ?? 0);
+      await this.recordMaintenanceRun("purgeStalePendingWork", n, Date.now() - started);
+      return n;
+    } catch (e) {
+      swallow.warn("surreal:purgeStalePendingWork", e);
+      return 0;
+    }
+  }
+
   async archiveOldTurns(): Promise<number> {
     const started = Date.now();
     try {

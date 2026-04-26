@@ -8,7 +8,8 @@
  */
 
 import { createServer, type Server as HttpServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import type { GlobalPluginState } from "./engine/state.js";
 import { log } from "./engine/log.js";
 
@@ -119,6 +120,39 @@ async function handleRequest(
 }
 
 /**
+ * Remove `.kongcode-<pid>.sock` files in `dir` whose PID is no longer alive.
+ * Skips ownPid and any PID that exists but we can't signal (EPERM).
+ */
+export function sweepStaleSockets(dir: string, ownPid: number): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  let removed = 0;
+  for (const name of entries) {
+    const m = /^\.kongcode-(\d+)\.sock$/.exec(name);
+    if (!m) continue;
+    const pid = Number(m[1]);
+    if (!Number.isFinite(pid) || pid === ownPid) continue;
+    let alive = true;
+    try {
+      process.kill(pid, 0);
+    } catch (e: unknown) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      alive = code !== "ESRCH";
+    }
+    if (alive) continue;
+    try {
+      unlinkSync(`${dir}/${name}`);
+      removed++;
+    } catch { /* ignore */ }
+  }
+  if (removed > 0) log.info(`Swept ${removed} stale kongcode socket file(s)`);
+}
+
+/**
  * Start the internal HTTP API.
  * Listens on a Unix socket (preferred) or localhost:0 (fallback).
  */
@@ -138,7 +172,10 @@ export async function startHttpApi(
   });
 
   if (sock) {
-    // Clean up stale socket file
+    // Sweep sibling sockets whose owning MCP process is dead. Uses
+    // ESRCH-only detection so a foreign-owned (EPERM) PID is left alone.
+    sweepStaleSockets(dirname(sock), process.pid);
+    // Clean up our own stale socket file from a prior crash with same PID
     if (existsSync(sock)) {
       try { unlinkSync(sock); } catch { /* ignore */ }
     }

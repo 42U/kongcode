@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { stageRetrieval, getStagedItems, recordToolOutcome, evaluateRetrieval } from "../src/engine/retrieval-quality.js";
+import { stageRetrieval, getStagedItems, recordToolOutcome, evaluateRetrieval, computeSignals } from "../src/engine/retrieval-quality.js";
 import type { RetrievedItem } from "../src/engine/retrieval-quality.js";
 
 function makeItem(overrides: Partial<RetrievedItem> = {}): RetrievedItem {
@@ -141,5 +141,52 @@ describe("evaluateRetrieval", () => {
     };
     // Should not throw
     await evaluateRetrieval("turn:1", "response", mockStore as any);
+  });
+});
+
+describe("computeSignals — utilization formula", () => {
+  function mkItem(text: string, extra: Partial<RetrievedItem> = {}): RetrievedItem {
+    return { id: "concept:test", table: "concept", text, score: 1, ...extra } as RetrievedItem;
+  }
+
+  it("gives partial credit for topical (unigram) overlap without exact-term reuse", () => {
+    // Old formula halved unigram before max(), often pinning utilization at 0
+    // when phrasing differed. New blend keeps broad overlap visible.
+    const item = mkItem("The retrieval pipeline embeds queries with bge-m3 and ranks via cosine similarity scoring");
+    const response = "i used cosine similarity scoring on embedded queries to rank retrieval results".toLowerCase();
+    const { utilization } = computeSignals(item, response, null);
+    expect(utilization).toBeGreaterThan(0.15);
+  });
+
+  it("toolSuccess=true adds a ~0.2 boost", () => {
+    const item = mkItem("Use git rebase to squash commits");
+    const response = "ran git rebase to clean up history".toLowerCase();
+    const baseline = computeSignals(item, response, null).utilization;
+    const boosted = computeSignals(item, response, true).utilization;
+    expect(boosted).toBeGreaterThan(baseline);
+    expect(boosted - baseline).toBeCloseTo(0.2, 1);
+  });
+
+  it("toolSuccess=false does not penalize relative to null", () => {
+    const item = mkItem("BGE-M3 embeddings");
+    const response = "bge-m3 embeddings worked fine".toLowerCase();
+    const neutral = computeSignals(item, response, null).utilization;
+    const failed = computeSignals(item, response, false).utilization;
+    expect(failed).toBe(neutral);
+  });
+
+  it("clamps utilization to [0, 1] even when boost would push over", () => {
+    const item = mkItem("KongCode persistent memory graph SurrealDB BGE-M3 embeddings");
+    const response = "kongcode persistent memory graph surrealdb bge-m3 embeddings all working".toLowerCase();
+    const { utilization } = computeSignals(item, response, true);
+    expect(utilization).toBeLessThanOrEqual(1);
+    expect(utilization).toBeGreaterThan(0.5);
+  });
+
+  it("returns ~0 for unrelated content", () => {
+    const item = mkItem("Algorithmic trading volatility risk metrics for derivatives");
+    const response = "the cat sat on the mat".toLowerCase();
+    const { utilization } = computeSignals(item, response, null);
+    expect(utilization).toBeLessThan(0.05);
   });
 });

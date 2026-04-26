@@ -119,7 +119,7 @@ export async function evaluateRetrieval(
 
 // --- Signal computation ---
 
-function computeSignals(
+export function computeSignals(
   item: RetrievedItem,
   responseLower: string,
   toolSuccess: boolean | null,
@@ -128,10 +128,20 @@ function computeSignals(
   const memText = rawText.toLowerCase();
   const contextTokens = Math.ceil(rawText.length / 4);
 
+  // Lexical signals: specific-term reuse (high signal) + topical word overlap
+  // (low signal). Previously `Math.max(..., unigram * 0.5)` was the whole
+  // story, which gave a hard ceiling at the strongest single signal and
+  // halved unigram before it could compete — pinning utilization at ~10%
+  // graph-wide. Now: a weighted blend so partial-but-broad overlap counts,
+  // and a small bonus when retrieval was followed by successful tool use
+  // (tool_success was already computed but never folded into utilization).
   const keyTermScore = keyTermOverlap(rawText, responseLower);
   const trigramScore = trigramOverlap(memText, responseLower);
   const unigramScore = unigramOverlap(memText, responseLower);
-  const utilization = Math.max(keyTermScore, trigramScore, unigramScore * 0.5);
+  const specific = Math.max(keyTermScore, trigramScore);
+  const lexical = 0.6 * specific + 0.4 * unigramScore;
+  const toolBoost = toolSuccess === true ? 0.2 : 0;
+  const utilization = Math.min(1, lexical + toolBoost);
 
   let recency = 0.5;
   if (item.timestamp) {
