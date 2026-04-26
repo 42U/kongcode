@@ -1,14 +1,28 @@
 {
-  "current_version": "0.4.5",
+  "current_version": "0.5.0",
   "released": "2026-04-26",
   "goal": "KongCode — substrate-does-the-work. Every write auto-seals. Every hook fires end-to-end. Every signal lands.",
-  "tests_passing": "483/483",
+  "tests_passing": "496/496",
   "typecheck": "clean",
   "build": "clean",
-  "master_head": "5ecb513",
+  "master_head": "3f8ea14",
   "pre_push_hook_enforced": true,
 
   "recent_releases": {
+    "0.5.0": {
+      "date": "2026-04-26",
+      "theme": "Observability — daily rollups + anomaly-only health injection (E2 + E3)",
+      "ships": [
+        "New table orchestrator_metrics_daily — one row per day, populated by a turn-driven rollup pass on the first Stop after midnight UTC",
+        "src/engine/observability.ts (~280 lines): rollupDailyMetrics, pruneRawMetrics (30d retention on raw), computeTrends (E2), detectAnomalies (E3), formatAnomalyBlock, makeCooldownState",
+        "introspect tool: new 'trends' action emits per-day rolling means table + window summary",
+        "UserPromptSubmit: prepends [kongcode-alert] block ONLY when an absolute-threshold anomaly fires — no noise on healthy turns",
+        "4 anomaly detectors enabled: substrate.embedding_gap, substrate.pending_work_buildup, gate.graduation_ready, gate.graduation_close",
+        "Statistical z-score detectors (perf.token_balloon, perf.duration_spike, quality.tool_failure_spike, quality.retrieval_dropping, substrate.writes_stalled) deferred to 0.5.1 — need ~7d of orchestrator_metrics_daily history to calibrate baselines without false positives",
+        "Severity-tiered cooldowns: 1h critical / 24h warn / 7d info — same flag never spams every turn",
+        "13 new observability tests covering rollup idempotency, trend math, each detector, cooldown semantics, formatter shape"
+      ]
+    },
     "0.4.5": {
       "date": "2026-04-26",
       "theme": "Per-turn token accounting via transcript_path",
@@ -84,12 +98,17 @@
     ]
   },
 
-  "deferred_to_0_5_0": {
-    "E2_introspect_trends": "Needs orchestrator_metrics accumulation",
-    "E3_health_inject_on_UserPromptSubmit": "Surface health diagnostics into context",
-    "H_write_time_dedup": "Observe Stage B effects in production first",
-    "subagent_v2_artifact_attribution": "Thread active subagent_id through after-tool-call + post-tool-use",
-    "issue_2_shared_daemon": "Multi-MCP Option B — shared daemon pattern for >1 Claude Code window"
+  "deferred": {
+    "0.5.1": {
+      "statistical_anomaly_detectors": "perf.token_balloon, perf.duration_spike, quality.tool_failure_spike, quality.retrieval_dropping, substrate.writes_stalled — need ~7d of orchestrator_metrics_daily rollups to calibrate z-score baselines",
+      "embedding_gap_hysteresis": "Add 'AND not improving over last hour' to substrate.embedding_gap to prevent false positives during legitimate ingestion bursts"
+    },
+    "0.6.0_or_later": {
+      "H_write_time_dedup": "Observe Stage B effects in production first",
+      "subagent_v2_artifact_attribution": "Thread active subagent_id through after-tool-call + post-tool-use",
+      "issue_2_shared_daemon": "Multi-MCP Option B — shared daemon pattern for >1 Claude Code window",
+      "preflight_self_tuning": "Close the predicted-vs-actual loop — auto-tune adaptive config from orchestrator_metrics history"
+    }
   },
 
   "operational_notes": [

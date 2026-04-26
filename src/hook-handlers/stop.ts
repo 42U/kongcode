@@ -13,6 +13,7 @@ import { postflight } from "../engine/orchestrator.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 import { readLatestAssistantText, readTurnTokenUsage } from "../engine/transcript-reader.js";
+import { rollupDailyMetrics, pruneRawMetrics } from "../engine/observability.js";
 
 export async function handleStop(
   state: GlobalPluginState,
@@ -97,6 +98,22 @@ export async function handleStop(
     session._pendingPreflight = null;
     session._pendingPreflightInput = "";
     session._turnToolCalls = 0;
+  }
+
+  // Daily rollup trigger — turn-driven (no setInterval drift). On the
+  // first Stop after midnight UTC, roll up yesterday's metrics into
+  // orchestrator_metrics_daily and prune raw rows older than 30d. Cheap
+  // when the day hasn't changed (one string compare); the actual rollup
+  // and prune fire at most once per day per running MCP.
+  if (store.isAvailable()) {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD UTC
+    if (state.lastRollupDay !== today) {
+      const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      rollupDailyMetrics(store, yesterday)
+        .then(() => pruneRawMetrics(store, 30))
+        .catch(e => swallow.warn("stop:dailyRollup", e));
+      state.lastRollupDay = today;
+    }
   }
 
   log.debug(`Stop: turn=${session.userTurnCount}, tokens=${session.cumulativeTokens}`);

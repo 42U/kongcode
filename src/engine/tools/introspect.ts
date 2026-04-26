@@ -8,6 +8,7 @@ import type { GlobalPluginState, SessionState } from "../state.js";
 import { assertRecordId } from "../surreal.js";
 import { migrateWorkspace } from "../workspace-migrate.js";
 import { checkGraduation, formatGraduationReport, hasSoul } from "../soul.js";
+import { computeTrends } from "../observability.js";
 
 const ALLOWED_TABLES = new Set([
   "agent", "project", "task", "artifact", "concept",
@@ -61,7 +62,8 @@ const introspectSchema = Type.Object({
     Type.Literal("verify"),
     Type.Literal("query"),
     Type.Literal("migrate"),
-  ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (ingest workspace .md files into DB — ask user first)." }),
+    Type.Literal("trends"),
+  ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (ingest workspace .md files into DB — ask user first), trends (daily rolling means + anomaly flags from orchestrator_metrics_daily)." }),
   table: Type.Optional(Type.String({ description: "Table name for count/query actions." })),
   filter: Type.Optional(Type.String({ description: "For count: active, inactive, recent_24h, with_embedding, unresolved. For query: template name." })),
   record_id: Type.Optional(Type.String({ description: "Record ID for verify action (e.g. memory:abc123)." })),
@@ -74,7 +76,7 @@ export function createIntrospectToolDef(state: GlobalPluginState, session: Sessi
     description: "Inspect your memory database. Use for ALL database queries — NEVER use curl or bash to access SurrealDB directly. Actions: status (health + table counts), count (filtered row counts), verify (confirm record exists), query (predefined reports).",
     parameters: introspectSchema,
     execute: async (_toolCallId: string, params: {
-      action: "status" | "count" | "verify" | "query" | "migrate";
+      action: "status" | "count" | "verify" | "query" | "migrate" | "trends";
       table?: string; filter?: string; record_id?: string;
     }) => {
       const { store } = state;
@@ -89,6 +91,7 @@ export function createIntrospectToolDef(state: GlobalPluginState, session: Sessi
           case "verify": return await verifyAction(store, params.record_id);
           case "query": return await queryAction(store, params.table, params.filter);
           case "migrate": return await migrateAction(state);
+          case "trends": return await trendsAction(state);
         }
       } catch (err) {
         return { content: [{ type: "text" as const, text: `Introspect failed: ${err}` }], details: null };
@@ -265,6 +268,42 @@ async function migrateAction(state: GlobalPluginState) {
     content: [{ type: "text" as const, text: lines.join("\n") }],
     details: result,
   };
+}
+
+async function trendsAction(state: GlobalPluginState) {
+  const trends = await computeTrends(state.store, 7);
+  const lines: string[] = [];
+  lines.push(`SUBSTRATE TRENDS — last ${trends.window_days} days`);
+  lines.push("═══════════════════════════════════");
+  if (trends.rollups.length === 0) {
+    lines.push("No daily rollups yet. The maintenance pass writes one row per day at the");
+    lines.push("first turn after midnight UTC. Check back tomorrow, or wait for substrate");
+    lines.push("activity to accumulate (orchestrator_metrics_daily is keyed on YYYY-MM-DD).");
+    return { content: [{ type: "text" as const, text: lines.join("\n") }], details: trends };
+  }
+  lines.push("");
+  lines.push("Daily rollups:");
+  lines.push("  day         | turns | tools | dur(ms) | tok_in  | tok_out | retr_util | tool_fail | fast%");
+  for (const r of trends.rollups) {
+    lines.push(
+      `  ${r.day}  | ${pad(r.turn_count, 5)} | ${pad(r.mean_tool_calls.toFixed(1), 5)} | `
+      + `${pad(r.mean_turn_duration_ms.toFixed(0), 7)} | ${pad(r.mean_tokens_in.toFixed(0), 7)} | `
+      + `${pad(r.mean_tokens_out.toFixed(0), 7)} | ${pad((r.mean_retrieval_util * 100).toFixed(1) + "%", 9)} | `
+      + `${pad((r.tool_failure_rate * 100).toFixed(1) + "%", 9)} | ${(r.fast_path_rate * 100).toFixed(0)}%`,
+    );
+  }
+  lines.push("");
+  lines.push("Window summary:");
+  lines.push(`  avg turns/day:       ${trends.summary.avg_turns_per_day.toFixed(1)}`);
+  lines.push(`  avg tool calls:      ${trends.summary.avg_tool_calls.toFixed(2)}`);
+  lines.push(`  avg retrieval util:  ${(trends.summary.avg_retrieval_util * 100).toFixed(1)}%`);
+  lines.push(`  avg tokens in:       ${trends.summary.avg_tokens_in.toFixed(0)}`);
+  lines.push(`  avg tokens out:      ${trends.summary.avg_tokens_out.toFixed(0)}`);
+  return { content: [{ type: "text" as const, text: lines.join("\n") }], details: trends };
+}
+
+function pad(s: string | number, w: number): string {
+  return String(s).padStart(w, " ");
 }
 
 async function queryAction(store: any, table?: string, template?: string) {

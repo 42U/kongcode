@@ -219,6 +219,27 @@ DEFINE FIELD IF NOT EXISTS created_at ON orchestrator_metrics TYPE datetime DEFA
 DEFINE INDEX IF NOT EXISTS om_session_idx ON orchestrator_metrics FIELDS session_id;
 
 -- ============================================================
+-- ISMAR-GENT: Daily Rollup of Orchestrator Metrics (0.5.0+)
+-- One row per day. Populated by maintenance pass; query for trend reports.
+-- Retention: orchestrator_metrics raw rows pruned after 30d; daily kept forever.
+-- ============================================================
+DEFINE TABLE IF NOT EXISTS orchestrator_metrics_daily SCHEMALESS;
+DEFINE FIELD IF NOT EXISTS day ON orchestrator_metrics_daily TYPE string; -- YYYY-MM-DD
+DEFINE FIELD IF NOT EXISTS turn_count ON orchestrator_metrics_daily TYPE int;
+DEFINE FIELD IF NOT EXISTS mean_tool_calls ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS mean_turn_duration_ms ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS mean_tokens_in ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS mean_tokens_out ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS p95_turn_duration_ms ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS p95_tokens_in ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS fast_path_rate ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS mean_retrieval_util ON orchestrator_metrics_daily TYPE float; -- joined from retrieval_outcome
+DEFINE FIELD IF NOT EXISTS tool_failure_rate ON orchestrator_metrics_daily TYPE float;
+DEFINE FIELD IF NOT EXISTS retrieval_outcome_count ON orchestrator_metrics_daily TYPE int;
+DEFINE FIELD IF NOT EXISTS created_at ON orchestrator_metrics_daily TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS omd_day_idx ON orchestrator_metrics_daily FIELDS day UNIQUE;
+
+-- ============================================================
 -- MEMORY SUBSTRATE: Compaction Checkpoints
 -- ============================================================
 DEFINE TABLE IF NOT EXISTS compaction_checkpoint SCHEMALESS;

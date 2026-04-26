@@ -14,6 +14,7 @@ import { makeHookOutput, type HookResponse } from "../http-api.js";
 import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
+import { detectAnomalies, formatAnomalyBlock } from "../engine/observability.js";
 
 
 /** Wrap raw kongcode context in a system-reminder block so Claude treats it
@@ -89,7 +90,20 @@ This runs silently in the background. Respond to the user normally.
     }
   }
 
-  const additionalContext = [contextString, pendingWorkMessage].filter(Boolean).join("") || undefined;
+  // E3: anomaly-only health injection. Runs cheap absolute-threshold
+  // detectors and prepends a [kongcode-alert] block ONLY if any flag fires.
+  // Cooldowns prevent spam; absent alerts mean substrate is healthy.
+  let anomalyBlock = "";
+  if (state.store.isAvailable()) {
+    try {
+      const flags = await detectAnomalies(state.store, state.observabilityCooldown);
+      if (flags.length > 0) anomalyBlock = formatAnomalyBlock(flags);
+    } catch (e) {
+      swallow("userPromptSubmit:anomalies", e);
+    }
+  }
+
+  const additionalContext = [anomalyBlock, contextString, pendingWorkMessage].filter(Boolean).join("") || undefined;
 
   log.debug(`UserPromptSubmit: session=${sessionId}, context=${contextString ? "injected" : "none"}, pending=${pendingWorkMessage ? "yes" : "no"}`);
 

@@ -2,6 +2,7 @@ import type { KongBrainConfig } from "./config.js";
 import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { AdaptiveConfig } from "./orchestrator.js";
+import { makeCooldownState } from "./observability.js";
 
 // --- Per-session mutable state ---
 
@@ -128,6 +129,17 @@ export class GlobalPluginState {
   workspaceDir?: string;
   schemaApplied = false;
   private sessions = new Map<string, SessionState>();
+
+  // Anomaly cooldown state (in-memory, resets on MCP restart). Per-flag
+  // last-fired timestamps prevent spamming the model with the same alert
+  // every turn while the underlying condition persists.
+  readonly observabilityCooldown = makeCooldownState();
+
+  // Last day (YYYY-MM-DD) the daily rollup pass ran. Stop hook checks this
+  // against the current day; if different, fires rollup for the prior day.
+  // Turn-driven rather than timer-driven — no setInterval drift in long
+  // processes, no firing on idle MCPs.
+  lastRollupDay = "";
 
   constructor(
     config: KongBrainConfig,
