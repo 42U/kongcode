@@ -1,66 +1,81 @@
 {
-  "run_started": "2026-04-22",
-  "run_status": "ready_to_tag_pending_user_restart_verification",
-  "goal": "KongCode 0.4.0 — substrate-does-the-work. Every write auto-seals. Every substrate ships wired. Better than a brain.",
-  "tests_passing": "446/446",
+  "current_version": "0.4.3",
+  "released": "2026-04-26",
+  "goal": "KongCode — substrate-does-the-work. Every write auto-seals. Every hook fires end-to-end. Every signal lands.",
+  "tests_passing": "474/474",
   "typecheck": "clean",
   "build": "clean",
-  "master_head": "5ea7626",
+  "master_head": "f8ccb22",
   "pre_push_hook_enforced": true,
-  "commits_above_v0_3_0": 32,
-  "recent_commits": [
-    "5ea7626 test(subagent): 5 tests covering handleSubagentStop paths",
-    "1a1d6cb fix(identity): sweep lowercase 'kongbrain' typo + bump IDENTITY_VERSION",
-    "1f8d8c6 fix(bootstrap): replace ambiguous NOT+starts_with with explicit !CONTAINS",
-    "9491fe9 feat(0.4.0): subagent tracking v1 (R3)",
-    "56d3bf5 docs(0.4.0): subagent tracking design spec (R3)",
-    "72ded1e fix(bootstrap+identity): migrate pre-0.4.0 installs fully",
-    "9e54a3e chore: pre-push git hook (R6)",
-    "4d2e5f0 feat(0.4.0): wire postflight() into Stop hook (E1)"
-  ],
-  "stages_summary": {
-    "A_scaffold": "done",
-    "B_write_paths": "done (all 8 migration items + 3 kinds)",
-    "C_time_relative_maintenance": "done",
-    "D_tools": "done (6/6 tools: memory_health, link_hierarchy, supersede, record_finding, cluster_scan, what_is_missing)",
-    "E_observability": "E1 done; E2+E3 deferred to 0.5.0",
-    "F_bootstrap_refresh": "done (version-tagged, auto-seal-contract entry, legacy cleanup)",
-    "G_zero_row_audit": "substantially_fixed (coercion sweep closed soul/graduation/maturity class; subagent v1 wires the last one)",
-    "H_write_time_dedup": "deferred (observe Stage B effects first)"
-  },
-  "verified_working_post_restart": [
-    "maturity_stage: 0 → 1 (coercion + wiring both correct)",
-    "compaction_checkpoint: 0 → 1 (R2 writer fires on PreCompact)",
-    "identity re-seed with KongCode content (confirmed via forced hook fire; earlier mixed-content view was --resume caching in Claude Code)",
-    "Auto-seal on write (artifact count growing steadily — 907 → 962)",
-    "record_finding end-to-end (tested live)",
-    "Subagent v1 unit tests (5/5 pass)",
-    "Pre-push hook actively blocking on test failure (verified live)"
-  ],
-  "awaits_fresh_mcp_spawn_post_1f8d8c6": [
-    "core_memory 11 → 6 (migration SurQL fix needs an MCP started after 1f8d8c6 commit at 14:01 today)",
-    "identity_chunks re-seed to identity_version='0.4.1' (bump in 1a1d6cb)",
-    "orchestrator_metrics > 0 (needs 1 full preflight→Stop cycle on E1 binary)",
-    "subagent row creation on first Agent/Task tool invocation (v1 just shipped)"
-  ],
-  "remaining_work": {
-    "R7_tag_0.4.0": {
-      "status": "ready_to_go",
-      "blockers": "User restart cycle + verification of the 4 bullets above. Then: bump package.json + plugin.json to 0.4.0, git tag v0.4.0, git push origin v0.4.0."
+
+  "recent_releases": {
+    "0.4.3": {
+      "date": "2026-04-26",
+      "theme": "Release hardening + docs catch-up",
+      "ships": [
+        "Version + test-count badges aligned to current state",
+        "progress.json rewritten to reflect post-0.4.2 substrate-alive milestones"
+      ]
     },
-    "E2_introspect_trends": "deferred_to_0.5.0 — needs orchestrator_metrics data accumulation",
-    "E3_health_inject_on_UserPromptSubmit": "deferred_to_0.5.0",
-    "H_write_time_dedup": "deferred_observe_first",
-    "subagent_v2_artifact_attribution": "deferred — thread active subagent_id through after-tool-call + post-tool-use"
+    "0.4.2": {
+      "date": "2026-04-26",
+      "theme": "Substrate connectivity hardening — UserPromptSubmit, PostToolUse, Stop",
+      "ships": [
+        "UserPromptSubmit now reads payload.prompt (canonical Claude Code field) with payload.user_prompt fallback",
+        "PostToolUse now reads payload.tool_response (canonical) with payload.tool_result fallback; handles object + string shapes",
+        "PostToolUse now wires recordToolOutcome(!isError) — failure detected from payload.error or tool_response.is_error",
+        "Stop hook now reads transcript_path → readLatestAssistantText → ingestTurn (awaited) → evaluateRetrieval, closing the retrieval-quality loop",
+        "New tail-read transcript reader (256 KB window) for long-running session efficiency",
+        "16 new regression tests pinning the canonical Claude Code payload-field contract for the highest-fired hook handlers"
+      ]
+    },
+    "0.4.1": {
+      "date": "2026-04-25",
+      "theme": "MCP handshake ordering",
+      "ships": [
+        "Transport connect → initialize ordering fixed (issue #4)"
+      ]
+    },
+    "0.4.0": {
+      "date": "2026-04-22",
+      "theme": "Substrate-does-the-work",
+      "ships": [
+        "Auto-seal contract: every commitKnowledge() write fires concept/memory/artifact/turn edges",
+        "6 new MCP tools: memory_health, link_hierarchy, supersede, record_finding, cluster_scan, what_is_missing",
+        "postflight() wired into Stop hook (orchestrator_metrics now populates)",
+        "Subagent tracking v1",
+        "Bootstrap version-tagging + legacy-install cleanup",
+        "Pre-push test gate"
+      ]
+    }
   },
-  "notable_session_artifacts": {
-    "subagent_design_spec": ".upgrade/subagent-design.md",
-    "pre_push_hook": "hooks/scripts/git/pre-push (activated via git config core.hooksPath hooks/scripts/git)"
+
+  "substrate_health_post_0_4_3": {
+    "verified_live": [
+      "User turns ingesting on UserPromptSubmit",
+      "Assistant turns ingesting on Stop via transcript_path",
+      "retrieval_outcome rows landing per-turn",
+      "tool_success populated on new outcomes",
+      "+0.2 toolBoost in computeSignals lifting utilization on tool-completing turns",
+      "Auto-seal still firing across concept/memory/artifact writes",
+      "Pre-push hook actively blocking regressions"
+    ]
   },
+
+  "deferred_to_0_5_0": {
+    "E2_introspect_trends": "Needs orchestrator_metrics accumulation",
+    "E3_health_inject_on_UserPromptSubmit": "Surface health diagnostics into context",
+    "H_write_time_dedup": "Observe Stage B effects in production first",
+    "subagent_v2_artifact_attribution": "Thread active subagent_id through after-tool-call + post-tool-use",
+    "stale_mcp_reaper": "Auto-kill MCPs whose socket isn't newest — zombies linger after Claude Code restarts and consume memory until manually killed",
+    "windowed_quality_metric": "getQualitySignals uses GROUP ALL — windowing to recent N would speed gate recovery without forcing graduation",
+    "issue_2_shared_daemon": "Multi-MCP Option B — shared daemon pattern for >1 Claude Code window"
+  },
+
   "operational_notes": [
-    "Pre-push hook is in effect on THIS repo (local git config). Other clones need `git config core.hooksPath hooks/scripts/git` to activate.",
-    "IDENTITY_VERSION is an internal migration trigger, decoupled from package.json. Bump IDENTITY_VERSION when IDENTITY_CHUNKS content changes. Bump package.json independently per release.",
-    "Hook-proxy.sh routes to newest-mtime per-pid socket. MCP processes that predate a fix won't serve the fixed behavior — user needs a fresh MCP spawn (close-and-reopen Claude Code session) for latest binary to take effect.",
-    "Claude Code --resume caches SessionStart hook additionalContext. Stale context in [IDENTITY] block does NOT mean migration failed — confirm via direct introspect or forced hook fire."
+    "IDENTITY_VERSION (0.4.1) is decoupled from package.json — bump only when IDENTITY_CHUNKS content changes; substrate-only releases (0.4.2/0.4.3) leave it untouched to avoid needless re-seeds.",
+    "BOOTSTRAP_VERSION (0.4.0) is similarly content-tied, not release-tied.",
+    "Hook proxy picks newest-PID-alive socket; on multi-MCP installs the older MCPs become unreachable until killed (see stale_mcp_reaper above).",
+    "After dist updates, a new MCP must be spawned (close+reopen Claude Code) — Node doesn't hot-reload."
   ]
 }
