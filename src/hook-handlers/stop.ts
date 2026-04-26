@@ -12,6 +12,7 @@ import { evaluateRetrieval } from "../engine/retrieval-quality.js";
 import { postflight } from "../engine/orchestrator.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
+import { readLatestAssistantText } from "../engine/transcript-reader.js";
 
 export async function handleStop(
   state: GlobalPluginState,
@@ -23,9 +24,26 @@ export async function handleStop(
 
   const { store } = state;
 
-  // Ingest assistant response if we have it
+  // Pull the assistant's response text from the transcript. Stop is the
+  // only place where the just-completed response is observable, and it
+  // doesn't ride in the hook payload — only `transcript_path` does. This
+  // replaces the previous reliance on `session.lastAssistantText`, which
+  // was never populated in production (the engine-side llm-output handler
+  // that sets it is test-only).
+  const transcriptPath = (payload.transcript_path as string) ?? "";
+  const assistantText = transcriptPath ? readLatestAssistantText(transcriptPath) : "";
+  if (assistantText) session.lastAssistantText = assistantText;
+
+  // Ingest assistant response (await — evaluateRetrieval below needs the
+  // assistant turn id this call sets on the session). Previously this was
+  // fire-and-forget, so the very next line read an empty turn id and
+  // skipped retrieval evaluation entirely.
   if (session.lastAssistantText) {
-    ingestTurn(state, session, "assistant", session.lastAssistantText).catch(() => {});
+    try {
+      await ingestTurn(state, session, "assistant", session.lastAssistantText);
+    } catch (e) {
+      swallow.warn("stop:ingestAssistant", e);
+    }
   }
 
   // Evaluate retrieval quality for ACAN training
