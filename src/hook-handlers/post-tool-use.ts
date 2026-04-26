@@ -8,6 +8,7 @@ import type { GlobalPluginState } from "../engine/state.js";
 import type { HookResponse } from "../http-api.js";
 import { swallow } from "../engine/errors.js";
 import { commitKnowledge } from "../engine/commit.js";
+import { recordToolOutcome } from "../engine/retrieval-quality.js";
 
 export async function handlePostToolUse(
   state: GlobalPluginState,
@@ -19,13 +20,24 @@ export async function handlePostToolUse(
 
   const { store, embeddings } = state;
   const toolName = (payload.tool_name as string) ?? "";
-  const toolResult = payload.tool_result as string | undefined;
+  // Claude Code's PostToolUse payload field is `tool_response` (object or
+  // string). The previous `tool_result` read was wrong and never matched,
+  // so cumulativeTokens was stuck at 0 and recordToolOutcome never fired.
+  const toolResponse = payload.tool_response ?? payload.tool_result;
+  const toolResultText = typeof toolResponse === "string"
+    ? toolResponse
+    : toolResponse != null ? JSON.stringify(toolResponse) : undefined;
 
-  // Estimate tokens from tool result
-  if (toolResult) {
-    const resultTokens = Math.ceil(toolResult.length / 4);
-    session.cumulativeTokens += resultTokens;
+  if (toolResultText) {
+    session.cumulativeTokens += Math.ceil(toolResultText.length / 4);
   }
+
+  // Detect failure: top-level `error`, or tool_response object with
+  // is_error=true (Anthropic tool_result convention).
+  const isError = !!payload.error
+    || (typeof toolResponse === "object" && toolResponse !== null
+        && (toolResponse as { is_error?: boolean }).is_error === true);
+  recordToolOutcome(!isError);
 
   // Count tool calls for this turn — consumed by handleStop to feed
   // postflight()'s orchestrator_metrics write. Reset at preflight time.

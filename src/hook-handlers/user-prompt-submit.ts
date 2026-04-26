@@ -47,7 +47,11 @@ export async function handleUserPromptSubmit(
   // Reset per-turn state
   session.resetTurn();
 
-  const userPrompt = (payload.user_prompt as string) ?? "";
+  // Claude Code sends the user's text in `prompt`. Earlier code read
+  // `payload.user_prompt`, which never existed in the actual hook payload —
+  // the handler silently early-returned on every prompt for ~20 days,
+  // killing turn ingestion and the entire retrieval pipeline.
+  const userPrompt = (payload.prompt as string) ?? (payload.user_prompt as string) ?? "";
   if (!userPrompt) return {};
 
   session.lastUserText = userPrompt;
