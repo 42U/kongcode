@@ -86,7 +86,7 @@ export function createIntrospectToolDef(state: GlobalPluginState, session: Sessi
 
       try {
         switch (params.action) {
-          case "status": return await statusAction(store, session.sessionId);
+          case "status": return await statusAction(store, session.sessionId, state.embeddings);
           case "count": return await countAction(store, params.table, params.filter);
           case "verify": return await verifyAction(store, params.record_id);
           case "query": return await queryAction(store, params.table, params.filter);
@@ -102,9 +102,10 @@ export function createIntrospectToolDef(state: GlobalPluginState, session: Sessi
 
 // ── Actions ──────────────────────────────────────────────────────────────
 
-async function statusAction(store: any, sessionId: string) {
+async function statusAction(store: any, sessionId: string, embeddings: any) {
   const info = store.getInfo();
   const alive = await store.ping();
+  const embStatus = await probeEmbeddingService(embeddings);
 
   const lines: string[] = [];
   lines.push("MEMORY DATABASE STATUS");
@@ -113,6 +114,7 @@ async function statusAction(store: any, sessionId: string) {
   lines.push(`Namespace:   ${info?.ns ?? "unknown"}`);
   lines.push(`Database:    ${info?.db ?? "unknown"}`);
   lines.push(`Ping:        ${alive ? "OK" : "FAILED"}`);
+  lines.push(`Embeddings:  ${embStatus.label}`);
   lines.push(`Session:     ${sessionId}`);
   lines.push("");
 
@@ -169,8 +171,31 @@ async function statusAction(store: any, sessionId: string) {
 
   return {
     content: [{ type: "text" as const, text: lines.join("\n") }],
-    details: { counts, embCounts, alive, totalNodes, totalEmb },
+    details: { counts, embCounts, alive, totalNodes, totalEmb, embeddings: embStatus },
   };
+}
+
+// Probe the in-process BGE-M3 service. isAvailable() only checks the `ready`
+// flag; a real one-token embed proves the runtime path actually works (catches
+// native-binding crashes that leave `ready=true` but throw on use).
+async function probeEmbeddingService(embeddings: any): Promise<{ status: "ok" | "down" | "degraded"; label: string }> {
+  if (!embeddings || typeof embeddings.isAvailable !== "function" || !embeddings.isAvailable()) {
+    return { status: "down", label: "DOWN — recall and any embed-dependent ops will fail (isAvailable=false)" };
+  }
+  try {
+    const probe = embeddings.embed("ping").then((v: number[]) => v?.length ?? 0);
+    const len = await Promise.race([
+      probe,
+      new Promise<number>((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 1500)),
+    ]);
+    if (typeof len === "number" && len > 0) {
+      return { status: "ok", label: `OK (BGE-M3 responsive, ${len}-dim)` };
+    }
+    return { status: "degraded", label: "DEGRADED — embed returned empty vector" };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { status: "degraded", label: `DEGRADED — embed probe failed: ${msg.slice(0, 100)}` };
+  }
 }
 
 async function countAction(store: any, table?: string, filter?: string) {

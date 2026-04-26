@@ -31,8 +31,27 @@ interface HealthMetrics {
 interface HealthReport {
   status: "green" | "yellow" | "red";
   connection: "ok" | "degraded" | "down";
+  embedding_service: "ok" | "degraded" | "down";
   metrics: HealthMetrics;
   diagnostics: Array<{ severity: "info" | "warn" | "error"; area: string; message: string }>;
+}
+
+async function probeEmbeddings(embeddings: unknown): Promise<{ status: "ok" | "degraded" | "down"; detail?: string }> {
+  const e = embeddings as { isAvailable?: () => boolean; embed?: (s: string) => Promise<number[]> } | null;
+  if (!e || typeof e.isAvailable !== "function" || !e.isAvailable()) {
+    return { status: "down", detail: "isAvailable=false" };
+  }
+  try {
+    const probe = e.embed!("ping").then(v => v?.length ?? 0);
+    const len = await Promise.race([
+      probe,
+      new Promise<number>((_, rej) => setTimeout(() => rej(new Error("probe timeout")), 1500)),
+    ]);
+    if (typeof len === "number" && len > 0) return { status: "ok" };
+    return { status: "degraded", detail: "empty vector" };
+  } catch (err) {
+    return { status: "degraded", detail: err instanceof Error ? err.message.slice(0, 120) : "probe failed" };
+  }
 }
 
 async function countRow(
@@ -56,11 +75,13 @@ export async function handleMemoryHealth(
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const diagnostics: HealthReport["diagnostics"] = [];
   const connection = state.store.isAvailable() ? "ok" : "down";
+  const embProbe = await probeEmbeddings(state.embeddings);
 
   if (connection === "down") {
     const report: HealthReport = {
       status: "red",
       connection,
+      embedding_service: embProbe.status,
       metrics: {
         concept_count: 0, concept_embedded: 0,
         memory_count: 0, memory_embedded: 0,
@@ -111,6 +132,17 @@ export async function handleMemoryHealth(
   };
 
   // Diagnostics — tuned for the substrate-healthiness framing.
+  if (embProbe.status === "down") {
+    diagnostics.push({
+      severity: "error", area: "embedding_service",
+      message: `BGE-M3 embedding service unavailable (${embProbe.detail ?? "unknown"}) — recall, cluster_scan, supersede, and any query-time vector ops will fail. Check EMBED_MODEL_PATH and the MCP server stderr for initialize() errors.`,
+    });
+  } else if (embProbe.status === "degraded") {
+    diagnostics.push({
+      severity: "warn", area: "embedding_service",
+      message: `BGE-M3 probe degraded (${embProbe.detail ?? "unknown"}) — embed flag is OK but a live embed call did not return a vector.`,
+    });
+  }
   if (embedding_gap_pct > 15) {
     diagnostics.push({
       severity: "warn", area: "embedding",
@@ -135,6 +167,6 @@ export async function handleMemoryHealth(
   if (diagnostics.some(d => d.severity === "error")) status = "red";
   else if (diagnostics.some(d => d.severity === "warn")) status = "yellow";
 
-  const report: HealthReport = { status, connection, metrics, diagnostics };
+  const report: HealthReport = { status, connection, embedding_service: embProbe.status, metrics, diagnostics };
   return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
 }
