@@ -39,7 +39,9 @@ function mockStore(signals: Partial<{
       if (sql.includes("FROM session ORDER BY started_at")) return earliest ? [{ earliest }] : [];
 
       // Quality signals
-      if (sql.includes("FROM retrieval_outcome GROUP ALL") && sql.includes("avgUtil")) {
+      // The retrieval-util query was windowed to last 14d in 0.4.4
+      // (added `WHERE created_at > time::now() - 14d`); match either form.
+      if (sql.includes("FROM retrieval_outcome") && sql.includes("avgUtil")) {
         return [{ avgUtil: signals.avgUtil ?? 0, cnt: signals.retrievalCount ?? 0 }];
       }
       if (sql.includes("FROM skill WHERE")) {
@@ -492,5 +494,28 @@ describe("formatGraduationReport", () => {
     const text = formatGraduationReport(withDiag);
     expect(text).toContain("Diagnostics");
     expect(text).toContain("Run more sessions");
+  });
+});
+
+describe("getQualitySignals — 14-day window (v0.4.4)", () => {
+  it("retrieval-util query restricts to last 14 days", async () => {
+    // Pin the SQL shape so the windowing can't be silently dropped. The
+    // pre-0.4.4 query was `FROM retrieval_outcome GROUP ALL` (all-time);
+    // the post-0.4.4 query adds `WHERE created_at > time::now() - 14d`.
+    let capturedSql = "";
+    const store = {
+      isAvailable: () => true,
+      queryFirst: vi.fn(async (sql: string) => {
+        if (sql.includes("FROM retrieval_outcome") && sql.includes("avgUtil")) {
+          capturedSql = sql;
+          return [{ avgUtil: 0.2, cnt: 50 }];
+        }
+        return [];
+      }),
+    };
+    const { getQualitySignals } = await import("../src/engine/soul.js");
+    await getQualitySignals(store as any);
+    expect(capturedSql).toContain("FROM retrieval_outcome");
+    expect(capturedSql).toContain("created_at > time::now() - 14d");
   });
 });

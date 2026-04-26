@@ -153,10 +153,17 @@ export async function getQualitySignals(store: SurrealStore): Promise<QualitySig
 
   try {
     const [retrieval, skills, reflCritical, reflTotal, toolFails] = await Promise.all([
-      // Average retrieval utilization across all outcomes
+      // Average retrieval utilization over the last 14 days. All-time was
+      // tempting (more data → less variance) but a single week of bad
+      // outcomes can permanently drag the gate, and old outcomes don't
+      // reflect current model/embedding behavior. 14 days balances signal
+      // stability with relevance — long enough to average out a noisy day,
+      // short enough that fresh-substrate quality dominates.
       store.queryFirst<{ avgUtil: number; cnt: number }>(
         `SELECT math::mean(utilization) AS avgUtil, count() AS cnt
-         FROM retrieval_outcome GROUP ALL`,
+         FROM retrieval_outcome
+         WHERE created_at > time::now() - 14d
+         GROUP ALL`,
       ).catch(() => []),
 
       // Skill success vs failure totals
@@ -294,7 +301,7 @@ function buildDiagnostics(
       diags.push({
         area: "quality:retrieval",
         status: quality.avgRetrievalUtilization < 0.15 ? "critical" : "warning",
-        detail: `${(quality.avgRetrievalUtilization * 100).toFixed(0)}% avg utilization`,
+        detail: `${(quality.avgRetrievalUtilization * 100).toFixed(0)}% avg utilization (last 14 days)`,
         suggestion: "Retrieved context isn't being used. Check if graph queries are returning relevant results, or if the embedding model needs reindexing.",
       });
     }

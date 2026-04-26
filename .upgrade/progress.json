@@ -1,14 +1,24 @@
 {
-  "current_version": "0.4.3",
+  "current_version": "0.4.4",
   "released": "2026-04-26",
   "goal": "KongCode — substrate-does-the-work. Every write auto-seals. Every hook fires end-to-end. Every signal lands.",
-  "tests_passing": "478/478",
+  "tests_passing": "479/479",
   "typecheck": "clean",
   "build": "clean",
-  "master_head": "f8ccb22",
+  "master_head": "3b9a452",
   "pre_push_hook_enforced": true,
 
   "recent_releases": {
+    "0.4.4": {
+      "date": "2026-04-26",
+      "theme": "Windowed retrieval-util quality signal",
+      "ships": [
+        "getQualitySignals retrieval-util now windows to last 14 days (was GROUP ALL — all-time mean across every outcome ever, which a single bad week could permanently drag down)",
+        "Skill success / critical reflections / tool failure rates stay all-time — they don't suffer the same poisoning",
+        "Diagnostic text now includes '(last 14 days)' so introspect output makes the window obvious",
+        "Regression test pinning the 14d clause in the SQL so windowing can't be silently dropped"
+      ]
+    },
     "0.4.3": {
       "date": "2026-04-26",
       "theme": "Stale-MCP reaper + release hardening",
@@ -70,7 +80,6 @@
     "E3_health_inject_on_UserPromptSubmit": "Surface health diagnostics into context",
     "H_write_time_dedup": "Observe Stage B effects in production first",
     "subagent_v2_artifact_attribution": "Thread active subagent_id through after-tool-call + post-tool-use",
-    "windowed_quality_metric": "getQualitySignals uses GROUP ALL — windowing to recent N would speed gate recovery without forcing graduation",
     "issue_2_shared_daemon": "Multi-MCP Option B — shared daemon pattern for >1 Claude Code window"
   },
 
