@@ -265,6 +265,7 @@ export async function detectAnomalies(
   for (const detector of [
     detectEmbeddingGap,
     detectPendingWorkBuildup,
+    detectPendingWorkPurged,
     detectGraduationReady,
     detectGraduationClose,
   ]) {
@@ -321,6 +322,31 @@ async function detectPendingWorkBuildup(store: SurrealStore): Promise<AnomalyFla
     message: `pending_work queue has ${r.n} items, oldest is ${ageH.toFixed(0)}h old`,
     evidence: `count=${r.n}, oldest=${r.oldest}`,
     suggestion: "Spawn a memory-extractor subagent to drain the queue (background, opus model)",
+  };
+}
+
+async function detectPendingWorkPurged(store: SurrealStore): Promise<AnomalyFlag | null> {
+  // Detects silent data loss reported in issue #5: purgeStalePendingWork
+  // drops items older than 7d and only writes a maintenance_runs row +
+  // a swallowed log. If items were dropped recently (last 24h), surface
+  // it via the alert channel so the user knows learning was missed.
+  const rows = await store.queryFirst<{ total_purged: number }>(
+    `SELECT math::sum(rows_affected) AS total_purged
+     FROM maintenance_runs
+     WHERE job = "purgeStalePendingWork"
+       AND ran_at > time::now() - 24h
+       AND rows_affected > 0
+     GROUP ALL`,
+  );
+  const r = (rows as { total_purged: number }[])[0];
+  const purged = Number(r?.total_purged ?? 0);
+  if (purged === 0) return null;
+  return {
+    code: "substrate.pending_work_purged",
+    severity: "warn",
+    message: `${purged} pending_work item${purged === 1 ? "" : "s"} were purged in the last 24h without being processed (>7 days old)`,
+    evidence: `total_purged=${purged} (sum of rows_affected for purgeStalePendingWork in last 24h)`,
+    suggestion: "These represent missed learning. Drain the queue more often — the SessionStart and UserPromptSubmit hooks both surface backlogs; spawn the memory-extractor subagent when you see them.",
   };
 }
 

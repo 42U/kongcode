@@ -1,14 +1,24 @@
 {
-  "current_version": "0.5.0",
+  "current_version": "0.5.1",
   "released": "2026-04-26",
   "goal": "KongCode — substrate-does-the-work. Every write auto-seals. Every hook fires end-to-end. Every signal lands.",
-  "tests_passing": "496/496",
+  "tests_passing": "498/498",
   "typecheck": "clean",
   "build": "clean",
-  "master_head": "3f8ea14",
+  "master_head": "501b28e",
   "pre_push_hook_enforced": true,
 
   "recent_releases": {
+    "0.5.1": {
+      "date": "2026-04-26",
+      "theme": "Closes issue #5 — pending_work drain visibility",
+      "ships": [
+        "session-start.ts threshold lowered from `>= 5` to `>= 1` so even small backlogs surface (Charles's main complaint — sub-threshold items could sit invisible on short sessions and quietly age out at the 7d purge boundary)",
+        "Imperative copy on the SessionStart pending-work block: '[PENDING WORK — DRAIN NOW]' with the 7-day-purge warning explicit",
+        "New anomaly detector substrate.pending_work_purged — reads maintenance_runs for last-24h purgeStalePendingWork rows with rows_affected > 0, surfaces a warn-level [kongcode-alert] flag so silent data loss becomes loud",
+        "5 anomaly detectors now active (was 4); the silent-purge masking gap from the original report is closed via the E3 alert channel"
+      ]
+    },
     "0.5.0": {
       "date": "2026-04-26",
       "theme": "Observability — daily rollups + anomaly-only health injection (E2 + E3)",

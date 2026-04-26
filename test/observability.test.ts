@@ -25,6 +25,7 @@ function mockStore(handlers: {
   retrievalRollup?: { n: number; mean_util?: number; tool_fails?: number; tool_total?: number };
   artifactGap?: { total: number; embedded: number };
   pendingWork?: { n: number; oldest: string };
+  pendingWorkPurged?: { total_purged: number };
   trends?: DailyRollup[];
   graduation?: { ready: boolean; qualityScore: number; volumeScore: number; stage: string; diagnostics: { suggestion?: string }[] };
 }) {
@@ -47,6 +48,9 @@ function mockStore(handlers: {
       }
       if (sql.includes("FROM pending_work") && sql.includes("status = \"pending\"")) {
         return handlers.pendingWork ? [handlers.pendingWork] : [];
+      }
+      if (sql.includes("FROM maintenance_runs") && sql.includes("purgeStalePendingWork")) {
+        return handlers.pendingWorkPurged ? [handlers.pendingWorkPurged] : [];
       }
       return [];
     }),
@@ -155,6 +159,22 @@ describe("detectAnomalies", () => {
     const store = { isAvailable: () => false, queryFirst: vi.fn(), queryExec: vi.fn() };
     const flags = await detectAnomalies(store as any, cooldown);
     expect(flags).toEqual([]);
+  });
+
+  it("fires substrate.pending_work_purged when 24h purge total > 0 (issue #5)", async () => {
+    const store = mockStore({ pendingWorkPurged: { total_purged: 12 } });
+    const flags = await detectAnomalies(store as any, cooldown);
+    const purged = flags.find(f => f.code === "substrate.pending_work_purged");
+    expect(purged).toBeDefined();
+    expect(purged!.severity).toBe("warn");
+    expect(purged!.message).toContain("12 pending_work");
+    expect(purged!.evidence).toContain("total_purged=12");
+  });
+
+  it("does NOT fire pending_work_purged when no recent purges", async () => {
+    const store = mockStore({ pendingWorkPurged: { total_purged: 0 } });
+    const flags = await detectAnomalies(store as any, cooldown);
+    expect(flags.find(f => f.code === "substrate.pending_work_purged")).toBeUndefined();
   });
 });
 

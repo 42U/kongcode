@@ -139,10 +139,13 @@ export async function handleSessionStart(
   }
 
   // Surface pending_work backlog so the assistant knows to drain. The queue
-  // is consumer-pull (subagents call fetch_pending_work), and without a
-  // signal here it sits invisible until something else asks. Threshold of 5
-  // avoids noise on healthy sessions; purgeStalePendingWork keeps the count
-  // honest by dropping items older than 7d.
+  // is consumer-pull (subagents call fetch_pending_work) and items are
+  // silently GC'd after 7d if not processed (issue #5). Lowered threshold
+  // from `>= 5` to `>= 1` so small backlogs don't sit invisible on short
+  // sessions and quietly age out. Imperative copy so the assistant treats
+  // it as a directive, not info. user-prompt-submit also surfaces this on
+  // every first turn — both paths together close the visibility gap that
+  // the original `>= 5` threshold opened.
   let pendingNote: string | null = null;
   if (store.isAvailable()) {
     try {
@@ -150,8 +153,8 @@ export async function handleSessionStart(
         `SELECT count() AS count FROM pending_work WHERE status = "pending" GROUP ALL`,
       );
       const count = rows[0]?.count ?? 0;
-      if (count >= 5) {
-        pendingNote = `[PENDING WORK]\n${count} background items waiting. Call fetch_pending_work to claim one, then commit_work_results when done. Heavy types (extraction, causal_graduate) need an Opus subagent; light types (reflection, handoff_note) can run inline.`;
+      if (count >= 1) {
+        pendingNote = `[PENDING WORK — DRAIN NOW]\n${count} background item${count === 1 ? "" : "s"} waiting. Items older than 7 days are silently purged, so don't postpone. Spawn a kongcode:memory-extractor subagent (opus, run_in_background=true) and have it loop fetch_pending_work → commit_work_results until empty. Light types (reflection, handoff_note) can run inline.`;
       }
     } catch (e) {
       swallow("sessionStart:pendingWorkCheck", e);
