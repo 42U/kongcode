@@ -149,12 +149,19 @@ export async function handleSessionStart(
   let pendingNote: string | null = null;
   if (store.isAvailable()) {
     try {
+      // Include both 'pending' and 'processing' rows older than 5 minutes —
+      // 'processing' items are stuck claims from subagents that died mid-run
+      // (session crashed, MCP restart, network blip). Without re-surfacing
+      // them, they sit invisible until the 7-day purge silently deletes them.
       const rows = await store.queryFirst<{ count: number }>(
-        `SELECT count() AS count FROM pending_work WHERE status = "pending" GROUP ALL`,
+        `SELECT count() AS count FROM pending_work
+         WHERE status = "pending"
+            OR (status = "processing" AND claimed_at < time::now() - 5m)
+         GROUP ALL`,
       );
       const count = rows[0]?.count ?? 0;
       if (count >= 1) {
-        pendingNote = `[PENDING WORK — DRAIN NOW]\n${count} background item${count === 1 ? "" : "s"} waiting. Items older than 7 days are silently purged, so don't postpone. Spawn a kongcode:memory-extractor subagent (opus, run_in_background=true) and have it loop fetch_pending_work → commit_work_results until empty. Light types (reflection, handoff_note) can run inline.`;
+        pendingNote = `[PENDING WORK — DRAIN NOW]\n${count} background item${count === 1 ? "" : "s"} waiting (includes stuck 'processing' claims). Items older than 7 days are silently purged, so don't postpone. Spawn a kongcode:memory-extractor subagent (opus, run_in_background=true) BEFORE responding to the user, and have it loop fetch_pending_work → commit_work_results until empty. Don't defer — the queue must drain or the soul-graduation metrics (skills, monologue, causal_chain) stay at zero forever.`;
       }
     } catch (e) {
       swallow("sessionStart:pendingWorkCheck", e);

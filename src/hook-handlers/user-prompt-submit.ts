@@ -68,7 +68,10 @@ export async function handleUserPromptSubmit(
   if (session.userTurnCount <= 1 && state.store.isAvailable()) {
     try {
       const pending = await state.store.queryFirst<{ count: number }>(
-        `SELECT count() AS count FROM pending_work WHERE status = "pending" GROUP ALL`,
+        `SELECT count() AS count FROM pending_work
+         WHERE status = "pending"
+            OR (status = "processing" AND claimed_at < time::now() - 5m)
+         GROUP ALL`,
       );
       const count = pending[0]?.count ?? 0;
       if (count > 0) {
