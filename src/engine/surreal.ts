@@ -582,6 +582,46 @@ export class SurrealStore {
     );
   }
 
+  /** One-shot: for sessions created before 0.5.5 that lack kc_session_id,
+   * walk their `part_of` turn edges and copy the kc id from any turn row.
+   * Idempotent — only updates rows where kc_session_id is currently NONE.
+   * Bounded per call so a backlog of hundreds chips down across SessionStarts. */
+  async backfillOrphanKcSessionIds(limit = 50): Promise<number> {
+    const missing = await this.queryFirst<{ id: string }>(
+      `SELECT id FROM session
+       WHERE kc_session_id = NONE
+         AND cleanup_completed != true
+       LIMIT $lim`,
+      { lim: limit },
+    );
+    if (missing.length === 0) return 0;
+
+    let backfilled = 0;
+    for (const s of missing) {
+      try {
+        assertRecordId(s.id);
+        const turn = await this.queryFirst<{ session_id: string }>(
+          `SELECT session_id FROM turn
+           WHERE id IN (SELECT VALUE in FROM part_of WHERE out = $sid)
+             AND session_id != NONE AND session_id != ""
+           LIMIT 1`,
+          { sid: s.id },
+        );
+        const kcSid = turn[0]?.session_id;
+        if (typeof kcSid === "string" && kcSid.length > 0) {
+          await this.queryExec(
+            `UPDATE ${s.id} SET kc_session_id = $kc`,
+            { kc: kcSid },
+          );
+          backfilled++;
+        }
+      } catch (e) {
+        // Best-effort per row; swallow continues
+      }
+    }
+    return backfilled;
+  }
+
   async countTurnsForSession(kcSessionId: string): Promise<number> {
     if (!kcSessionId) return 0;
     const rows = await this.queryFirst<{ count: number }>(

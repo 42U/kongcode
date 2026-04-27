@@ -35,6 +35,17 @@ export async function runDeferredCleanup(
 ): Promise<number> {
   if (!store.isAvailable()) return 0;
 
+  // Backfill kc_session_id on pre-0.5.5 session rows by walking part_of edges
+  // to existing turn records. Without this, orphans created before 0.5.5 would
+  // only get the unconditional causal_graduate/soul_evolve pair queued — their
+  // transcripts would stay unrecoverable.
+  try {
+    const backfilled = await store.backfillOrphanKcSessionIds(50);
+    if (backfilled > 0) log.info(`[deferred] backfilled kc_session_id on ${backfilled} pre-0.5.5 orphan sessions`);
+  } catch (e) {
+    swallow.warn("deferredCleanup:backfill", e);
+  }
+
   let orphans;
   try {
     orphans = await store.getOrphanedSessions(ORPHAN_LIMIT);
