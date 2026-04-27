@@ -214,6 +214,12 @@ export async function ingestTurn(
 
     if (role === "user") {
       session.lastUserTurnId = turnId;
+      // Increment lost in 4f7b962 (SDK removal). Without this every SessionEnd
+      // sees userTurnCount=0, skipping extraction/reflection/skill_extract/
+      // handoff_note — only the unconditional causal_graduate + soul_generate
+      // pair queues, both auto-skip-complete, and monologue/causal_chain
+      // never get written.
+      session.userTurnCount++;
     } else {
       session.lastAssistantTurnId = turnId;
     }
