@@ -522,10 +522,10 @@ export class SurrealStore {
     return String(rows[0]?.id ?? "");
   }
 
-  async createSession(agentId = "default"): Promise<string> {
+  async createSession(agentId = "default", kcSessionId?: string): Promise<string> {
     const rows = await this.queryFirst<{ id: string }>(
-      `CREATE session CONTENT { agent_id: $agent_id } RETURN id`,
-      { agent_id: agentId },
+      `CREATE session CONTENT { agent_id: $agent_id, kc_session_id: $kc_session_id } RETURN id`,
+      { agent_id: agentId, kc_session_id: kcSessionId ?? null },
     );
     return String(rows[0]?.id ?? "");
   }
@@ -572,14 +572,23 @@ export class SurrealStore {
     );
   }
 
-  async getOrphanedSessions(limit = 3): Promise<{ id: string; started_at: string }[]> {
-    return this.queryFirst<{ id: string; started_at: string }>(
-      `SELECT id, started_at FROM session
+  async getOrphanedSessions(limit = 20): Promise<{ id: string; started_at: string; kc_session_id: string | null }[]> {
+    return this.queryFirst<{ id: string; started_at: string; kc_session_id: string | null }>(
+      `SELECT id, started_at, kc_session_id FROM session
        WHERE cleanup_completed != true
          AND started_at < time::now() - 2m
        ORDER BY started_at DESC LIMIT $lim`,
       { lim: limit },
     );
+  }
+
+  async countTurnsForSession(kcSessionId: string): Promise<number> {
+    if (!kcSessionId) return 0;
+    const rows = await this.queryFirst<{ count: number }>(
+      `SELECT count() AS count FROM turn WHERE session_id = $sid GROUP ALL`,
+      { sid: kcSessionId },
+    );
+    return rows[0]?.count ?? 0;
   }
 
   async linkSessionToTask(sessionId: string, taskId: string): Promise<void> {

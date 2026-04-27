@@ -50,7 +50,7 @@ export async function handleSessionStart(
       await store.linkTaskToProject(session.taskId, session.projectId)
         .catch(e => swallow("sessionStart:linkTaskToProject", e));
 
-      session.surrealSessionId = await store.createSession(session.agentId);
+      session.surrealSessionId = await store.createSession(session.agentId, session.sessionId);
       await store.markSessionActive(session.surrealSessionId)
         .catch(e => swallow("sessionStart:markActive", e));
       await store.linkSessionToTask(session.surrealSessionId, session.taskId)
