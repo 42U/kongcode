@@ -24,6 +24,8 @@ jobs:
   build:
     name: Build kongcode-${{ matrix.os_name }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ matrix.timeout_minutes || 15 }}
+    continue-on-error: ${{ matrix.allow_failure || false }}
     strategy:
       fail-fast: false
       matrix:
@@ -36,14 +38,18 @@ jobs:
             os_name: linux
             arch: arm64
             ext: ""
-          # darwin-x64 added back in rc.4 (real-user Intel Mac validation
-          # surfaced the need). macos-13 queue can be slow; if a build hangs
-          # past 15 min, cancel and fall back to the JS-launcher path (Intel
-          # users need Node installed in that case).
+          # darwin-x64 (Intel Mac): macos-13 runner queue can stall for hours.
+          # Marked allow_failure + tight timeout so it doesn't block stable
+          # releases. When the runner pool is responsive this builds in ~2min;
+          # when stuck, the release publishes the other 4 binaries on schedule
+          # and Intel Mac users fall through to the JS-launcher path
+          # (requires Node) until the next release attempts darwin-x64 again.
           - runner: macos-13
             os_name: darwin
             arch: x64
             ext: ""
+            timeout_minutes: 10
+            allow_failure: true
           - runner: macos-14
             os_name: darwin
             arch: arm64
