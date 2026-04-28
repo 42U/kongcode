@@ -559,12 +559,39 @@ async function formatContextMessage(nodes, store, session, skillContext = "", ti
         const ai = ORDER.indexOf(a), bi = ORDER.indexOf(b);
         return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
     });
+    // TOP HITS — hoist the highest-scoring items across all sections to the
+    // top of the block. The section breakdown below still includes them, so
+    // this is intentionally redundant: duplication is the point. Without this,
+    // a 99%-relevance gem can land mid-section and read as filler.
+    const TOP_HITS_N = 3;
+    const TOP_HITS_MIN_SCORE = 0.55;
+    const topHits = [...nodes]
+        .filter((n) => (n.finalScore ?? 0) >= TOP_HITS_MIN_SCORE)
+        .sort((a, b) => (b.finalScore ?? 0) - (a.finalScore ?? 0))
+        .slice(0, TOP_HITS_N);
+    if (topHits.length > 0) {
+        const lines = topHits.map((n) => {
+            const isCausal = n.source?.startsWith("causal_");
+            const key = isCausal ? "causal" : n.table === "turn" ? "past_turns" : n.table;
+            const score = n.finalScore != null ? ` (relevance: ${(n.finalScore * 100).toFixed(0)}%)` : "";
+            let text = n.text ?? "";
+            if (text.length > MAX_ITEM_CHARS)
+                text = text.slice(0, MAX_ITEM_CHARS) + "... [truncated]";
+            const age = n.timestamp ? ` [${formatRelativeTime(n.timestamp)}]` : "";
+            return `  - [${key}]${score}${age} ${text}`;
+        });
+        sections.push(`TOP HITS (highest relevance — read these first, ground your response on them before any tool call):\n${lines.join("\n")}`);
+    }
     for (const key of sortedKeys) {
         const items = groups[key];
         items.sort((a, b) => {
+            const sa = a.finalScore ?? 0;
+            const sb = b.finalScore ?? 0;
+            if (sb !== sa)
+                return sb - sa;
             const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
             const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-            return ta - tb;
+            return tb - ta;
         });
         const label = LABELS[key] ?? key;
         const formatted = items.map((n) => {

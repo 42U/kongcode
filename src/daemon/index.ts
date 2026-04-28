@@ -24,7 +24,6 @@
  */
 
 import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -34,9 +33,16 @@ import {
   DAEMON_PID_FILE,
   type MetaHandshakeResponse,
   type MetaHealthResponse,
+  type ToolOrHookRequest,
 } from "../shared/ipc-types.js";
 import { DaemonServer } from "./server.js";
 import { log } from "../engine/log.js";
+import { parsePluginConfig } from "../engine/config.js";
+import { bootstrap, resolvePluginDir, shutdownManagedSurreal } from "../engine/bootstrap.js";
+import { SurrealStore } from "../engine/surreal.js";
+import { EmbeddingService } from "../engine/embeddings.js";
+import { GlobalPluginState } from "../engine/state.js";
+import { handleIntrospect } from "../tools/introspect.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
 const DAEMON_VERSION = "0.7.0-dev";
@@ -45,6 +51,91 @@ type BootstrapPhase = MetaHandshakeResponse["bootstrapPhase"];
 let bootstrapPhase: BootstrapPhase = "starting";
 let bootstrapError: { message: string; stack?: string } | null = null;
 const startedAt = Date.now();
+
+/** Module-level state — once initialized, every IPC handler closes over this.
+ *  Mirrors mcp-server.ts's globalState pattern but lives in the daemon now. */
+let globalState: GlobalPluginState | null = null;
+
+function setBootstrapPhase(p: BootstrapPhase, err?: Error): void {
+  bootstrapPhase = p;
+  if (p === "failed" && err) {
+    bootstrapError = { message: err.message, stack: err.stack };
+  }
+}
+
+/** Initialize the daemon's state stack — bootstrap, SurrealStore, EmbeddingService,
+ *  GlobalPluginState. Equivalent to mcp-server.ts:initialize() but hosted in the
+ *  daemon process so all clients share one copy of these heavy resources.
+ *
+ *  Failures degrade rather than abort: a failed bootstrap leaves the daemon up
+ *  but tool handlers return errors via globalState being null, just like mcp-server
+ *  did. The user-facing surfacing happens through MetaHandshakeResponse's
+ *  bootstrapPhase + bootstrapError fields. */
+async function initializeStack(): Promise<void> {
+  log.info("[daemon] initializing kongcode stack...");
+  setBootstrapPhase("starting");
+
+  const config = parsePluginConfig();
+
+  if (process.env.KONGCODE_SKIP_BOOTSTRAP !== "1") {
+    setBootstrapPhase("npm-install");
+    try {
+      const result = await bootstrap({
+        pluginDir: resolvePluginDir(),
+        cacheDir: config.paths.cacheDir,
+        dataDir: config.paths.dataDir,
+        modelPath: config.embedding.modelPath,
+        surrealBinPathOverride: config.paths.surrealBinPath,
+        surrealUrlOverride: process.env.SURREAL_URL,
+        surrealUser: config.surreal.user,
+        surrealPass: config.surreal.pass,
+      });
+      if (result.surrealServer.managed || result.surrealServer.url) {
+        // Bootstrap may have detected an existing kongcode SurrealDB on a
+        // legacy port (8000/8042) and returned its URL. Either way, point
+        // the store at whatever bootstrap chose.
+        (config.surreal as { url: string }).url = result.surrealServer.url;
+      }
+      log.info(
+        `[bootstrap] complete in ${result.totalDurationMs}ms ` +
+          `(npm=${result.npmInstall.ran ? "ran" : "skip"}, ` +
+          `surreal=${result.surrealBinary.provisioned ? "downloaded" : "cached"}, ` +
+          `llama=${result.nodeLlamaCpp.mainPath ? (result.nodeLlamaCpp.provisioned ? "downloaded" : "cached") : "via-npm"}, ` +
+          `model=${result.embeddingModel.provisioned ? "downloaded" : "cached"})`,
+      );
+    } catch (err) {
+      log.error("[bootstrap] failed — daemon entering degraded mode:", err);
+      setBootstrapPhase("failed", err instanceof Error ? err : new Error(String(err)));
+      return; // No point setting up store/embeddings if bootstrap exploded.
+    }
+  } else {
+    log.info("[bootstrap] skipped (KONGCODE_SKIP_BOOTSTRAP=1)");
+  }
+
+  const store = new SurrealStore(config.surreal);
+  const embeddings = new EmbeddingService(config.embedding);
+  globalState = new GlobalPluginState(config, store, embeddings);
+  globalState.workspaceDir = process.env.KONGCODE_PROJECT_DIR ?? process.cwd();
+
+  setBootstrapPhase("connecting-store");
+  try {
+    await store.initialize();
+    log.info("[daemon] SurrealDB connected");
+  } catch (err) {
+    log.error("[daemon] SurrealDB connection failed — running in degraded mode:", err);
+  }
+
+  setBootstrapPhase("loading-embeddings");
+  try {
+    await embeddings.initialize();
+    log.info("[daemon] Embedding model loaded");
+  } catch (err) {
+    log.error("[daemon] Embedding model failed — vector search disabled:", err);
+  }
+
+  setBootstrapPhase("ready");
+  log.info("[daemon] kongcode stack ready");
+}
 
 function pidFilePath(): string {
   return join(homedir(), DAEMON_PID_FILE);
@@ -131,36 +222,74 @@ async function main(): Promise<void> {
     return { ok: true };
   });
 
-  // ── Tool/hook handlers — registered as stubs in this scaffold ──
+  // ── Tool handlers (incremental migration from mcp-server.ts) ──
   //
-  // Each method in IPC_METHODS that isn't `meta.*` returns a
-  // "not yet implemented" error until subsequent commits migrate
-  // the real handlers. Doing it this way means clients can connect
-  // and discover available capability via attempted RPC; the
-  // protocol is in place even though the implementations aren't.
-  // (Skipping registration entirely would also work — the dispatcher
-  // returns HANDLER_ERROR for unregistered known methods.)
+  // Each handler closes over the module-level globalState (initialized
+  // by initializeStack()). The IPC adapter unpacks the standard
+  // {sessionId, args} envelope and dispatches to the existing handler
+  // function unchanged. Handlers that haven't been migrated yet return
+  // HANDLER_ERROR via the dispatcher (no registration = "not bound").
+
+  /** Wrap an existing (state, session, args) → response handler in a
+   *  daemon-side IPC adapter. Resolves the per-session state from
+   *  globalState's session map (creates a transient one keyed by
+   *  sessionId if absent — matches mcp-server.ts's getSession() shape). */
+  const wrapToolHandler = (
+    handler: (state: GlobalPluginState, session: import("../engine/state.js").SessionState, args: Record<string, unknown>) => Promise<{ content: Array<{ type: "text"; text: string }> }>,
+  ) => {
+    return async (params: unknown) => {
+      if (!globalState) {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        return {
+          content: [{
+            type: "text",
+            text: `kongcode daemon is still initializing (phase=${bootstrapPhase}, ${elapsed}s elapsed). Try again shortly.`,
+          }],
+        };
+      }
+      const env = params as ToolOrHookRequest | undefined;
+      const sessionId = env?.sessionId ?? "daemon-default";
+      const args = (env?.args ?? {}) as Record<string, unknown>;
+      const session = globalState.getOrCreateSession(sessionId, sessionId);
+      return await handler(globalState, session, args);
+    };
+  };
+
+  // First migrated handler — read-only, doesn't depend on hooks firing.
+  // Validates the round-trip: client sends tool.introspect, daemon
+  // dispatches to handleIntrospect with daemon-owned globalState,
+  // returns real DB stats. Subsequent commits migrate the rest.
+  server.register("tool.introspect", wrapToolHandler(handleIntrospect));
 
   // ── Lifecycle ──
 
-  process.on("SIGTERM", async () => {
-    log.info("[daemon] SIGTERM — graceful shutdown");
+  const shutdown = async (signal: string) => {
+    log.info(`[daemon] ${signal} — graceful shutdown`);
     await server.close();
+    if (globalState) {
+      try { await globalState.shutdown(); } catch (e) { log.warn(`[daemon] globalState.shutdown: ${(e as Error).message}`); }
+    }
+    // Per 0.6.3 architecture: the SurrealDB child is detached and outlives
+    // the daemon. Don't kill it here — that's the whole point of Option A.
+    shutdownManagedSurreal(); // No-op by default; only acts on explicit force.
     removeOwnPidFile();
     process.exit(0);
-  });
-  process.on("SIGINT", async () => {
-    log.info("[daemon] SIGINT — graceful shutdown");
-    await server.close();
-    removeOwnPidFile();
-    process.exit(0);
-  });
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 
   await server.listen();
   writeOwnPidFile();
-  bootstrapPhase = "ready"; // No bootstrap yet in this scaffold; once we
-                            // host SurrealStore + Embeddings here, this
-                            // will move through the real phases.
+
+  // Server is up and serving meta.* immediately. Stack initialization runs
+  // async — clients that connect during this window see bootstrapPhase
+  // progressing through the real lifecycle (npm-install → ... → ready).
+  // Tool handlers return "still initializing" until globalState is set.
+  initializeStack().catch((err) => {
+    log.error("[daemon] initializeStack rejected:", err);
+    setBootstrapPhase("failed", err instanceof Error ? err : new Error(String(err)));
+  });
+
   log.info(`[daemon] ready — protocol v${PROTOCOL_VERSION}, daemon v${DAEMON_VERSION}`);
 }
 
