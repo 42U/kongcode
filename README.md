@@ -37,6 +37,21 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 KongCode 0.6.0 ships with a self-contained first-run bootstrap. No manual SurrealDB install, no manual model download, no shell scripts.
 
+### Prerequisites
+
+Both must be installed and on PATH before installing the plugin. Claude Code's plugin loader spawns kongcode via `node`, so missing Node will fail with "Failed to reconnect to plugin:kongcode."
+
+| Tool | Reason | Check |
+|---|---|---|
+| **Node.js ≥ 18** + npm | MCP server runtime + `npm ci` during bootstrap | `node -v` and `npm -v` |
+| **git** | Claude Code clones the marketplace repo | `git --version` |
+
+Quick installs:
+
+- **macOS**: `brew install node git` (or download from https://nodejs.org and https://git-scm.com)
+- **Windows (PowerShell, elevated)**: `winget install OpenJS.NodeJS.LTS Git.Git` then **restart your terminal AND Claude Code** so the new PATH is picked up.
+- **Linux**: use your distro's package manager (`apt install nodejs npm git` / `dnf install nodejs npm git` / etc.) or [nvm](https://github.com/nvm-sh/nvm).
+
 ### 1. Install the plugin
 
 In Claude Code:
