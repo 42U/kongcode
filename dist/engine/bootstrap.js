@@ -265,11 +265,16 @@ async function isKongcodeSurreal(url, user, pass) {
  *  Returns the first match. SURREAL_URL env var still takes precedence in the
  *  parent caller — this function only runs when the user hasn't pinned a URL. */
 async function findExistingKongcodeSurreal(cacheDir, managedPort, user, pass) {
-    // Dedup'd candidate list: managed port first (covers "previous detached
-    // surreal child still alive" case), then historical defaults from older
-    // kongcode setups (Docker on 8000, alternate 8042). Order matters — we
-    // prefer the bootstrap-managed instance when it exists.
-    const candidates = Array.from(new Set([managedPort, 8000, 8042]));
+    // Dedup'd candidate list. Order is load-bearing: legacy ports (8000 from
+    // Docker setups, alternate 8042 from older READMEs) come BEFORE the
+    // bootstrap-managed default. Reasoning: a user who's been running kongcode
+    // pre-0.6 has their canonical data on the legacy port; a managed instance
+    // on 18765 is either today's accidentally-spawned duplicate (small,
+    // disposable) or empty. Always prefer the user's pre-existing data.
+    // The fingerprint check (isKongcodeSurreal) ensures we only pick a port
+    // that actually has kongcode tables — empty/wrong-app SurrealDBs are
+    // rejected and we fall through to the next candidate.
+    const candidates = Array.from(new Set([8000, 8042, managedPort]));
     for (const port of candidates) {
         // Cheap alive-check first to avoid burning the 3s isKongcodeSurreal
         // timeout on dead ports.
