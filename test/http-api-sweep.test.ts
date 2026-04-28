@@ -131,7 +131,15 @@ describe("sweepStaleSockets — reaper (default-on)", () => {
 
     const exited = await waitForExit(child);
     expect(exited).toBe(true);
-    expect(child.signalCode).toBe("SIGTERM");
+    // On POSIX, `child.kill("SIGTERM")` produces signalCode === "SIGTERM".
+    // On Windows, Node implements .kill() as TerminateProcess — the child
+    // exits but signalCode stays null and exitCode reflects termination.
+    // Either signature is acceptable; what matters is "the child got reaped."
+    if (process.platform === "win32") {
+      expect(child.signalCode === "SIGTERM" || child.exitCode !== null).toBe(true);
+    } else {
+      expect(child.signalCode).toBe("SIGTERM");
+    }
     expect(existsSync(join(dir, `.kongcode-${siblingPid}.sock`))).toBe(false);
   });
 
