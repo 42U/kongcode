@@ -108,10 +108,13 @@ function resolveDaemonScript(): string {
 /** Get a daemon URL — either the existing one if alive, or spawn a new one. */
 export async function ensureDaemon(opts: DaemonSpawnOpts = {}): Promise<{ socketPath: string; spawned: boolean }> {
   const log = opts.log ?? { info: () => {}, warn: () => {}, error: () => {} };
-  const socketPath = opts.socketPath ?? DEFAULT_DAEMON_SOCKET_PATH.replace("$HOME", DEFAULT_HOME);
+  // Resolve all paths absolutely. The shared/ipc-types constants may use
+  // relative paths or $HOME placeholders depending on how they're defined;
+  // we rebuild from cacheDir + DEFAULT_HOME to be format-agnostic.
+  const socketPath = opts.socketPath ?? join(DEFAULT_HOME, ".kongcode-daemon.sock");
   const cacheDir = opts.cacheDir ?? join(DEFAULT_HOME, ".kongcode", "cache");
-  const pidFile = DAEMON_PID_FILE.replace("$HOME", DEFAULT_HOME);
-  const lockPath = DAEMON_SPAWN_LOCK.replace("$HOME", DEFAULT_HOME);
+  const pidFile = join(cacheDir, "daemon.pid");
+  const lockPath = join(cacheDir, "daemon.spawn.lock");
   const readyTimeoutMs = opts.readyTimeoutMs ?? 300_000; // 5 min cold first run
 
   // Fast path: socket exists and pings successfully.
@@ -154,10 +157,17 @@ export async function ensureDaemon(opts: DaemonSpawnOpts = {}): Promise<{ socket
     if (!existsSync(scriptPath)) {
       throw new Error(`daemon script not found at ${scriptPath} — check plugin install`);
     }
-    log.info(`[daemon-spawn] spawning daemon from ${scriptPath}`);
+    // Redirect daemon stdout/stderr to a log file so startup errors are visible.
+    // 'ignore' would hide any throw during initializeStack(), making debugging
+    // (the kind of bug 0.6.7's first integration test hit — silent 5-min hang)
+    // nearly impossible. The fd path: stdin ignored, stdout+stderr to logFile.
+    const logFilePath = join(cacheDir, "daemon.log");
+    const { openSync } = await import("node:fs");
+    const logFd = openSync(logFilePath, "a"); // append, create if missing
+    log.info(`[daemon-spawn] spawning daemon from ${scriptPath} (logs → ${logFilePath})`);
     const child = spawn(process.execPath, [scriptPath], {
       detached: true,
-      stdio: "ignore",
+      stdio: ["ignore", logFd, logFd],
       env: process.env,
     });
     child.unref();

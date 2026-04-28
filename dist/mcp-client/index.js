@@ -107,11 +107,11 @@ async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     log.info(`[mcp-client] kongcode MCP client running on stdio (v${CLIENT_VERSION}, session=${SESSION_ID})`);
-    // Eagerly connect to daemon in the background so first tool call is fast.
-    // Don't await — handshake completed above; let stack init proceed in parallel.
-    getOrConnectIpc().catch((e) => {
-        log.warn(`[mcp-client] background daemon connect failed (will retry on first tool call): ${e.message}`);
-    });
+    // No eager background daemon connect. Earlier (0.6.7) we did it for "first
+    // tool call is fast" but it caused lock contention with the foreground
+    // tool-call path's getOrConnectIpc(): both raced for the spawn lock, the
+    // foreground gave up with "lock contention — give up". Connect lazily on
+    // first tool call instead — mcp-client's init handshake is unaffected.
 }
 main().catch((err) => {
     log.error("[mcp-client] fatal:", err);
