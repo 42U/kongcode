@@ -47,7 +47,8 @@ export class EmbeddingService {
           `Embedding model not found at: ${this.config.modelPath}\n  Download BGE-M3 GGUF or set EMBED_MODEL_PATH`,
         );
       }
-      const { getLlama, LlamaLogLevel } = await import("node-llama-cpp");
+      const { loadNodeLlamaCpp } = await import("./llama-loader.js");
+      const { getLlama, LlamaLogLevel } = await loadNodeLlamaCpp();
       const llama = await getLlama({
         logLevel: LlamaLogLevel.error,
         logger: (level, message) => {

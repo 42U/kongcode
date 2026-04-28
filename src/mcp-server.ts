@@ -388,6 +388,7 @@ async function initialize(): Promise<void> {
         `[bootstrap] complete in ${result.totalDurationMs}ms ` +
           `(npm=${result.npmInstall.ran ? "ran" : "skip"}, ` +
           `surreal=${result.surrealBinary.provisioned ? "downloaded" : "cached"}, ` +
+          `llama=${result.nodeLlamaCpp.mainPath ? (result.nodeLlamaCpp.provisioned ? "downloaded" : "cached") : "via-npm"}, ` +
           `model=${result.embeddingModel.provisioned ? "downloaded" : "cached"})`,
       );
     } catch (err) {

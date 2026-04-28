@@ -41,5 +41,19 @@
     "name": "bge-m3-Q4_K_M.gguf",
     "url": "https://huggingface.co/gpustack/bge-m3-GGUF/resolve/main/bge-m3-Q4_K_M.gguf?download=true",
     "sha256": null
+  },
+  "nodeLlamaCpp": {
+    "$comment": "node-llama-cpp main package + per-platform native binding. Downloaded by bootstrap on first run when running under SEA (no node_modules available). Each <platform> tarball goes to <cache>/native/node_modules/@node-llama-cpp/<platform>/ so Node's normal module resolution finds it from <cache>/native/node-llama-cpp/.",
+    "version": "3.18.1",
+    "mainTarballUrl": "https://registry.npmjs.org/node-llama-cpp/-/node-llama-cpp-{version}.tgz",
+    "platformTarballUrl": "https://registry.npmjs.org/@node-llama-cpp/{platform}/-/{platform}-{version}.tgz",
+    "platforms": {
+      "linux-x64": "linux-x64",
+      "linux-arm64": "linux-arm64",
+      "darwin-x64": "mac-x64",
+      "darwin-arm64": "mac-arm64-metal",
+      "win32-x64": "win-x64",
+      "win32-arm64": "win-arm64"
+    }
   }
 }

@@ -18,6 +18,10 @@ export interface BootstrapResult {
         provisioned: boolean;
         sizeBytes: number;
     };
+    nodeLlamaCpp: {
+        mainPath: string | null;
+        provisioned: boolean;
+    };
     totalDurationMs: number;
 }
 export interface BootstrapInput {
@@ -30,7 +34,13 @@ export interface BootstrapInput {
     surrealUser: string;
     surrealPass: string;
 }
-/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js). */
+/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js).
+ *
+ *  Under SEA (CJS-in-binary), import.meta.url is undefined and fileURLToPath
+ *  throws. Fall back to the directory containing the running executable —
+ *  for SEA, that's wherever the user installed the plugin binary, which is
+ *  the natural plugin root. KONGCODE_PLUGIN_DIR overrides explicitly.
+ */
 export declare function resolvePluginDir(): string;
 /**
  * Idempotent first-run bootstrap. Provisions npm deps, SurrealDB binary, embedding

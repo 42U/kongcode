@@ -33,6 +33,12 @@ interface Manifest {
     url: string;
     sha256: string | null;
   };
+  nodeLlamaCpp?: {
+    version: string;
+    mainTarballUrl: string;
+    platformTarballUrl: string;
+    platforms: Record<string, string>;
+  };
 }
 
 export interface BootstrapResult {
@@ -40,6 +46,7 @@ export interface BootstrapResult {
   surrealBinary: { path: string; provisioned: boolean; sizeBytes: number };
   surrealServer: { url: string; pid: number | null; managed: boolean };
   embeddingModel: { path: string; provisioned: boolean; sizeBytes: number };
+  nodeLlamaCpp: { mainPath: string | null; provisioned: boolean };
   totalDurationMs: number;
 }
 
@@ -56,11 +63,24 @@ export interface BootstrapInput {
 
 let managedSurreal: ChildProcess | null = null;
 
-/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js). */
+/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js).
+ *
+ *  Under SEA (CJS-in-binary), import.meta.url is undefined and fileURLToPath
+ *  throws. Fall back to the directory containing the running executable —
+ *  for SEA, that's wherever the user installed the plugin binary, which is
+ *  the natural plugin root. KONGCODE_PLUGIN_DIR overrides explicitly.
+ */
 export function resolvePluginDir(): string {
-  const moduleDir = dirname(fileURLToPath(import.meta.url));
-  // bootstrap.js lives at <pluginDir>/dist/engine/, so go up two levels.
-  return join(moduleDir, "..", "..");
+  if (process.env.KONGCODE_PLUGIN_DIR) return process.env.KONGCODE_PLUGIN_DIR;
+  try {
+    const moduleDir = dirname(fileURLToPath(import.meta.url));
+    // bootstrap.js lives at <pluginDir>/dist/engine/, so go up two levels.
+    return join(moduleDir, "..", "..");
+  } catch {
+    // SEA / CJS path: process.execPath is the SEA binary; its parent dir is
+    // <pluginDir>/dist/bin/ in our layout, so the plugin root is two levels up.
+    return join(dirname(process.execPath), "..", "..");
+  }
 }
 
 function detectPlatformKey(): string {
@@ -121,6 +141,15 @@ async function ensureNpmDeps(
 ): Promise<{ ran: boolean; durationMs: number }> {
   const nodeModules = join(pluginDir, "node_modules");
   if (existsSync(nodeModules)) {
+    return { ran: false, durationMs: 0 };
+  }
+  // Skip when no package.json is adjacent — under SEA the binary stands alone
+  // (deps are bundled inline + native pieces downloaded separately into the
+  // cache), and KONGCODE_SKIP_NPM_CI is an explicit opt-out for advanced setups.
+  if (!existsSync(join(pluginDir, "package.json"))) {
+    return { ran: false, durationMs: 0 };
+  }
+  if (process.env.KONGCODE_SKIP_NPM_CI === "1") {
     return { ran: false, durationMs: 0 };
   }
   log.info(
@@ -187,6 +216,85 @@ async function ensureSurrealBinary(
     chmodSync(binPath, 0o755);
   }
   return { path: binPath, provisioned: true, sizeBytes: dl.sizeBytes };
+}
+
+/**
+ * Download node-llama-cpp main package + matching platform binding into
+ * <cacheDir>/native/ so SEA-built binaries (which have no adjacent
+ * node_modules) can still resolve the dynamic import. Layout matches Node's
+ * standard module resolution: the platform package goes under
+ * <cacheDir>/native/node_modules/@node-llama-cpp/<platform>/ so when
+ * node-llama-cpp's main code does require("@node-llama-cpp/<platform>"),
+ * Node walks up from <cacheDir>/native/node-llama-cpp/dist/ and finds it.
+ *
+ * Sets KONGCODE_NODE_LLAMA_CPP_PATH to the absolute index.js path so
+ * src/engine/llama-loader.ts imports from the right place.
+ *
+ * Skipped when running under standard Node + node_modules (the existing
+ * "node-llama-cpp" specifier resolves naturally).
+ */
+async function ensureNodeLlamaCpp(
+  cacheDir: string,
+  manifest: Manifest,
+  pluginDir: string,
+): Promise<{ mainPath: string | null; provisioned: boolean }> {
+  // Skip if node_modules has node-llama-cpp adjacent (npm-ci'd plugin install
+  // or dev tree). Cheap existsSync — saves the manifest lookup + work.
+  if (existsSync(join(pluginDir, "node_modules", "node-llama-cpp", "package.json"))) {
+    return { mainPath: null, provisioned: false };
+  }
+  if (!manifest.nodeLlamaCpp) {
+    return { mainPath: null, provisioned: false };
+  }
+  const platformKey = detectPlatformKey();
+  const platformName = manifest.nodeLlamaCpp.platforms[platformKey];
+  if (!platformName) {
+    log.warn(
+      `[bootstrap] node-llama-cpp: no platform mapping for ${platformKey} — embeddings will fail unless KONGCODE_NODE_LLAMA_CPP_PATH is set.`,
+    );
+    return { mainPath: null, provisioned: false };
+  }
+
+  const version = manifest.nodeLlamaCpp.version;
+  const nativeDir = join(cacheDir, "native");
+  const mainDir = join(nativeDir, "node-llama-cpp");
+  const mainEntry = join(mainDir, "dist", "index.js");
+  const platformDir = join(nativeDir, "node_modules", "@node-llama-cpp", platformName);
+  const platformEntry = join(platformDir, "package.json");
+
+  // Idempotent: skip download if both already extracted.
+  if (existsSync(mainEntry) && existsSync(platformEntry)) {
+    process.env.KONGCODE_NODE_LLAMA_CPP_PATH = mainEntry;
+    return { mainPath: mainEntry, provisioned: false };
+  }
+
+  const mainUrl = manifest.nodeLlamaCpp.mainTarballUrl.replaceAll("{version}", version);
+  const platformUrl = manifest.nodeLlamaCpp.platformTarballUrl
+    .replaceAll("{version}", version)
+    .replaceAll("{platform}", platformName);
+
+  log.info(
+    `[bootstrap] Downloading node-llama-cpp ${version} (main + ${platformName} binding) for ${platformKey}`,
+  );
+  const mainTarball = join(nativeDir, `node-llama-cpp-${version}.tgz`);
+  const platformTarball = join(nativeDir, `${platformName}-${version}.tgz`);
+  await downloadFile(mainUrl, mainTarball, null);
+  await downloadFile(platformUrl, platformTarball, null);
+
+  // npm tarballs wrap contents in a "package/" prefix; --strip-components=1
+  // unwraps that so the package files land directly in mainDir / platformDir.
+  await mkdir(mainDir, { recursive: true });
+  await mkdir(platformDir, { recursive: true });
+  await execFileAsync("tar", ["-xzf", mainTarball, "-C", mainDir, "--strip-components=1"]);
+  await execFileAsync("tar", ["-xzf", platformTarball, "-C", platformDir, "--strip-components=1"]);
+  await rm(mainTarball, { force: true });
+  await rm(platformTarball, { force: true });
+
+  if (!existsSync(mainEntry)) {
+    throw new Error(`node-llama-cpp tarball did not extract to expected path ${mainEntry}`);
+  }
+  process.env.KONGCODE_NODE_LLAMA_CPP_PATH = mainEntry;
+  return { mainPath: mainEntry, provisioned: true };
 }
 
 async function ensureEmbeddingModel(
@@ -284,6 +392,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
   const manifest = loadManifest(input.pluginDir);
 
   const npmInstall = await ensureNpmDeps(input.pluginDir);
+  const nodeLlamaCpp = await ensureNodeLlamaCpp(input.cacheDir, manifest, input.pluginDir);
   const embeddingModel = await ensureEmbeddingModel(input.modelPath, manifest);
 
   // External-SurrealDB path: user explicitly opted out via SURREAL_URL.
@@ -300,6 +409,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
         managed: false,
       },
       embeddingModel,
+      nodeLlamaCpp,
       totalDurationMs: Date.now() - start,
     };
   }
@@ -326,6 +436,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
     surrealBinary,
     surrealServer: { url, pid: managedSurreal.pid ?? null, managed: true },
     embeddingModel,
+    nodeLlamaCpp,
     totalDurationMs: Date.now() - start,
   };
 }
