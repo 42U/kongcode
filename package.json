@@ -58,8 +58,11 @@
   },
   "files": [
     "dist/",
+    "bin/",
     ".claude-plugin/",
     ".mcp.json",
+    "bin-manifest.json",
+    "sea-config.json",
     "hooks/",
     "skills/",
     "commands/",

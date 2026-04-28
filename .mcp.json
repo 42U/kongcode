@@ -1,4 +1,5 @@
 {
+  "$comment": "0.6.x command: invoke via Node directly. 0.7.0+ will switch to bin/kongcode-launch (Unix) / bin/kongcode-launch.cmd (Windows) once CI ships per-platform SEA binaries to bin/kongcode-<os>-<arch>. The launcher scripts already fall back to this Node invocation when no SEA binary is present, so the transition can be staged: ship binaries first, then flip the command field, no breaking change.",
   "mcpServers": {
     "kongcode": {
       "command": "node",
