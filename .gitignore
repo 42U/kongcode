@@ -12,8 +12,12 @@ node_modules/
 # Built in CI for releases; local builds never get committed.
 dist/bin/
 dist/sea-prep.blob
+dist/daemon-sea-prep.blob
+dist/mcp-sea-prep.blob
 dist/mcp-server.bundle.cjs
 dist/mcp-server.bundle.mjs
+dist/daemon/bundle.cjs
+dist/mcp-client/bundle.cjs
 
 # Environment
 .env
