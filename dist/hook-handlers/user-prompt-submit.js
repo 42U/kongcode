@@ -21,6 +21,15 @@ import { detectAnomalies, formatAnomalyBlock } from "../engine/observability.js"
 function wrapKongcodeContext(raw) {
     if (!raw || !raw.trim())
         return raw ?? "";
+    // Strip any pre-existing <system-reminder>...</system-reminder> blocks from the
+    // input before re-wrapping. Without this, kongcode's wrapper ends up nested
+    // inside Claude Code's harness wrapper (or a prior hook's wrapper), which
+    // shows visibly to the model and suggests sloppy concatenation.
+    const stripped = raw
+        .replace(/<\/?system-reminder>\s*/g, "")
+        .trim();
+    if (!stripped)
+        return "";
     return [
         "<system-reminder>",
         "KONGCODE CONTEXT — authoritative for this turn.",
@@ -30,7 +39,7 @@ function wrapKongcodeContext(raw) {
         "are relevant, explicitly note that rather than pretending they aren't",
         "there. Cite items by their concept id when citing.",
         "",
-        raw.trim(),
+        stripped,
         "</system-reminder>",
     ].join("\n");
 }

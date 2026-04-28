@@ -29,6 +29,18 @@ const STOPWORDS = new Set([
     "what", "which", "while", "with", "from", "into", "onto", "about",
     "after", "before", "between", "through",
 ]);
+// Common log/status acronyms that pass the ACRONYM regex but carry no concept value.
+// Without this stoplist, error logs and status outputs ("system went DOWN, status RED,
+// PID 1234") generate noise concepts that pollute recall.
+const STOPLIST_ACRONYMS = new Set([
+    "RED", "GREEN", "OK", "ERROR", "FAIL", "FAILED", "PASS", "PASSED",
+    "UP", "DOWN", "ON", "OFF", "TRUE", "FALSE", "NULL", "NONE",
+    "PID", "TID", "UID", "GID", "TODO", "FIXME", "DEBUG", "INFO", "WARN", "WARNING",
+    "GET", "POST", "PUT", "DELETE", "PATCH", "HEAD",
+    "HTTP", "HTTPS", "URL", "URI", "JSON", "YAML", "CSV", "XML", "HTML", "CSS",
+    "CPU", "RAM", "GPU", "IO", "OS",
+    "USD", "EUR", "GBP", "JPY",
+]);
 /** Default upper bound on concepts returned per text. Override per call. */
 export const DEFAULT_CONCEPT_CAP = 20;
 /** Extract concept name strings from free text using regex heuristics. */
@@ -56,6 +68,8 @@ export function extractConceptNames(text, max = DEFAULT_CONCEPT_CAP) {
             if (!tok || tok.length < 3)
                 continue;
             if (STOPWORDS.has(tok.toLowerCase()))
+                continue;
+            if (STOPLIST_ACRONYMS.has(tok))
                 continue;
             bump(tok);
         }

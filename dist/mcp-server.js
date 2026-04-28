@@ -42,6 +42,14 @@ import { log } from "./engine/log.js";
 import { runBootstrapMaintenance } from "./engine/maintenance.js";
 // ── Global state ──────────────────────────────────────────────────────────────
 let globalState = null;
+let bootstrapPhase = "starting";
+let bootstrapStartedAt = Date.now();
+let bootstrapError = null;
+function setBootstrapPhase(p, err) {
+    bootstrapPhase = p;
+    if (p === "failed" && err)
+        bootstrapError = err;
+}
 export function getGlobalState() {
     return globalState;
 }
@@ -259,8 +267,31 @@ function getSession() {
     return globalState.getOrCreateSession(sessionId, sessionId);
 }
 async function handleToolCall(name, args) {
-    if (!globalState) {
-        return { content: [{ type: "text", text: "KongCode not initialized. Is SurrealDB running?" }] };
+    if (!globalState || bootstrapPhase !== "ready") {
+        const elapsed = Math.round((Date.now() - bootstrapStartedAt) / 1000);
+        let msg;
+        if (bootstrapPhase === "failed" && bootstrapError) {
+            msg = `KongCode bootstrap failed: ${bootstrapError.message}. Check stderr for details, or set KONGCODE_SKIP_BOOTSTRAP=1 and provide your own SurrealDB via SURREAL_URL.`;
+        }
+        else if (bootstrapPhase === "starting" || bootstrapPhase === "npm-install") {
+            msg = `kongcode is provisioning first-run dependencies (npm install, ~${elapsed}s elapsed). First-run setup typically takes 2-5 minutes total. Try again in 30s.`;
+        }
+        else if (bootstrapPhase === "downloading-surreal") {
+            msg = `kongcode is downloading SurrealDB binary (~80MB, ~${elapsed}s elapsed). Try again in 30s.`;
+        }
+        else if (bootstrapPhase === "downloading-model") {
+            msg = `kongcode is downloading the BGE-M3 embedding model (~420MB, ~${elapsed}s elapsed). Try again in 60s.`;
+        }
+        else if (bootstrapPhase === "starting-surreal" || bootstrapPhase === "connecting-store") {
+            msg = `kongcode is starting its managed SurrealDB child (~${elapsed}s elapsed). Try again in 10s.`;
+        }
+        else if (bootstrapPhase === "loading-embeddings") {
+            msg = `kongcode is loading the embedding model (cold start, ~${elapsed}s elapsed). Try again in 30s.`;
+        }
+        else {
+            msg = `kongcode is still initializing (phase=${bootstrapPhase}, ${elapsed}s elapsed). Try again in 30s.`;
+        }
+        return { content: [{ type: "text", text: msg }] };
     }
     const session = getSession();
     switch (name) {
@@ -295,12 +326,19 @@ async function handleToolCall(name, args) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 async function initialize() {
     log.info("Initializing KongCode MCP server...");
+    bootstrapStartedAt = Date.now();
+    setBootstrapPhase("starting");
     // Parse config from env vars
     const config = parsePluginConfig();
     // First-run bootstrap: provision npm deps, SurrealDB binary + child process,
     // and embedding model. Idempotent — fast path when artifacts already exist.
     // KONGCODE_SKIP_BOOTSTRAP=1 disables; SURREAL_URL override skips the child.
     if (process.env.KONGCODE_SKIP_BOOTSTRAP !== "1") {
+        // Phase is coarse — bootstrap() runs npm-install, surreal-download, model-download,
+        // and surreal-spawn internally without exposing per-step progress yet. Tag the
+        // longest-likely step ("downloading-surreal") so the user-facing error message
+        // points at something plausible. Refine when bootstrap exposes a progress callback.
+        setBootstrapPhase("downloading-surreal");
         try {
             const result = await bootstrap({
                 pluginDir: resolvePluginDir(),
@@ -323,6 +361,7 @@ async function initialize() {
         }
         catch (err) {
             log.error("[bootstrap] failed — falling back to degraded mode:", err);
+            setBootstrapPhase("failed", err instanceof Error ? err : new Error(String(err)));
         }
     }
     else {
@@ -335,6 +374,7 @@ async function initialize() {
     globalState = new GlobalPluginState(config, store, embeddings);
     globalState.workspaceDir = process.env.KONGCODE_PROJECT_DIR ?? process.cwd();
     // Connect to SurrealDB
+    setBootstrapPhase("connecting-store");
     try {
         await store.initialize();
         log.info("SurrealDB connected");
@@ -343,6 +383,7 @@ async function initialize() {
         log.error("SurrealDB connection failed — running in degraded mode:", err);
     }
     // Initialize embedding model
+    setBootstrapPhase("loading-embeddings");
     try {
         await embeddings.initialize();
         log.info("Embedding model loaded");
@@ -350,6 +391,7 @@ async function initialize() {
     catch (err) {
         log.error("Embedding model failed — running without vector search:", err);
     }
+    setBootstrapPhase("ready");
     // Register hook handlers
     registerHookHandler("session-start", handleSessionStart);
     registerHookHandler("session-end", handleSessionEnd);

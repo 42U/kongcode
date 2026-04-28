@@ -986,10 +986,21 @@ tier0FromWrapper = []) {
         }
         // Vector search + tag-boosted retrieval (cache miss path, run in parallel)
         recordPrefetchMiss();
-        const [vectorResults, tagResults] = await Promise.all([
+        const [vectorResultsRaw, tagResults] = await Promise.all([
             store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive()),
             store.tagBoostedConcepts(queryText, queryVec, 10).catch(e => { swallow.warn("graph-context:tagBoost", e); return []; }),
         ]);
+        // Filter out the user's just-stored turn(s): vector search would otherwise
+        // rank the just-typed prompt's embedding ~60% to itself and echo back as
+        // "Past Conversation," wasting tokens. 5-second cutoff excludes only the
+        // very recent stores; legitimate older context still surfaces.
+        const recentCutoffMs = Date.now() - 5_000;
+        const vectorResults = vectorResultsRaw.filter((r) => {
+            if (r.table !== "turn")
+                return true;
+            const ts = typeof r.timestamp === "string" ? Date.parse(r.timestamp) : 0;
+            return ts > 0 && ts < recentCutoffMs;
+        });
         // Merge: dedupe tag results against vector results, then combine
         const vectorIds = new Set(vectorResults.map(r => r.id));
         const uniqueTagResults = tagResults.filter(r => !vectorIds.has(r.id));
