@@ -38,12 +38,19 @@ export interface BootstrapInput {
     surrealUser: string;
     surrealPass: string;
 }
-/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js).
+/** Resolve the plugin root from this file's compiled location.
+ *
+ *  Three runtime layouts to handle:
+ *    1. Compiled tsc: bootstrap.js at <plugin>/dist/engine/ — walk up 2.
+ *    2. esbuild bundle: bundle.cjs at <plugin>/dist/daemon/ — walk up 2.
+ *    3. SEA executable: binary at <plugin>/bin/kongcode-daemon-<platform>
+ *       — walk up 1 (NOT 2; the SEA binary lives in bin/, not dist/engine/).
  *
  *  Under SEA (CJS-in-binary), import.meta.url is undefined and fileURLToPath
- *  throws. Fall back to the directory containing the running executable —
- *  for SEA, that's wherever the user installed the plugin binary, which is
- *  the natural plugin root. KONGCODE_PLUGIN_DIR overrides explicitly.
+ *  throws — caught and we use process.execPath instead.
+ *
+ *  KONGCODE_PLUGIN_DIR env var always wins for explicit overrides (tests,
+ *  unusual install layouts).
  */
 export declare function resolvePluginDir(): string;
 /**

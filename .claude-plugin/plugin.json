@@ -1,6 +1,6 @@
 {
   "name": "kongcode",
-  "version": "0.7.0-rc.2",
+  "version": "0.7.0-rc.3",
   "description": "Graph-backed persistent memory engine with SurrealDB + BGE-M3 embeddings. Gives Claude Code permanent memory that learns across sessions.",
   "author": {
     "name": "VoidOrigin"

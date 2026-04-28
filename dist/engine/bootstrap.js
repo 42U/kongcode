@@ -8,25 +8,32 @@ import { promisify } from "node:util";
 import { log } from "./log.js";
 const execFileAsync = promisify(execFile);
 let managedSurreal = null;
-/** Resolve the plugin root from this file's compiled location (dist/engine/bootstrap.js).
+/** Resolve the plugin root from this file's compiled location.
+ *
+ *  Three runtime layouts to handle:
+ *    1. Compiled tsc: bootstrap.js at <plugin>/dist/engine/ — walk up 2.
+ *    2. esbuild bundle: bundle.cjs at <plugin>/dist/daemon/ — walk up 2.
+ *    3. SEA executable: binary at <plugin>/bin/kongcode-daemon-<platform>
+ *       — walk up 1 (NOT 2; the SEA binary lives in bin/, not dist/engine/).
  *
  *  Under SEA (CJS-in-binary), import.meta.url is undefined and fileURLToPath
- *  throws. Fall back to the directory containing the running executable —
- *  for SEA, that's wherever the user installed the plugin binary, which is
- *  the natural plugin root. KONGCODE_PLUGIN_DIR overrides explicitly.
+ *  throws — caught and we use process.execPath instead.
+ *
+ *  KONGCODE_PLUGIN_DIR env var always wins for explicit overrides (tests,
+ *  unusual install layouts).
  */
 export function resolvePluginDir() {
     if (process.env.KONGCODE_PLUGIN_DIR)
         return process.env.KONGCODE_PLUGIN_DIR;
     try {
         const moduleDir = dirname(fileURLToPath(import.meta.url));
-        // bootstrap.js lives at <pluginDir>/dist/engine/, so go up two levels.
+        // bootstrap.js at <pluginDir>/dist/engine/ — walk up two levels.
         return join(moduleDir, "..", "..");
     }
     catch {
-        // SEA / CJS path: process.execPath is the SEA binary; its parent dir is
-        // <pluginDir>/dist/bin/ in our layout, so the plugin root is two levels up.
-        return join(dirname(process.execPath), "..", "..");
+        // SEA / CJS path: process.execPath is the SEA binary at
+        // <pluginDir>/bin/kongcode-{daemon,mcp}-<platform>. Walk up ONE level.
+        return join(dirname(process.execPath), "..");
     }
 }
 function detectPlatformKey() {
