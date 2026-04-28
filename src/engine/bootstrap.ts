@@ -157,9 +157,13 @@ async function ensureNpmDeps(
   );
   const start = Date.now();
   // Pass --prefix so we install into the plugin dir even if cwd is elsewhere.
+  // On Windows, npm is actually npm.cmd — Node's execFile won't resolve .cmd
+  // files without shell mode (per child_process docs). Without this flag,
+  // bootstrap silently hangs or errors on every Windows install.
   await execFileAsync("npm", ["ci", "--omit=dev", "--prefix", pluginDir], {
     env: { ...process.env, npm_config_yes: "true" },
     maxBuffer: 200 * 1024 * 1024, // npm output for native deps can be chatty
+    shell: process.platform === "win32",
   });
   return { ran: true, durationMs: Date.now() - start };
 }

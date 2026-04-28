@@ -364,11 +364,12 @@ async function initialize(): Promise<void> {
   // and embedding model. Idempotent — fast path when artifacts already exist.
   // KONGCODE_SKIP_BOOTSTRAP=1 disables; SURREAL_URL override skips the child.
   if (process.env.KONGCODE_SKIP_BOOTSTRAP !== "1") {
-    // Phase is coarse — bootstrap() runs npm-install, surreal-download, model-download,
-    // and surreal-spawn internally without exposing per-step progress yet. Tag the
-    // longest-likely step ("downloading-surreal") so the user-facing error message
-    // points at something plausible. Refine when bootstrap exposes a progress callback.
-    setBootstrapPhase("downloading-surreal");
+    // npm-install is by far the longest first-run step (1-3 min vs <10s for
+    // the binary downloads). Tagging the phase as "npm-install" gives the
+    // user-facing error message the right hint when they probe mid-bootstrap.
+    // Refined per-step phasing requires plumbing a progress callback through
+    // bootstrap(); deferred until users complain.
+    setBootstrapPhase("npm-install");
     try {
       const result = await bootstrap({
         pluginDir: resolvePluginDir(),
@@ -473,7 +474,7 @@ async function shutdown(): Promise<void> {
 
 async function main(): Promise<void> {
   const server = new Server(
-    { name: "kongcode", version: "0.6.1" },
+    { name: "kongcode", version: "0.6.2" },
     { capabilities: { tools: {} } },
   );
 
