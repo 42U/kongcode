@@ -1,0 +1,122 @@
+name: Build SEA release artifacts
+
+# Triggered by pushing a v* tag (e.g. v0.7.0-rc.1, v0.7.0). Each platform
+# matrix entry runs `npm run sea` on its native runner, producing a single
+# self-contained executable that the bootstrap can ship alongside dist/.
+# The artifacts are attached to the GitHub Release so end users can download
+# them via the plugin's first-run bootstrap (or via direct release download
+# for advanced setups).
+#
+# Why per-platform native runners (vs cross-build): Node SEA bakes the target
+# platform's Node binary into the executable. The simplest way to produce a
+# correct arm64 binary is to run on an arm64 host. GitHub provides arm64
+# runners for both Linux and macOS, so we use them.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build kongcode-${{ matrix.os_name }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os_name: linux
+            arch: x64
+            ext: ""
+          - runner: ubuntu-24.04-arm
+            os_name: linux
+            arch: arm64
+            ext: ""
+          - runner: macos-13
+            os_name: darwin
+            arch: x64
+            ext: ""
+          - runner: macos-14
+            os_name: darwin
+            arch: arm64
+            ext: ""
+          - runner: windows-latest
+            os_name: win32
+            arch: x64
+            ext: ".exe"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build SEA binary
+        shell: bash
+        run: |
+          mkdir -p dist/bin
+          npm run bundle
+          node --experimental-sea-config sea-config.json
+          # Copy the host node binary; postject inject the SEA blob.
+          NODE_BIN="$(command -v node)"
+          BIN_NAME="kongcode-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
+          cp "$NODE_BIN" "dist/bin/$BIN_NAME"
+          # On macOS we need to remove the codesign signature first; postject
+          # adds the SEA blob as a Mach-O section, which invalidates signatures.
+          if [ "${{ matrix.os_name }}" = "darwin" ]; then
+            codesign --remove-signature "dist/bin/$BIN_NAME" || true
+          fi
+          npx postject "dist/bin/$BIN_NAME" NODE_SEA_BLOB dist/sea-prep.blob \
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
+            $([ "${{ matrix.os_name }}" = "darwin" ] && echo "--macho-segment-name NODE_SEA")
+          # Re-sign on macOS with an ad-hoc signature so Gatekeeper doesn't
+          # outright reject it. End users may still need to whitelist via
+          # System Preferences on first run; see README.
+          if [ "${{ matrix.os_name }}" = "darwin" ]; then
+            codesign --sign - "dist/bin/$BIN_NAME" || true
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kongcode-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: dist/bin/kongcode-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create GitHub Release with artifacts
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        run: |
+          mkdir -p release-bin
+          find artifacts -type f -name "kongcode-*" -exec cp {} release-bin/ \;
+          ls -la release-bin/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-bin/*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
+          generate_release_notes: true
