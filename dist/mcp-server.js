@@ -434,7 +434,7 @@ async function shutdown() {
 }
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-    const server = new Server({ name: "kongcode", version: "0.6.5" }, { capabilities: { tools: {} } });
+    const server = new Server({ name: "kongcode", version: "0.6.6" }, { capabilities: { tools: {} } });
     // Register tool list handler
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
         tools: TOOLS,

@@ -474,7 +474,7 @@ async function shutdown(): Promise<void> {
 
 async function main(): Promise<void> {
   const server = new Server(
-    { name: "kongcode", version: "0.6.5" },
+    { name: "kongcode", version: "0.6.6" },
     { capabilities: { tools: {} } },
   );
 

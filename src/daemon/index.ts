@@ -43,9 +43,22 @@ import { SurrealStore } from "../engine/surreal.js";
 import { EmbeddingService } from "../engine/embeddings.js";
 import { GlobalPluginState } from "../engine/state.js";
 import { handleIntrospect } from "../tools/introspect.js";
+import { handleRecall } from "../tools/recall.js";
+import { handleCoreMemory } from "../tools/core-memory.js";
+import {
+  handleFetchPendingWork,
+  handleCommitWorkResults,
+  handleCreateKnowledgeGems,
+} from "../tools/pending-work.js";
+import { handleMemoryHealth } from "../tools/memory-health.js";
+import { handleLinkHierarchy } from "../tools/link-hierarchy.js";
+import { handleSupersede } from "../tools/supersede.js";
+import { handleRecordFinding } from "../tools/record-finding.js";
+import { handleClusterScan } from "../tools/cluster-scan.js";
+import { handleWhatIsMissing } from "../tools/what-is-missing.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.0-dev";
+const DAEMON_VERSION = "0.6.6";
 
 type BootstrapPhase = MetaHandshakeResponse["bootstrapPhase"];
 let bootstrapPhase: BootstrapPhase = "starting";
@@ -255,11 +268,21 @@ async function main(): Promise<void> {
     };
   };
 
-  // First migrated handler — read-only, doesn't depend on hooks firing.
-  // Validates the round-trip: client sends tool.introspect, daemon
-  // dispatches to handleIntrospect with daemon-owned globalState,
-  // returns real DB stats. Subsequent commits migrate the rest.
+  // All 12 tool handlers wired through the same wrapToolHandler adapter.
+  // Each one closes over daemon-owned globalState; per-session state is
+  // resolved by sessionId from the IPC envelope.
   server.register("tool.introspect", wrapToolHandler(handleIntrospect));
+  server.register("tool.recall", wrapToolHandler(handleRecall));
+  server.register("tool.coreMemory", wrapToolHandler(handleCoreMemory));
+  server.register("tool.fetchPendingWork", wrapToolHandler(handleFetchPendingWork));
+  server.register("tool.commitWorkResults", wrapToolHandler(handleCommitWorkResults));
+  server.register("tool.createKnowledgeGems", wrapToolHandler(handleCreateKnowledgeGems));
+  server.register("tool.memoryHealth", wrapToolHandler(handleMemoryHealth));
+  server.register("tool.linkHierarchy", wrapToolHandler(handleLinkHierarchy));
+  server.register("tool.supersede", wrapToolHandler(handleSupersede));
+  server.register("tool.recordFinding", wrapToolHandler(handleRecordFinding));
+  server.register("tool.clusterScan", wrapToolHandler(handleClusterScan));
+  server.register("tool.whatIsMissing", wrapToolHandler(handleWhatIsMissing));
 
   // ── Lifecycle ──
 
