@@ -55,5 +55,12 @@
       "win32-x64": "win-x64",
       "win32-arm64": "win-arm64"
     }
+  },
+  "ajv": {
+    "$comment": "ajv + ajv-formats are imported via createRequire/dynamic require by @modelcontextprotocol/sdk for JSON schema validation. esbuild can't statically resolve those calls under --bundle, so under SEA the bundled JS would fail with MODULE_NOT_FOUND on first tools/list call. Bootstrap downloads both into <cache>/native/node_modules/ at first run and prepends that dir to NODE_PATH before the bundled MCP client runs — Node's module resolution then finds them via the standard walk-up.",
+    "ajvVersion": "8.18.0",
+    "ajvFormatsVersion": "3.0.1",
+    "ajvTarballUrl": "https://registry.npmjs.org/ajv/-/ajv-{version}.tgz",
+    "ajvFormatsTarballUrl": "https://registry.npmjs.org/ajv-formats/-/ajv-formats-{version}.tgz"
   }
 }

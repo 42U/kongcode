@@ -22,6 +22,10 @@ export interface BootstrapResult {
         mainPath: string | null;
         provisioned: boolean;
     };
+    ajv: {
+        provisioned: boolean;
+        nodeModulesDir: string | null;
+    };
     totalDurationMs: number;
 }
 export interface BootstrapInput {

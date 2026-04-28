@@ -204,6 +204,59 @@ async function ensureNodeLlamaCpp(cacheDir, manifest, pluginDir) {
     process.env.KONGCODE_NODE_LLAMA_CPP_PATH = mainEntry;
     return { mainPath: mainEntry, provisioned: true };
 }
+/** Download ajv + ajv-formats into <cacheDir>/native/node_modules/ so the
+ *  bundled MCP client (kongcode-mcp under SEA) can resolve their dynamic
+ *  require() calls at runtime. The MCP SDK uses ajv via dynamic require
+ *  (createRequire(import.meta.url) → require("ajv/dist/runtime/...")) which
+ *  esbuild can't statically resolve, so they MUST be externalized and
+ *  available on Node's resolution path.
+ *
+ *  Caller (mcp-client startup) is responsible for prepending
+ *  <cacheDir>/native/node_modules to NODE_PATH before invoking the
+ *  bundled SEA. */
+async function ensureAjv(cacheDir, manifest, pluginDir) {
+    // Skip if local node_modules has both. dev tree fast-path.
+    if (existsSync(join(pluginDir, "node_modules", "ajv", "package.json")) &&
+        existsSync(join(pluginDir, "node_modules", "ajv-formats", "package.json"))) {
+        return { provisioned: false, nodeModulesDir: null };
+    }
+    if (!manifest.ajv) {
+        return { provisioned: false, nodeModulesDir: null };
+    }
+    const nativeNodeModules = join(cacheDir, "native", "node_modules");
+    const ajvDir = join(nativeNodeModules, "ajv");
+    const ajvFormatsDir = join(nativeNodeModules, "ajv-formats");
+    const bothPresent = existsSync(join(ajvDir, "package.json")) &&
+        existsSync(join(ajvFormatsDir, "package.json"));
+    if (bothPresent) {
+        return { provisioned: false, nodeModulesDir: nativeNodeModules };
+    }
+    const ajvUrl = manifest.ajv.ajvTarballUrl.replaceAll("{version}", manifest.ajv.ajvVersion);
+    const ajvFormatsUrl = manifest.ajv.ajvFormatsTarballUrl.replaceAll("{version}", manifest.ajv.ajvFormatsVersion);
+    log.info(`[bootstrap] Downloading ajv ${manifest.ajv.ajvVersion} + ajv-formats ${manifest.ajv.ajvFormatsVersion} for SEA-bundle MCP client`);
+    const ajvTarball = join(nativeNodeModules, `ajv-${manifest.ajv.ajvVersion}.tgz`);
+    const ajvFormatsTarball = join(nativeNodeModules, `ajv-formats-${manifest.ajv.ajvFormatsVersion}.tgz`);
+    await mkdir(ajvDir, { recursive: true });
+    await mkdir(ajvFormatsDir, { recursive: true });
+    await downloadFile(ajvUrl, ajvTarball, null);
+    await downloadFile(ajvFormatsUrl, ajvFormatsTarball, null);
+    // npm tarballs wrap contents in a "package/" prefix; strip-components=1
+    // unwraps that so package files land directly in ajvDir / ajvFormatsDir.
+    await execFileAsync("tar", ["-xzf", ajvTarball, "-C", ajvDir, "--strip-components=1"]);
+    await execFileAsync("tar", [
+        "-xzf",
+        ajvFormatsTarball,
+        "-C",
+        ajvFormatsDir,
+        "--strip-components=1",
+    ]);
+    await rm(ajvTarball, { force: true });
+    await rm(ajvFormatsTarball, { force: true });
+    if (!existsSync(join(ajvDir, "package.json")) || !existsSync(join(ajvFormatsDir, "package.json"))) {
+        throw new Error("ajv tarballs did not extract to expected paths");
+    }
+    return { provisioned: true, nodeModulesDir: nativeNodeModules };
+}
 async function ensureEmbeddingModel(modelPath, manifest) {
     if (existsSync(modelPath)) {
         return { path: modelPath, provisioned: false, sizeBytes: statSync(modelPath).size };
@@ -415,6 +468,7 @@ export async function bootstrap(input) {
     const manifest = loadManifest(input.pluginDir);
     const npmInstall = await ensureNpmDeps(input.pluginDir);
     const nodeLlamaCpp = await ensureNodeLlamaCpp(input.cacheDir, manifest, input.pluginDir);
+    const ajv = await ensureAjv(input.cacheDir, manifest, input.pluginDir);
     const embeddingModel = await ensureEmbeddingModel(input.modelPath, manifest);
     // External-SurrealDB path: user explicitly opted out via SURREAL_URL.
     if (input.surrealUrlOverride) {
@@ -429,6 +483,7 @@ export async function bootstrap(input) {
             },
             embeddingModel,
             nodeLlamaCpp,
+            ajv,
             totalDurationMs: Date.now() - start,
         };
     }
@@ -453,6 +508,7 @@ export async function bootstrap(input) {
             surrealServer: { url: existing.url, pid: existing.pid, managed: existing.pid !== null },
             embeddingModel,
             nodeLlamaCpp,
+            ajv,
             totalDurationMs: Date.now() - start,
         };
     }
@@ -466,6 +522,7 @@ export async function bootstrap(input) {
         surrealServer: { url, pid: managedSurreal.pid ?? null, managed: true },
         embeddingModel,
         nodeLlamaCpp,
+        ajv,
         totalDurationMs: Date.now() - start,
     };
 }

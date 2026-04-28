@@ -16,6 +16,12 @@
  * lines) so plugin updates are fast and the SEA-bundle for it is tiny
  * (no embedding model, no SurrealDB, no native bindings to pull in).
  */
+// Wire runtime-downloaded ajv/ajv-formats into NODE_PATH BEFORE importing the
+// MCP SDK, so the SDK's dynamic require("ajv/dist/runtime/...") calls resolve
+// when running under SEA (where there's no adjacent node_modules). No-op
+// in dev tree / npm-ci'd installs since the cache dir doesn't exist there.
+import { setupRuntimeNodePath } from "../shared/node-path.js";
+setupRuntimeNodePath();
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, } from "@modelcontextprotocol/sdk/types.js";
