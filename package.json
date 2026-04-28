@@ -36,6 +36,7 @@
   },
   "scripts": {
     "build": "tsc && cp src/engine/schema.surql dist/engine/schema.surql",
+    "bundle": "npm run build && esbuild src/mcp-server.ts --bundle --platform=node --target=node20 --format=cjs --outfile=dist/mcp-server.bundle.cjs --external:node-llama-cpp --external:@node-llama-cpp/*",
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -50,6 +51,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
   },
