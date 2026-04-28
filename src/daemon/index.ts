@@ -68,7 +68,7 @@ import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.6.6";
+const DAEMON_VERSION = "0.7.0-rc.0";
 
 type BootstrapPhase = MetaHandshakeResponse["bootstrapPhase"];
 let bootstrapPhase: BootstrapPhase = "starting";
