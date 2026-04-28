@@ -6,7 +6,7 @@
 
 [![VoidOrigin](https://img.shields.io/badge/VOIDORIGIN-voidorigin.com-0a0a0a?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIHN0cm9rZT0iI2ZmNmIzNSIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iNCIgZmlsbD0iI2ZmNmIzNSIvPjwvc3ZnPg==&logoColor=ff6b35&labelColor=0a0a0a)](https://voidorigin.com)
 
-[![Version](https://img.shields.io/badge/v0.5.6-release-4cc71e?style=for-the-badge)](https://github.com/42U/kongcode)
+[![Version](https://img.shields.io/badge/v0.6.0-release-4cc71e?style=for-the-badge)](https://github.com/42U/kongcode)
 [![GitHub Stars](https://img.shields.io/github/stars/42U/kongcode?style=for-the-badge&logo=github&color=gold)](https://github.com/42U/kongcode)
 [![License: MIT](https://img.shields.io/github/license/42U/kongcode?style=for-the-badge&logo=opensourceinitiative&color=blue)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
@@ -35,65 +35,57 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ## Quick Start
 
-### 1. Start SurrealDB
+KongCode 0.6.0 ships with a self-contained first-run bootstrap. No manual SurrealDB install, no manual model download, no shell scripts.
 
-Docker (recommended):
+### 1. Install the plugin
 
-```bash
-docker run -d --name surrealdb -p 127.0.0.1:8042:8000 \
-  -v ~/.kongcode/surreal-data:/data \
-  surrealdb/surrealdb:latest start \
-  --user root --pass root surrealkv:/data/surreal.db
+In Claude Code:
+
+```
+/plugin marketplace add github:42U/kongcode
+/plugin install kongcode@kongcode-marketplace
 ```
 
-Or native:
-
-```bash
-curl -sSf https://install.surrealdb.com | sh
-surreal start --user root --pass root --bind 127.0.0.1:8042 surrealkv:~/.kongcode/surreal.db
-```
-
-> **Security note:** Always bind to `127.0.0.1`, not `0.0.0.0`, unless you need remote access.
-
-### 2. Clone and build
-
-```bash
-git clone https://github.com/42U/kongcode.git
-cd kongcode
-npm install && npm run build
-```
-
-### 3. Enable the plugin
-
-Add the following to your `~/.claude/settings.json`:
-
-```json
-{
-  "extraKnownMarketplaces": {
-    "kongcode-marketplace": {
-      "source": {
-        "source": "directory",
-        "path": "/absolute/path/to/kongcode"
-      }
-    }
-  },
-  "enabledPlugins": {
-    "kongcode@kongcode-marketplace": true
-  }
-}
-```
-
-Replace `/absolute/path/to/kongcode` with wherever you cloned the repo.
-
-### 4. Start Claude Code
+### 2. Open a session
 
 ```bash
 claude
 ```
 
-On first startup, KongCode downloads the BGE-M3 embedding model (~420MB) from [Hugging Face](https://huggingface.co/BAAI/bge-m3) and creates all database tables automatically. No manual setup required.
+On first run, the kongcode MCP server provisions everything it needs (one-time, ~2-3 minutes depending on your connection):
 
-After that, memory is extracted and retrieved transparently every session. No API key needed — all cognitive work is delegated to Claude subagents.
+- Installs npm deps under the plugin (pulls node-llama-cpp's platform-correct native binding)
+- Downloads the SurrealDB binary for your platform from the official GitHub release into `~/.kongcode/cache/`
+- Downloads the BGE-M3 GGUF embedding model (~420MB) from Hugging Face into `~/.kongcode/cache/models/`
+- Spawns a managed SurrealDB child process on `127.0.0.1:18765` backed by `~/.kongcode/data/`
+
+Subsequent sessions skip bootstrap and start in seconds.
+
+### Updating
+
+```
+/plugin marketplace update kongcode-marketplace
+/plugin update kongcode@kongcode-marketplace
+```
+
+There's no auto-update — Claude Code's plugin system requires explicit user-initiated updates.
+
+### Bring-your-own-SurrealDB (advanced)
+
+If you'd rather use a SurrealDB instance you already run, set `SURREAL_URL` and the bootstrap skips the managed child:
+
+```bash
+export SURREAL_URL="ws://localhost:8000/rpc"
+export SURREAL_USER=root
+export SURREAL_PASS=root
+```
+
+Other override env vars: `SURREAL_BIN_PATH`, `KONGCODE_CACHE_DIR`, `KONGCODE_DATA_DIR`, `EMBED_MODEL_PATH`, `KONGCODE_SURREAL_PORT`, `KONGCODE_SKIP_BOOTSTRAP=1` (disables bootstrap entirely).
+
+### Platform support
+
+- **Linux x64**: tested end-to-end as of 0.6.0
+- **Linux arm64, macOS x64/arm64, Windows x64**: bootstrap supports them but hasn't been smoke-tested at release time. If you hit issues, please file at https://github.com/42U/kongcode/issues.
 
 ## Architecture
 
