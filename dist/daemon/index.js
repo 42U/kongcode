@@ -53,7 +53,7 @@ import { handlePreCompact } from "../hook-handlers/pre-compact.js";
 import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.0-rc.5";
+const DAEMON_VERSION = "0.7.0-rc.6";
 let bootstrapPhase = "starting";
 let bootstrapError = null;
 const startedAt = Date.now();

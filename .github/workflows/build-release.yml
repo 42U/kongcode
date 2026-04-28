@@ -38,18 +38,14 @@ jobs:
             os_name: linux
             arch: arm64
             ext: ""
-          # darwin-x64 (Intel Mac): macos-13 runner queue can stall for hours.
-          # Marked allow_failure + tight timeout so it doesn't block stable
-          # releases. When the runner pool is responsive this builds in ~2min;
-          # when stuck, the release publishes the other 4 binaries on schedule
-          # and Intel Mac users fall through to the JS-launcher path
-          # (requires Node) until the next release attempts darwin-x64 again.
-          - runner: macos-13
-            os_name: darwin
-            arch: x64
-            ext: ""
-            timeout_minutes: 10
-            allow_failure: true
+          # darwin-x64 (Intel Mac) NOT in the matrix: GitHub's macos-13 free-tier
+          # runner pool is structurally unavailable today (queue stalls indefinitely
+          # in the absence of available runners; timeout-minutes only counts
+          # execution time, not queue time, so we can't even abort cleanly).
+          # Apple stopped shipping Intel Macs in 2023; darwin-arm64 covers M1+.
+          # Intel Mac users on 0.7.0+ use the launcher's JS-fallback path
+          # (requires Node on PATH; documented in README).
+          # Re-add (with allow_failure: true) if/when the runner pool improves.
           - runner: macos-14
             os_name: darwin
             arch: arm64
