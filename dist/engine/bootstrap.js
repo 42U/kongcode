@@ -90,9 +90,9 @@ async function ensureSurrealBinary(cacheDir, manifest, override) {
         return { path: binPath, provisioned: false, sizeBytes: statSync(binPath).size };
     }
     const url = manifest.surrealdb.releaseUrl
-        .replace("{version}", manifest.surrealdb.version)
-        .replace("{platform}", platform.platform)
-        .replace("{ext}", platform.ext);
+        .replaceAll("{version}", manifest.surrealdb.version)
+        .replaceAll("{platform}", platform.platform)
+        .replaceAll("{ext}", platform.ext);
     log.info(`[bootstrap] Downloading SurrealDB ${manifest.surrealdb.version} for ${platformKey}: ${url}`);
     const archivePath = join(versionedDir, `surreal.${platform.ext}`);
     const dl = await downloadFile(url, archivePath, platform.sha256);
