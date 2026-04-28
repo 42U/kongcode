@@ -35,22 +35,20 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ## Quick Start
 
-KongCode 0.6.0 ships with a self-contained first-run bootstrap. No manual SurrealDB install, no manual model download, no shell scripts.
+KongCode 0.7.0 ships with a self-contained first-run bootstrap. No manual SurrealDB install, no manual model download, no shell scripts. **Zero Node prereq once SEA artifacts ship for your platform** — just two slash commands.
 
 ### Prerequisites
 
-Both must be installed and on PATH before installing the plugin. Claude Code's plugin loader spawns kongcode via `node`, so missing Node will fail with "Failed to reconnect to plugin:kongcode."
+| Tool | When required |
+|---|---|
+| **git** | Always — Claude Code uses it to clone the marketplace repo |
+| **Node.js ≥ 18 + npm** | Only when running the JS fallback (no SEA binary for your platform yet, or running from a dev checkout). Most users on linux-x64/arm64, macOS x64/arm64, win-x64 get the SEA binary and don't need Node. |
 
-| Tool | Reason | Check |
-|---|---|---|
-| **Node.js ≥ 18** + npm | MCP server runtime + `npm ci` during bootstrap | `node -v` and `npm -v` |
-| **git** | Claude Code clones the marketplace repo | `git --version` |
+Quick installs (only if you need Node + git for the fallback path):
 
-Quick installs:
-
-- **macOS**: `brew install node git` (or download from https://nodejs.org and https://git-scm.com)
+- **macOS**: `brew install node git`
 - **Windows (PowerShell, elevated)**: `winget install OpenJS.NodeJS.LTS Git.Git` then **restart your terminal AND Claude Code** so the new PATH is picked up.
-- **Linux**: use your distro's package manager (`apt install nodejs npm git` / `dnf install nodejs npm git` / etc.) or [nvm](https://github.com/nvm-sh/nvm).
+- **Linux**: use your distro's package manager (`apt install nodejs npm git`) or [nvm](https://github.com/nvm-sh/nvm).
 
 ### 1. Install the plugin
 
@@ -99,8 +97,25 @@ Other override env vars: `SURREAL_BIN_PATH`, `KONGCODE_CACHE_DIR`, `KONGCODE_DAT
 
 ### Platform support
 
-- **Linux x64**: tested end-to-end as of 0.6.0
-- **Linux arm64, macOS x64/arm64, Windows x64**: bootstrap supports them but hasn't been smoke-tested at release time. If you hit issues, please file at https://github.com/42U/kongcode/issues.
+| Platform | SEA binary | JS fallback (needs Node) |
+|---|---|---|
+| linux-x64 | ✅ | ✅ |
+| linux-arm64 | ✅ | ✅ |
+| macOS-x64 | ✅ | ✅ |
+| macOS-arm64 | ✅ | ✅ |
+| win32-x64 | ✅ | ✅ |
+| Other | — | ✅ if Node 18+ available |
+
+If you hit issues, please file at https://github.com/42U/kongcode/issues.
+
+### Architecture (0.7.0+)
+
+KongCode runs as two cooperating processes:
+
+- **kongcode-daemon**: long-lived background process owning the SurrealDB connection, BGE-M3 embedding model, ACAN weights, and all 22 tool/hook handlers. Survives plugin updates, MCP restarts, and Claude Code crashes.
+- **kongcode-mcp**: thin per-Claude-Code-session client. Forwards MCP RPC to the daemon over local IPC. Plugin updates only restart this; the daemon keeps running.
+
+Multiple Claude Code sessions share one daemon — one BGE-M3 in RAM instead of N copies.
 
 ## Architecture
 
