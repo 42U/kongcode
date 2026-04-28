@@ -109,8 +109,8 @@ function readPort() {
 function postJson({ socketPath, port, eventName, body }) {
   return new Promise((resolve) => {
     const opts = socketPath
-      ? { socketPath, path: `/${eventName}`, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }
-      : { host: "127.0.0.1", port, path: `/${eventName}`, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } };
+      ? { socketPath, path: `/hook/${eventName}`, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } }
+      : { host: "127.0.0.1", port, path: `/hook/${eventName}`, method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) } };
     const req = http.request(opts, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
