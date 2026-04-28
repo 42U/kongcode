@@ -1,0 +1,208 @@
+/**
+ * JSON-RPC client used by kongcode-mcp to talk to kongcode-daemon.
+ *
+ * Connects to the daemon's Unix socket (linux/mac) or TCP loopback (Windows
+ * / explicit override), sends typed RPC requests, and resolves promises with
+ * results. Keeps connection state internally; exposes a small surface for
+ * the MCP layer above.
+ *
+ * Design notes:
+ *  - Each request gets a monotonic id. Responses are matched by id, so
+ *    pipelined requests are fine and don't block each other.
+ *  - On connection drop, in-flight requests reject with DAEMON_RESTARTING
+ *    and the next request triggers a reconnect. Caller is responsible for
+ *    deciding whether to retry (the MCP wrapper will, with backoff).
+ *  - Line-delimited JSON over the socket — partial-read safe.
+ */
+
+import { Socket, createConnection } from "node:net";
+import {
+  IpcErrorCode,
+  PROTOCOL_VERSION,
+  type IpcMethod,
+  type MetaHandshakeResponse,
+} from "../shared/ipc-types.js";
+
+interface PendingRequest {
+  id: number;
+  method: string;
+  resolve: (value: unknown) => void;
+  reject: (err: Error & { code?: number; data?: unknown }) => void;
+  timer: NodeJS.Timeout | null;
+}
+
+export interface IpcClientOpts {
+  /** Unix socket path. If null, uses tcpHost/tcpPort. */
+  socketPath: string | null;
+  tcpHost?: string;
+  tcpPort?: number;
+  /** Per-request timeout. Defaults to 30s — embedding queries can be slow. */
+  defaultTimeoutMs?: number;
+  /** Logger — wired by mcp-client/index.ts to its log facility. */
+  log?: { info: (m: string) => void; warn: (m: string) => void; error: (m: string, e?: unknown) => void };
+}
+
+/** Enriched Error subclass — carries the JSON-RPC error code so callers can
+ *  branch on DAEMON_BOOTSTRAPPING vs DAEMON_RESTARTING vs HANDLER_ERROR. */
+export class IpcError extends Error {
+  constructor(public code: number, message: string, public data?: unknown) {
+    super(message);
+    this.name = "IpcError";
+  }
+}
+
+export class IpcClient {
+  private socket: Socket | null = null;
+  private buffer = "";
+  private nextId = 1;
+  private pending = new Map<number, PendingRequest>();
+  private connected = false;
+  private connecting: Promise<void> | null = null;
+  private readonly defaultTimeoutMs: number;
+  private readonly log: NonNullable<IpcClientOpts["log"]>;
+
+  constructor(private readonly opts: IpcClientOpts) {
+    this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 30_000;
+    this.log = opts.log ?? {
+      info: () => {}, warn: () => {}, error: () => {},
+    };
+  }
+
+  /** Establish (or re-establish) a connection. Idempotent — concurrent calls
+   *  share the same in-flight connect promise. */
+  async connect(): Promise<void> {
+    if (this.connected && this.socket) return;
+    if (this.connecting) return this.connecting;
+    this.connecting = this.doConnect().finally(() => { this.connecting = null; });
+    return this.connecting;
+  }
+
+  private async doConnect(): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const sock = this.opts.socketPath
+        ? createConnection({ path: this.opts.socketPath })
+        : createConnection({ host: this.opts.tcpHost ?? "127.0.0.1", port: this.opts.tcpPort ?? 0 });
+      const onError = (err: Error) => {
+        sock.removeListener("connect", onConnect);
+        reject(err);
+      };
+      const onConnect = () => {
+        sock.removeListener("error", onError);
+        this.socket = sock;
+        this.connected = true;
+        sock.on("data", (c) => this.onData(c));
+        sock.on("close", () => this.onClose());
+        sock.on("error", (err) => this.log.warn(`[ipc-client] socket error: ${err.message}`));
+        resolve();
+      };
+      sock.once("error", onError);
+      sock.once("connect", onConnect);
+    });
+  }
+
+  /** Verify protocol compatibility. Throws if the daemon's protocol version
+   *  doesn't match ours — the calling layer should treat this as fatal,
+   *  trigger daemon-restart, and retry. */
+  async handshake(): Promise<MetaHandshakeResponse> {
+    const resp = await this.call<MetaHandshakeResponse>("meta.handshake", {});
+    if (resp.protocolVersion !== PROTOCOL_VERSION) {
+      throw new IpcError(
+        IpcErrorCode.PROTOCOL_VERSION_MISMATCH,
+        `daemon protocol v${resp.protocolVersion} != client v${PROTOCOL_VERSION} — restart required`,
+      );
+    }
+    return resp;
+  }
+
+  /** Make an RPC call. Returns the daemon's `result` payload, or throws
+   *  IpcError on JSON-RPC error / timeout / disconnect. */
+  async call<T = unknown>(method: IpcMethod | string, params: unknown, timeoutMs?: number): Promise<T> {
+    if (!this.connected || !this.socket) {
+      await this.connect();
+    }
+    const id = this.nextId++;
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new IpcError(-32000, `RPC ${method} timed out after ${timeoutMs ?? this.defaultTimeoutMs}ms`));
+      }, timeoutMs ?? this.defaultTimeoutMs);
+      this.pending.set(id, {
+        id,
+        method,
+        resolve: resolve as (v: unknown) => void,
+        reject,
+        timer,
+      });
+      const body = JSON.stringify({ jsonrpc: "2.0", id, method, params });
+      try {
+        this.socket!.write(body + "\n");
+      } catch (e) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(new IpcError(IpcErrorCode.DAEMON_RESTARTING, `write failed: ${(e as Error).message}`));
+      }
+    });
+  }
+
+  close(): void {
+    if (this.socket && !this.socket.destroyed) {
+      try { this.socket.end(); } catch {}
+    }
+    this.socket = null;
+    this.connected = false;
+    // Reject any pending requests — caller's promises shouldn't hang.
+    for (const p of this.pending.values()) {
+      if (p.timer) clearTimeout(p.timer);
+      p.reject(new IpcError(IpcErrorCode.DAEMON_RESTARTING, `client closed during ${p.method}`));
+    }
+    this.pending.clear();
+  }
+
+  // ── Internal: data + lifecycle handlers ─────────────────────────
+
+  private onData(chunk: Buffer): void {
+    this.buffer += chunk.toString("utf8");
+    let nl: number;
+    while ((nl = this.buffer.indexOf("\n")) !== -1) {
+      const line = this.buffer.slice(0, nl).trim();
+      this.buffer = this.buffer.slice(nl + 1);
+      if (!line) continue;
+      this.processLine(line);
+    }
+  }
+
+  private processLine(line: string): void {
+    let msg: { id?: number; result?: unknown; error?: { code: number; message: string; data?: unknown } };
+    try {
+      msg = JSON.parse(line);
+    } catch (e) {
+      this.log.warn(`[ipc-client] bad JSON from daemon: ${line.slice(0, 100)}`);
+      return;
+    }
+    if (typeof msg.id !== "number") return; // notifications not used in this protocol
+    const p = this.pending.get(msg.id);
+    if (!p) {
+      this.log.warn(`[ipc-client] response for unknown id=${msg.id}`);
+      return;
+    }
+    this.pending.delete(msg.id);
+    if (p.timer) clearTimeout(p.timer);
+    if (msg.error) {
+      p.reject(new IpcError(msg.error.code, msg.error.message, msg.error.data));
+    } else {
+      p.resolve(msg.result);
+    }
+  }
+
+  private onClose(): void {
+    this.connected = false;
+    this.socket = null;
+    // Reject in-flight requests — daemon's gone, caller should reconnect
+    // and retry rather than wait for responses that will never come.
+    for (const p of this.pending.values()) {
+      if (p.timer) clearTimeout(p.timer);
+      p.reject(new IpcError(IpcErrorCode.DAEMON_RESTARTING, `daemon closed connection during ${p.method}`));
+    }
+    this.pending.clear();
+  }
+}
