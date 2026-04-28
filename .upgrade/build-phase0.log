@@ -1,4 +1,0 @@
-
-> kongcode@0.1.2 build
-> tsc && cp src/engine/schema.surql dist/engine/schema.surql
-

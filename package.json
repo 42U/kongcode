@@ -30,7 +30,7 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "homepage": "https://github.com/voidorigin/kongcode",
+  "homepage": "https://github.com/42U/kongcode",
   "bugs": {
     "url": "https://github.com/voidorigin/kongcode/issues"
   },

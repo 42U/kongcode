@@ -4,6 +4,10 @@ node_modules/
 .kongcode-handoff.json
 .orphaned_at
 
+# Internal upgrade scaffolding (Claude-Code-driven self-upgrade runs).
+# Stays local for the dev who's running an upgrade; never ships in releases.
+.upgrade/
+
 # Environment
 .env
 .env.local

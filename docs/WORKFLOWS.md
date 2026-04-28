@@ -90,8 +90,8 @@ Extending the vocabulary: add to `edge-vocabulary.ts`, update this doc, update e
 
 ## File conventions
 
-- **Backup markdown** path: `/home/zero/.claude/projects/-mnt-money/memory/<slug>-gems.md`
-- **Index file**: `/home/zero/.claude/projects/-mnt-money/memory/MEMORY.md` — one-line entries, <150 chars
+- **Backup markdown** path: `${CLAUDE_PROJECT_DIR}/.claude/memory/<slug>-gems.md`
+- **Index file**: `${CLAUDE_PROJECT_DIR}/.claude/memory/MEMORY.md` — one-line entries, <150 chars
 - **Backup structure**: frontmatter (`name`, `description`, `type: reference`, `source`, `source_doi?`) + narrative section + JSON payload block for replay
 
 ## Known architecture quirks

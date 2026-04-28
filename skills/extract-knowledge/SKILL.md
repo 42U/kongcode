@@ -28,7 +28,7 @@ Source-agnostic generalization of `extract-pdf-gems`. Detects the source type, a
 3. **Read source fully** before drafting gems. Whole-source context shapes which claims are load-bearing.
 4. **Draft 20–25 gems** following the base quality rules PLUS the type-specific rule from the table above.
 5. **Draft 15–30 cross-links** using the canonical edge vocabulary from `src/engine/edge-vocabulary.ts`.
-6. **Write markdown backup** to `/home/zero/.claude/projects/-mnt-money/memory/<slug>-gems.md` with frontmatter + narrative + JSON payload block.
+6. **Write markdown backup** to `${CLAUDE_PROJECT_DIR}/.claude/memory/<slug>-gems.md` with frontmatter + narrative + JSON payload block.
 7. **Append MEMORY.md index entry** (one line, under 150 chars).
 8. **Call `create_knowledge_gems`** with the payload. Include `provenance: { session_id, source_kind: "gem" }` (phase 3 addition).
 9. **Verify via recall** on 2+ semantic queries. Require ≥50% of new gems findable at score >0.5.
@@ -75,7 +75,7 @@ When extracting, run one recall query to see if the source topic has prior cover
 - **Rewriting the abstract**: abstracts are marketing. Real gems come from the body.
 - **Ignoring negative results**: papers sometimes report what didn't work. That's often the highest-leverage gem.
 - **Only intra-source links**: fragments the graph. Always cross-link to prior concepts when possible.
-- **Stale sandbox on network-mounted files**: if `/mnt/xfer` throws "Stale file handle", copy the source to `/home/zero/voidorigin/` first or reconnect the mount.
+- **Stale sandbox on network-mounted files**: if a network mount throws "Stale file handle", copy the source to a local directory first or reconnect the mount.
 
 ## Metric this skill drives
 

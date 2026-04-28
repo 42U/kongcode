@@ -12,7 +12,7 @@ Distills a source document into ~20–25 standalone, searchable concept records 
 
 Before writing anything, verify the kongcode pipeline is healthy. If `kongcode-health` reports RED, abort and tell the user what's broken. A partial write with a broken embedding pipeline or broken recall corrupts the graph and wastes the extraction work.
 
-Also verify the PDF is accessible. If it lives on `/mnt/xfer` and your bash reports "Stale file handle", run `/xfer-reconnect` first or ask the user to `cp` the file into `/home/zero/voidorigin/` where it'll be readable from a clean path.
+Also verify the PDF is accessible. If it's on a network mount that throws "Stale file handle", ask the user to copy the file to a local directory first.
 
 ## Workflow
 
@@ -24,9 +24,9 @@ Also verify the PDF is accessible. If it lives on `/mnt/xfer` and your bash repo
 
 4. **Draft 15–30 cross-link edges** between gems using the standard edge vocabulary below. Links are where the graph earns its keep — they let future recall walk from one concept into the neighborhood of related ones.
 
-5. **Write the markdown backup** to `/home/zero/.claude/projects/-mnt-money/memory/<slug>-gems.md`. Include YAML frontmatter, a narrative section with all gems, and a JSON payload block that can be replayed into `create_knowledge_gems` verbatim. Backup is the source of truth — if the graph write fails partially, the backup lets us replay.
+5. **Write the markdown backup** to `${CLAUDE_PROJECT_DIR}/.claude/memory/<slug>-gems.md`. Include YAML frontmatter, a narrative section with all gems, and a JSON payload block that can be replayed into `create_knowledge_gems` verbatim. Backup is the source of truth — if the graph write fails partially, the backup lets us replay.
 
-6. **Append an index entry** to `/home/zero/.claude/projects/-mnt-money/memory/MEMORY.md` — one line, under 150 chars, format: `- [<title>](<file>.md) — <hook>`.
+6. **Append an index entry** to `${CLAUDE_PROJECT_DIR}/.claude/memory/MEMORY.md` — one line, under 150 chars, format: `- [<title>](<file>.md) — <hook>`.
 
 7. **Call `create_knowledge_gems`** with the payload. Verify the response shows `success: true`, `concepts_skipped: 0`, `edges_skipped: 0`. If any were skipped, the skill has failed — investigate the skipped items in the return value.
 
@@ -79,7 +79,7 @@ Always use edges from this list. New edges require discussion before adding to t
 
 ## File conventions
 
-- **Backup markdown path**: `/home/zero/.claude/projects/-mnt-money/memory/<slug>-gems.md`
+- **Backup markdown path**: `${CLAUDE_PROJECT_DIR}/.claude/memory/<slug>-gems.md`
 - **Slug rule**: short identifier for the source, no spaces, lowercase, e.g. `impact-algo`, `poly-calculus`, `algo-trading-cs2`.
 - **Frontmatter fields**: `name`, `description`, `type: reference`, `source`, optionally `source_doi`.
 - **Payload JSON block**: ready-to-call `create_knowledge_gems` invocation. Include `source`, `source_type`, `source_description`, `gems`, `links`. Must be valid JSON — no comments, no trailing commas.
