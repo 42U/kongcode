@@ -22,17 +22,25 @@ if "%ARCH%"=="" (
   exit /b 1
 )
 
-set "BIN=%~dp0kongcode-win32-%ARCH%.exe"
+set "BIN=%~dp0kongcode-mcp-win32-%ARCH%.exe"
 if exist "%BIN%" (
-  REM Preferred: SEA binary is present (0.7.0+ release). Zero-Node-prereq.
+  REM Preferred: SEA mcp-client binary is present (0.7.0+ release).
+  REM Zero-Node-prereq. mcp-client spawns kongcode-daemon-win32-%ARCH%.exe
+  REM itself if a daemon isn't already running.
   "%BIN%" %*
   exit /b %ERRORLEVEL%
 )
 
-REM Fallback: invoke the unbundled JS via Node. 0.6.x install with no CI
-REM artifacts. Requires Node on PATH.
+REM Fallback: invoke the unbundled JS mcp-client via Node. 0.6.x install
+REM with no CI artifacts, or a 0.7.0 install where the binary is missing.
+REM Requires Node on PATH.
 where node >nul 2>nul
 if %ERRORLEVEL% EQU 0 (
+  if exist "%~dp0..\dist\mcp-client\index.js" (
+    node "%~dp0..\dist\mcp-client\index.js" %*
+    exit /b %ERRORLEVEL%
+  )
+  REM Legacy fallback for 0.6.x installs without the new client compiled.
   node "%~dp0..\dist\mcp-server.js" %*
   exit /b %ERRORLEVEL%
 )
