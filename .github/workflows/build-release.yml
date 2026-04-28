@@ -36,10 +36,11 @@ jobs:
             os_name: linux
             arch: arm64
             ext: ""
-          - runner: macos-13
-            os_name: darwin
-            arch: x64
-            ext: ""
+          # darwin-x64 (Intel Mac) dropped from the matrix as of rc.2:
+          # GitHub's macos-13 runner pool has multi-hour queue times and
+          # Apple stopped shipping Intel Macs in 2023. Intel-Mac users on
+          # 0.7.0+ fall through to the launcher's JS fallback path
+          # (requires Node on PATH). Add back if there's real demand.
           - runner: macos-14
             os_name: darwin
             arch: arm64
