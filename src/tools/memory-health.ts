@@ -92,7 +92,22 @@ export async function handleMemoryHealth(
   _args: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
   const diagnostics: HealthReport["diagnostics"] = [];
-  const connection = state.store.isAvailable() ? "ok" : "down";
+  // Probe by actual query, not by db.isConnected — the SurrealDB v2 client's
+  // isConnected property can lag reality after transient reconnects, leading
+  // memory_health to incorrectly report RED while introspect (which uses
+  // store.ping()) reports the connection healthy. Discovered on a Windows
+  // install where the two tools disagreed on the same store reference.
+  let connection: "ok" | "down" = "down";
+  try {
+    if (typeof (state.store as { ping?: () => Promise<boolean> }).ping === "function") {
+      const alive = await (state.store as { ping: () => Promise<boolean> }).ping();
+      connection = alive ? "ok" : "down";
+    } else {
+      connection = state.store.isAvailable() ? "ok" : "down";
+    }
+  } catch {
+    connection = "down";
+  }
   const embProbe = await probeEmbeddings(state.embeddings);
 
   if (connection === "down") {

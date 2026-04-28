@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh session-start",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs session-start",
             "timeout": 30
           }
         ]
@@ -19,7 +19,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh user-prompt-submit",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs user-prompt-submit",
             "timeout": 15
           }
         ]
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh pre-tool-use",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs pre-tool-use",
             "timeout": 10
           }
         ]
@@ -43,7 +43,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh post-tool-use",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs post-tool-use",
             "timeout": 10
           }
         ]
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh stop",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs stop",
             "timeout": 10
           }
         ]
@@ -67,7 +67,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh pre-compact",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs pre-compact",
             "timeout": 15
           }
         ]
@@ -79,7 +79,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh post-compact",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs post-compact",
             "timeout": 30
           }
         ]
@@ -91,7 +91,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh session-end",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs session-end",
             "timeout": 60
           }
         ]
@@ -103,7 +103,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh task-created",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs task-created",
             "timeout": 10
           }
         ]
@@ -115,7 +115,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.sh subagent-stop",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/scripts/hook-proxy.cjs subagent-stop",
             "timeout": 10
           }
         ]

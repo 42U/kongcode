@@ -56,7 +56,24 @@ async function countRow(state, sql, defaultVal = 0) {
 }
 export async function handleMemoryHealth(state, _session, _args) {
     const diagnostics = [];
-    const connection = state.store.isAvailable() ? "ok" : "down";
+    // Probe by actual query, not by db.isConnected — the SurrealDB v2 client's
+    // isConnected property can lag reality after transient reconnects, leading
+    // memory_health to incorrectly report RED while introspect (which uses
+    // store.ping()) reports the connection healthy. Discovered on a Windows
+    // install where the two tools disagreed on the same store reference.
+    let connection = "down";
+    try {
+        if (typeof state.store.ping === "function") {
+            const alive = await state.store.ping();
+            connection = alive ? "ok" : "down";
+        }
+        else {
+            connection = state.store.isAvailable() ? "ok" : "down";
+        }
+    }
+    catch {
+        connection = "down";
+    }
     const embProbe = await probeEmbeddings(state.embeddings);
     if (connection === "down") {
         const report = {
