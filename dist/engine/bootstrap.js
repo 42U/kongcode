@@ -1,5 +1,5 @@
 import { chmodSync, createWriteStream, existsSync, readFileSync, statSync, } from "node:fs";
-import { mkdir, rename, rm } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn, execFile } from "node:child_process";
@@ -212,8 +212,126 @@ async function ensureEmbeddingModel(modelPath, manifest) {
     const dl = await downloadFile(manifest.embeddingModel.url, modelPath, manifest.embeddingModel.sha256);
     return { path: modelPath, provisioned: true, sizeBytes: dl.sizeBytes };
 }
-async function spawnManagedSurreal(binPath, dataDir, port, user, pass) {
+const SURREAL_PID_FILENAME = "surreal.pid";
+/** Tables that are unique to kongcode's schema — used as a fingerprint to
+ *  distinguish "this is our DB" from "this is a SurrealDB someone else
+ *  happens to be running on the same port" (e.g., a trading bot's DB).
+ *  These names are kongcode-specific enough that a generic SurrealDB
+ *  install or a different application would not have them. */
+const KONGCODE_FINGERPRINT_TABLES = ["monologue", "identity_chunk", "acan_state", "causal"];
+/** Probe a candidate SurrealDB URL to determine if it's a kongcode database.
+ *  Three checks: HTTP /health alive, auth succeeds against kong/memory ns/db,
+ *  INFO FOR DB returns at least one kongcode-fingerprint table.
+ *
+ *  Returns true only when all three pass. False on any failure (timeout,
+ *  auth fail, wrong ns/db, missing tables). */
+async function isKongcodeSurreal(url, user, pass) {
+    // Convert ws://host:port/rpc → http://host:port/sql for the auth+query probe
+    const sqlUrl = url
+        .replace(/^wss?:/, (m) => (m === "wss:" ? "https:" : "http:"))
+        .replace(/\/rpc$/, "/sql");
+    try {
+        const res = await fetch(sqlUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+                Authorization: "Basic " + Buffer.from(`${user}:${pass}`).toString("base64"),
+                "surreal-ns": "kong",
+                "surreal-db": "memory",
+            },
+            body: "INFO FOR DB;",
+            signal: AbortSignal.timeout(3_000),
+        });
+        if (!res.ok)
+            return false;
+        const data = (await res.json());
+        const tables = data?.[0]?.result?.tables;
+        if (!tables || typeof tables !== "object")
+            return false;
+        return KONGCODE_FINGERPRINT_TABLES.some((t) => t in tables);
+    }
+    catch {
+        return false;
+    }
+}
+/** Find an existing kongcode SurrealDB that the bootstrap should reuse instead
+ *  of spawning a duplicate. Probes a list of candidate ports (bootstrap-managed,
+ *  legacy 8000 from older Docker setups, alternate 8042 from older READMEs).
+ *  For each port that responds, fingerprints the schema to confirm it's
+ *  kongcode's — protecting users who run multiple SurrealDB instances for
+ *  unrelated apps (e.g. trading) from accidental cross-connection.
+ *
+ *  Returns the first match. SURREAL_URL env var still takes precedence in the
+ *  parent caller — this function only runs when the user hasn't pinned a URL. */
+async function findExistingKongcodeSurreal(cacheDir, managedPort, user, pass) {
+    // Dedup'd candidate list: managed port first (covers "previous detached
+    // surreal child still alive" case), then historical defaults from older
+    // kongcode setups (Docker on 8000, alternate 8042). Order matters — we
+    // prefer the bootstrap-managed instance when it exists.
+    const candidates = Array.from(new Set([managedPort, 8000, 8042]));
+    for (const port of candidates) {
+        // Cheap alive-check first to avoid burning the 3s isKongcodeSurreal
+        // timeout on dead ports.
+        try {
+            const ok = await fetch(`http://127.0.0.1:${port}/health`, {
+                signal: AbortSignal.timeout(1_500),
+            }).then((r) => r.ok).catch(() => false);
+            if (!ok)
+                continue;
+        }
+        catch {
+            continue;
+        }
+        const url = `ws://127.0.0.1:${port}/rpc`;
+        if (!(await isKongcodeSurreal(url, user, pass))) {
+            log.debug(`[bootstrap] port ${port} responds but isn't a kongcode DB — skipping`);
+            continue;
+        }
+        // If this is the bootstrap-managed port and we have a pid file, the
+        // returned pid lets us track the surviving detached child. For
+        // non-managed ports (8000, 8042), the user owns the process — pid stays
+        // null and shutdown handlers leave it alone.
+        let pid = null;
+        if (port === managedPort) {
+            try {
+                const raw = readFileSync(join(cacheDir, SURREAL_PID_FILENAME), "utf-8").trim();
+                const p = Number(raw);
+                if (Number.isFinite(p) && p > 0) {
+                    // Verify the PID still owns a process — stale pid file from an
+                    // ungracefully terminated surreal would otherwise confuse shutdown.
+                    try {
+                        process.kill(p, 0);
+                        pid = p;
+                    }
+                    catch {
+                        // pid file points at a dead process; the responding instance
+                        // is something else (race condition, port reuse). Still
+                        // legitimate kongcode (we fingerprinted), just not ours.
+                    }
+                }
+            }
+            catch {
+                // No pid file is fine — surreal might have been started by an
+                // unrelated process (Docker, brew services, manual launch).
+            }
+        }
+        log.info(`[bootstrap] found existing kongcode SurrealDB at ${url}` +
+            (pid !== null ? ` (managed pid=${pid})` : ` (external — not managing lifecycle)`));
+        return { url, pid, port };
+    }
+    return null;
+}
+async function writeSurrealPidFile(cacheDir, pid) {
+    await mkdir(cacheDir, { recursive: true });
+    await writeFile(join(cacheDir, SURREAL_PID_FILENAME), String(pid), "utf-8");
+}
+async function spawnManagedSurreal(binPath, dataDir, port, user, pass, cacheDir) {
     await mkdir(dataDir, { recursive: true });
+    // KONGCODE_DETACH_SURREAL=0 forces the legacy child-tied-to-parent behavior
+    // (mainly for tests + advanced setups that want the old cleanup-on-MCP-exit
+    // semantics). Default: detach so the child outlives the MCP.
+    const detach = process.env.KONGCODE_DETACH_SURREAL !== "0";
     // SurrealDB v3 syntax: `surreal start surrealkv:<absolute-path> --user X --pass Y --bind host:port`
     const child = spawn(binPath, [
         "start",
@@ -227,14 +345,31 @@ async function spawnManagedSurreal(binPath, dataDir, port, user, pass) {
         "--log",
         "warn",
     ], {
-        detached: false,
-        stdio: ["ignore", "pipe", "pipe"],
+        detached: detach,
+        // When detached, ignore stdio entirely — leaving pipes open creates a
+        // back-channel that prevents the parent from cleanly exiting and
+        // disowning the child. With ignore, the child becomes a true daemon.
+        stdio: detach ? "ignore" : ["ignore", "pipe", "pipe"],
     });
-    child.stdout?.on("data", (d) => log.debug(`[surreal] ${String(d).trim()}`));
-    child.stderr?.on("data", (d) => log.debug(`[surreal] ${String(d).trim()}`));
-    child.on("exit", (code, signal) => {
-        log.warn(`[surreal] managed child exited code=${code} signal=${signal}`);
-    });
+    if (detach) {
+        // Disown: parent's event loop won't wait on this child anymore. Combined
+        // with detached:true, the child survives parent (MCP) death and becomes
+        // an init-reparented orphan. Plugin update / Claude Code restart / MCP
+        // crash all leave SurrealDB running.
+        child.unref();
+    }
+    else {
+        child.stdout?.on("data", (d) => log.debug(`[surreal] ${String(d).trim()}`));
+        child.stderr?.on("data", (d) => log.debug(`[surreal] ${String(d).trim()}`));
+        child.on("exit", (code, signal) => {
+            log.warn(`[surreal] managed child exited code=${code} signal=${signal}`);
+        });
+    }
+    if (child.pid) {
+        await writeSurrealPidFile(cacheDir, child.pid).catch((e) => {
+            log.warn(`[bootstrap] failed to write surreal pid file: ${e.message}`);
+        });
+    }
     return child;
 }
 async function waitForSurrealReady(port, timeoutMs = 15_000) {
@@ -294,7 +429,29 @@ export async function bootstrap(input) {
     }
     const surrealBinary = await ensureSurrealBinary(input.cacheDir, manifest, input.surrealBinPathOverride);
     const port = pickPort();
-    managedSurreal = await spawnManagedSurreal(surrealBinary.path, input.dataDir, port, input.surrealUser, input.surrealPass);
+    // Reuse path covers two cases:
+    //  1. A previous MCP's detached SurrealDB child is still alive on the
+    //     managed port — Option A's keystone. Plugin updates / MCP crashes
+    //     don't lose the DB; new MCP attaches to the surviving instance.
+    //  2. The user has an existing kongcode SurrealDB elsewhere (e.g. Docker
+    //     on the historical port 8000). Reusing it preserves their data
+    //     instead of silently spawning a duplicate that splits writes.
+    // Both cases are fingerprint-checked (kongcode-specific tables present)
+    // so we never accidentally connect to an unrelated SurrealDB on the same
+    // machine — e.g., a trading bot's DB. SURREAL_URL still takes precedence
+    // and is handled in the surrealUrlOverride branch above.
+    const existing = await findExistingKongcodeSurreal(input.cacheDir, port, input.surrealUser, input.surrealPass);
+    if (existing) {
+        return {
+            npmInstall,
+            surrealBinary,
+            surrealServer: { url: existing.url, pid: existing.pid, managed: existing.pid !== null },
+            embeddingModel,
+            nodeLlamaCpp,
+            totalDurationMs: Date.now() - start,
+        };
+    }
+    managedSurreal = await spawnManagedSurreal(surrealBinary.path, input.dataDir, port, input.surrealUser, input.surrealPass, input.cacheDir);
     await waitForSurrealReady(port);
     const url = `ws://127.0.0.1:${port}/rpc`;
     log.info(`[bootstrap] managed SurrealDB ready on ${url} (pid=${managedSurreal.pid})`);
@@ -307,10 +464,24 @@ export async function bootstrap(input) {
         totalDurationMs: Date.now() - start,
     };
 }
-/** SIGTERM the managed SurrealDB child if we spawned one. Idempotent. */
-export function shutdownManagedSurreal() {
+/** Per Option A architecture: the surreal child is detached + unref'd on spawn,
+ *  so MCP exit does not affect its lifecycle. By default this function is a
+ *  no-op — calling it during MCP shutdown leaves the surreal child running so
+ *  the next MCP boot can attach to it (preserving turn-ingestion across
+ *  plugin updates, Claude Code restarts, etc.).
+ *
+ *  Pass { force: true } to actually SIGTERM the child — used by tests and any
+ *  future "kongcode stop" CLI command that explicitly tears everything down. */
+export function shutdownManagedSurreal(opts) {
+    if (!opts?.force) {
+        if (managedSurreal && !managedSurreal.killed) {
+            log.debug(`[bootstrap] surreal child detached (pid=${managedSurreal.pid}) — leaving alive for next MCP boot`);
+        }
+        managedSurreal = null;
+        return;
+    }
     if (managedSurreal && !managedSurreal.killed) {
-        log.info(`[bootstrap] SIGTERM managed SurrealDB child pid=${managedSurreal.pid}`);
+        log.info(`[bootstrap] force SIGTERM managed SurrealDB child pid=${managedSurreal.pid}`);
         try {
             managedSurreal.kill("SIGTERM");
         }

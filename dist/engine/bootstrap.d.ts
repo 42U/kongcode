@@ -51,5 +51,14 @@ export declare function resolvePluginDir(): string;
  * Skips the SurrealDB child when SURREAL_URL points at an external server.
  */
 export declare function bootstrap(input: BootstrapInput): Promise<BootstrapResult>;
-/** SIGTERM the managed SurrealDB child if we spawned one. Idempotent. */
-export declare function shutdownManagedSurreal(): void;
+/** Per Option A architecture: the surreal child is detached + unref'd on spawn,
+ *  so MCP exit does not affect its lifecycle. By default this function is a
+ *  no-op — calling it during MCP shutdown leaves the surreal child running so
+ *  the next MCP boot can attach to it (preserving turn-ingestion across
+ *  plugin updates, Claude Code restarts, etc.).
+ *
+ *  Pass { force: true } to actually SIGTERM the child — used by tests and any
+ *  future "kongcode stop" CLI command that explicitly tears everything down. */
+export declare function shutdownManagedSurreal(opts?: {
+    force?: boolean;
+}): void;
