@@ -56,6 +56,16 @@ import { handleSupersede } from "../tools/supersede.js";
 import { handleRecordFinding } from "../tools/record-finding.js";
 import { handleClusterScan } from "../tools/cluster-scan.js";
 import { handleWhatIsMissing } from "../tools/what-is-missing.js";
+import { handleSessionStart } from "../hook-handlers/session-start.js";
+import { handleSessionEnd } from "../hook-handlers/session-end.js";
+import { handleUserPromptSubmit } from "../hook-handlers/user-prompt-submit.js";
+import { handlePreToolUse } from "../hook-handlers/pre-tool-use.js";
+import { handlePostToolUse } from "../hook-handlers/post-tool-use.js";
+import { handleStop } from "../hook-handlers/stop.js";
+import { handlePreCompact } from "../hook-handlers/pre-compact.js";
+import { handlePostCompact } from "../hook-handlers/post-compact.js";
+import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
+import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
 const DAEMON_VERSION = "0.6.6";
@@ -283,6 +293,35 @@ async function main(): Promise<void> {
   server.register("tool.recordFinding", wrapToolHandler(handleRecordFinding));
   server.register("tool.clusterScan", wrapToolHandler(handleClusterScan));
   server.register("tool.whatIsMissing", wrapToolHandler(handleWhatIsMissing));
+
+  // Hook handlers — different signature from tools: (state, payload) → HookResponse,
+  // where payload is the raw Claude Code hook event (already includes session_id,
+  // cwd, transcript_path, etc.). The IPC params is the payload itself; no extra
+  // envelope wrapping needed since the hook handler reads what it needs from there.
+  const wrapHookHandler = (
+    handler: (state: GlobalPluginState, payload: Record<string, unknown>) => Promise<HookResponse>,
+  ) => {
+    return async (params: unknown) => {
+      if (!globalState) {
+        // Hooks fail-open: return an empty hookSpecificOutput so Claude Code's
+        // pipeline isn't blocked by a still-initializing daemon.
+        return {};
+      }
+      const payload = (params ?? {}) as Record<string, unknown>;
+      return await handler(globalState, payload);
+    };
+  };
+
+  server.register("hook.sessionStart", wrapHookHandler(handleSessionStart));
+  server.register("hook.sessionEnd", wrapHookHandler(handleSessionEnd));
+  server.register("hook.userPromptSubmit", wrapHookHandler(handleUserPromptSubmit));
+  server.register("hook.preToolUse", wrapHookHandler(handlePreToolUse));
+  server.register("hook.postToolUse", wrapHookHandler(handlePostToolUse));
+  server.register("hook.stop", wrapHookHandler(handleStop));
+  server.register("hook.preCompact", wrapHookHandler(handlePreCompact));
+  server.register("hook.postCompact", wrapHookHandler(handlePostCompact));
+  server.register("hook.taskCreated", wrapHookHandler(handleTaskCreated));
+  server.register("hook.subagentStop", wrapHookHandler(handleSubagentStop));
 
   // ── Lifecycle ──
 
