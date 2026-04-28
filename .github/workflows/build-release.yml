@@ -62,36 +62,51 @@ jobs:
       - name: Run tests
         run: npm test
 
-      - name: Build SEA binary
+      - name: Build SEA binaries (daemon + mcp)
         shell: bash
         run: |
           mkdir -p dist/bin
-          npm run bundle
-          node --experimental-sea-config sea-config.json
-          # Copy the host node binary; postject inject the SEA blob.
-          NODE_BIN="$(command -v node)"
-          BIN_NAME="kongcode-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
-          cp "$NODE_BIN" "dist/bin/$BIN_NAME"
-          # On macOS we need to remove the codesign signature first; postject
-          # adds the SEA blob as a Mach-O section, which invalidates signatures.
-          if [ "${{ matrix.os_name }}" = "darwin" ]; then
-            codesign --remove-signature "dist/bin/$BIN_NAME" || true
-          fi
-          npx postject "dist/bin/$BIN_NAME" NODE_SEA_BLOB dist/sea-prep.blob \
-            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
-            $([ "${{ matrix.os_name }}" = "darwin" ] && echo "--macho-segment-name NODE_SEA")
-          # Re-sign on macOS with an ad-hoc signature so Gatekeeper doesn't
-          # outright reject it. End users may still need to whitelist via
-          # System Preferences on first run; see README.
-          if [ "${{ matrix.os_name }}" = "darwin" ]; then
-            codesign --sign - "dist/bin/$BIN_NAME" || true
-          fi
+          # Helper: build one SEA binary from a bundle.cjs + sea-config.json
+          # → dist/bin/<name>-<os>-<arch>(.ext). Mirrors the manual sea:daemon
+          # / sea:mcp scripts but inlined for matrix-friendly per-step logging.
+          build_sea() {
+            local bundle_script="$1"   # npm run target name
+            local config_file="$2"     # sea-config-XXX.json
+            local blob_file="$3"       # dist/XXX-sea-prep.blob
+            local bin_prefix="$4"      # kongcode-daemon | kongcode-mcp
+            local bin_name="${bin_prefix}-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}"
+            echo "::group::Build $bin_name"
+            npm run "$bundle_script"
+            node --experimental-sea-config "$config_file"
+            cp "$(command -v node)" "dist/bin/$bin_name"
+            if [ "${{ matrix.os_name }}" = "darwin" ]; then
+              codesign --remove-signature "dist/bin/$bin_name" || true
+            fi
+            npx postject "dist/bin/$bin_name" NODE_SEA_BLOB "$blob_file" \
+              --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
+              $([ "${{ matrix.os_name }}" = "darwin" ] && echo "--macho-segment-name NODE_SEA")
+            if [ "${{ matrix.os_name }}" = "darwin" ]; then
+              codesign --sign - "dist/bin/$bin_name" || true
+            fi
+            echo "::endgroup::"
+          }
 
-      - name: Upload artifact
+          build_sea "bundle:daemon" "sea-daemon-config.json" "dist/daemon-sea-prep.blob" "kongcode-daemon"
+          build_sea "bundle:mcp"    "sea-mcp-config.json"    "dist/mcp-sea-prep.blob"    "kongcode-mcp"
+
+      - name: Upload daemon artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kongcode-${{ matrix.os_name }}-${{ matrix.arch }}
-          path: dist/bin/kongcode-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}
+          name: kongcode-daemon-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: dist/bin/kongcode-daemon-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload mcp-client artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: kongcode-mcp-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: dist/bin/kongcode-mcp-${{ matrix.os_name }}-${{ matrix.arch }}${{ matrix.ext }}
           if-no-files-found: error
           retention-days: 7
 
