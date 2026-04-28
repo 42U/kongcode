@@ -42,7 +42,7 @@ KongCode 0.6.0 ships with a self-contained first-run bootstrap. No manual Surrea
 In Claude Code:
 
 ```
-/plugin marketplace add github:42U/kongcode
+/plugin marketplace add 42U/kongcode
 /plugin install kongcode@kongcode-marketplace
 ```
 
