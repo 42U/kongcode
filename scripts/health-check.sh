@@ -2,7 +2,14 @@
 # KongCode health check — quick connectivity diagnostics.
 set -euo pipefail
 
-SURREAL_URL="${SURREAL_URL:-ws://localhost:8000/rpc}"
+# SurrealDB URL discovery:
+#   1. SURREAL_URL env var (explicit override — used by BYO-server setups)
+#   2. KONGCODE_SURREAL_PORT (overrides the bootstrap-managed default 18765)
+#   3. Bootstrap default: ws://127.0.0.1:18765/rpc
+# Note: the legacy ws://localhost:8000/rpc default was retired in 0.6.0 when
+# the bootstrap started managing its own SurrealDB child process.
+DEFAULT_PORT="${KONGCODE_SURREAL_PORT:-18765}"
+SURREAL_URL="${SURREAL_URL:-ws://127.0.0.1:${DEFAULT_PORT}/rpc}"
 HTTP_URL=$(echo "$SURREAL_URL" | sed 's|ws://|http://|' | sed 's|wss://|https://|' | sed 's|/rpc|/health|')
 
 STATUS="OK"
@@ -15,25 +22,36 @@ else
   STATUS="DEGRADED"
 fi
 
-# MCP Server socket
-SOCK="${CLAUDE_PROJECT_DIR:-.}/.kongcode.sock"
-if [ -S "$SOCK" ]; then
-  if curl -sf --unix-socket "$SOCK" --max-time 2 "http://localhost/health" >/dev/null 2>&1; then
-    echo "MCP Server: running (Unix socket)"
-  else
-    echo "MCP Server: socket exists but not responding"
-    STATUS="DEGRADED"
+# MCP Server socket. The MCP writes per-PID sockets to $HOME/.kongcode-<pid>.sock
+# to avoid races between multiple concurrent MCP processes (introduced for
+# multi-MCP support). hook-proxy.sh enumerates these by mtime + alive-PID; we
+# do a simpler "any responsive socket counts" probe here.
+SOCK_FOUND=0
+for sock in "$HOME"/.kongcode-*.sock; do
+  [ -S "$sock" ] || continue
+  if curl -sf --unix-socket "$sock" --max-time 2 "http://localhost/health" >/dev/null 2>&1; then
+    echo "MCP Server: running (${sock})"
+    SOCK_FOUND=1
+    break
   fi
-else
-  echo "MCP Server: not running (no socket file)"
+done
+if [ "$SOCK_FOUND" -eq 0 ]; then
+  echo "MCP Server: not running (no responsive socket under \$HOME/.kongcode-*.sock)"
   STATUS="DEGRADED"
 fi
 
-# Embedding model
-MODEL_PATH="${EMBED_MODEL_PATH:-$HOME/.node-llama-cpp/models/bge-m3-q4_k_m.gguf}"
+# Embedding model. 0.6.0 default lives under the kongcode cache dir
+# (~/.kongcode/cache/models/bge-m3-Q4_K_M.gguf); legacy default
+# (~/.node-llama-cpp/models/bge-m3-q4_k_m.gguf) checked as a fallback so users
+# upgrading from earlier installs don't see a false negative.
+DEFAULT_CACHE="${KONGCODE_CACHE_DIR:-$HOME/.kongcode/cache}"
+MODEL_PATH="${EMBED_MODEL_PATH:-$DEFAULT_CACHE/models/bge-m3-Q4_K_M.gguf}"
+if [ ! -f "$MODEL_PATH" ] && [ -f "$HOME/.node-llama-cpp/models/bge-m3-q4_k_m.gguf" ]; then
+  MODEL_PATH="$HOME/.node-llama-cpp/models/bge-m3-q4_k_m.gguf"
+fi
 if [ -f "$MODEL_PATH" ]; then
   SIZE=$(du -h "$MODEL_PATH" | cut -f1)
-  echo "Embedding model: loaded (${SIZE})"
+  echo "Embedding model: loaded (${SIZE} at ${MODEL_PATH})"
 else
   echo "Embedding model: not downloaded yet"
 fi
