@@ -19,6 +19,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { parsePluginConfig } from "./engine/config.js";
+import { bootstrap, resolvePluginDir, shutdownManagedSurreal } from "./engine/bootstrap.js";
 import { SurrealStore } from "./engine/surreal.js";
 import { EmbeddingService } from "./engine/embeddings.js";
 import { GlobalPluginState } from "./engine/state.js";
@@ -318,6 +319,38 @@ async function initialize(): Promise<void> {
   // Parse config from env vars
   const config = parsePluginConfig();
 
+  // First-run bootstrap: provision npm deps, SurrealDB binary + child process,
+  // and embedding model. Idempotent — fast path when artifacts already exist.
+  // KONGCODE_SKIP_BOOTSTRAP=1 disables; SURREAL_URL override skips the child.
+  if (process.env.KONGCODE_SKIP_BOOTSTRAP !== "1") {
+    try {
+      const result = await bootstrap({
+        pluginDir: resolvePluginDir(),
+        cacheDir: config.paths.cacheDir,
+        dataDir: config.paths.dataDir,
+        modelPath: config.embedding.modelPath,
+        surrealBinPathOverride: config.paths.surrealBinPath,
+        surrealUrlOverride: process.env.SURREAL_URL,
+        surrealUser: config.surreal.user,
+        surrealPass: config.surreal.pass,
+      });
+      if (result.surrealServer.managed) {
+        // Point the store at the managed child instead of the default ws://localhost:8000.
+        (config.surreal as { url: string }).url = result.surrealServer.url;
+      }
+      log.info(
+        `[bootstrap] complete in ${result.totalDurationMs}ms ` +
+          `(npm=${result.npmInstall.ran ? "ran" : "skip"}, ` +
+          `surreal=${result.surrealBinary.provisioned ? "downloaded" : "cached"}, ` +
+          `model=${result.embeddingModel.provisioned ? "downloaded" : "cached"})`,
+      );
+    } catch (err) {
+      log.error("[bootstrap] failed — falling back to degraded mode:", err);
+    }
+  } else {
+    log.info("[bootstrap] skipped (KONGCODE_SKIP_BOOTSTRAP=1)");
+  }
+
   // Create services
   const store = new SurrealStore(config.surreal);
   const embeddings = new EmbeddingService(config.embedding);
@@ -381,6 +414,7 @@ async function shutdown(): Promise<void> {
     await globalState.shutdown();
     globalState = null;
   }
+  shutdownManagedSurreal();
   log.info("KongCode shutdown complete");
 }
 

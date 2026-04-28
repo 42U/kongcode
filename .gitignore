@@ -1,8 +1,8 @@
 node_modules/
-dist/
 .kongcode.sock
 .kongcode-port
 .kongcode-handoff.json
+.orphaned_at
 
 # Environment
 .env

@@ -15,6 +15,9 @@ describe("parsePluginConfig", () => {
     delete process.env.SURREAL_NS;
     delete process.env.SURREAL_DB;
     delete process.env.EMBED_MODEL_PATH;
+    delete process.env.KONGCODE_CACHE_DIR;
+    delete process.env.KONGCODE_DATA_DIR;
+    delete process.env.SURREAL_BIN_PATH;
   });
 
   afterEach(() => {
@@ -30,8 +33,11 @@ describe("parsePluginConfig", () => {
     expect(config.surreal.db).toBe("memory");
     expect(config.embedding.dimensions).toBe(1024);
     expect(config.embedding.modelPath).toBe(
-      join(homedir(), ".node-llama-cpp", "models", "bge-m3-q4_k_m.gguf"),
+      join(homedir(), ".kongcode", "cache", "models", "bge-m3-Q4_K_M.gguf"),
     );
+    expect(config.paths.cacheDir).toBe(join(homedir(), ".kongcode", "cache"));
+    expect(config.paths.dataDir).toBe(join(homedir(), ".kongcode", "data"));
+    expect(config.paths.surrealBinPath).toBeNull();
   });
 
   it("returns defaults with empty object", () => {

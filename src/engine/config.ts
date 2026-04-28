@@ -28,10 +28,20 @@ export interface ThresholdConfig {
   acanTrainingThreshold: number;
 }
 
+export interface PathsConfig {
+  /** Where downloaded artifacts (SurrealDB binary, model) live. Default ~/.kongcode/cache. Survives plugin updates. */
+  cacheDir: string;
+  /** Where the bootstrapped SurrealDB child process stores its surrealkv data. Default ~/.kongcode/data. */
+  dataDir: string;
+  /** Path to the SurrealDB binary. Default <cacheDir>/surreal-<version>/<binaryName>. */
+  surrealBinPath: string | null;
+}
+
 export interface KongCodeConfig {
   surreal: SurrealConfig;
   embedding: EmbeddingConfig;
   thresholds: ThresholdConfig;
+  paths: PathsConfig;
 }
 
 /** @deprecated Alias for backwards compatibility with engine modules that reference KongBrainConfig. */
@@ -45,6 +55,19 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
   const surreal = (raw?.surreal ?? {}) as Record<string, unknown>;
   const embedding = (raw?.embedding ?? {}) as Record<string, unknown>;
   const thresholds = (raw?.thresholds ?? {}) as Record<string, unknown>;
+  const paths = (raw?.paths ?? {}) as Record<string, unknown>;
+
+  const cacheDir =
+    (typeof paths.cacheDir === "string" && paths.cacheDir ? paths.cacheDir : null) ??
+    (process.env.KONGCODE_CACHE_DIR || null) ??
+    join(homedir(), ".kongcode", "cache");
+  const dataDir =
+    (typeof paths.dataDir === "string" && paths.dataDir ? paths.dataDir : null) ??
+    (process.env.KONGCODE_DATA_DIR || null) ??
+    join(homedir(), ".kongcode", "data");
+  const surrealBinPath =
+    (typeof paths.surrealBinPath === "string" && paths.surrealBinPath ? paths.surrealBinPath : null) ??
+    (process.env.SURREAL_BIN_PATH || null);
 
   // Priority: plugin config > env vars > defaults
   // Use || (not ??) so empty strings from unresolved ${VAR} fall through to defaults
@@ -75,7 +98,7 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
         process.env.EMBED_MODEL_PATH ??
         (typeof embedding.modelPath === "string"
           ? embedding.modelPath
-          : join(homedir(), ".node-llama-cpp", "models", "bge-m3-q4_k_m.gguf")),
+          : join(cacheDir, "models", "bge-m3-Q4_K_M.gguf")),
       dimensions:
         typeof embedding.dimensions === "number" ? embedding.dimensions : 1024,
     },
@@ -90,6 +113,11 @@ export function parsePluginConfig(raw?: Record<string, unknown>): KongCodeConfig
         typeof thresholds.maxPendingThinking === "number" ? thresholds.maxPendingThinking : 20,
       acanTrainingThreshold:
         typeof thresholds.acanTrainingThreshold === "number" ? thresholds.acanTrainingThreshold : 5000,
+    },
+    paths: {
+      cacheDir,
+      dataDir,
+      surrealBinPath,
     },
   };
 }

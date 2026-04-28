@@ -1,0 +1,604 @@
+/**
+ * MCP tools for subagent-driven background processing.
+ *
+ * fetch_pending_work — Claims the next pending item and returns
+ *   instructions + data for the subagent to process.
+ * commit_work_results — Accepts the subagent's extraction output
+ *   and persists it to SurrealDB via existing write functions.
+ *
+ * These tools replace the Anthropic SDK direct calls. The LLM
+ * reasoning now happens in the subagent (Opus) itself, not in
+ * a separate API call from the MCP server.
+ */
+import { buildSystemPrompt, buildTranscript, writeExtractionResults } from "../engine/memory-daemon.js";
+import { createSoul, seedSoulAsCoreMemory, reviseSoul, getSoul, checkGraduation, getQualitySignals } from "../engine/soul.js";
+import { log } from "../engine/log.js";
+import { commitKnowledge } from "../engine/commit.js";
+// ── Helpers ──────────────────────────────────────────────────────────────────
+/** Validate a SurrealDB record id before direct interpolation. Same pattern as
+ * surreal.ts assertRecordId (which isn't exported). Prevents injection and
+ * avoids the `UPDATE $id` bug where SurrealDB rejects a string param as an
+ * UPDATE target. */
+const RECORD_ID_RE = /^[a-zA-Z_][a-zA-Z0-9_]*:[a-zA-Z0-9_]+$/;
+function assertWorkRecordId(id) {
+    if (!RECORD_ID_RE.test(id)) {
+        throw new Error(`Invalid record ID format: ${id.slice(0, 50)}`);
+    }
+}
+// Skill extraction JSON schema (matches skills.ts)
+const skillSchema = {
+    type: "object",
+    properties: {
+        name: { type: "string" },
+        description: { type: "string" },
+        preconditions: { type: "string" },
+        steps: { type: "array", items: { type: "object", properties: { tool: { type: "string" }, description: { type: "string" } } } },
+        postconditions: { type: "string" },
+    },
+    required: ["name", "description", "steps"],
+};
+// Soul document schema (matches soul.ts)
+const soulSchema = {
+    type: "object",
+    properties: {
+        working_style: { type: "array", items: { type: "string" } },
+        emotional_dimensions: { type: "array", items: { type: "object" } },
+        self_observations: { type: "array", items: { type: "string" } },
+        earned_values: { type: "array", items: { type: "object" } },
+    },
+    required: ["working_style", "emotional_dimensions", "self_observations", "earned_values"],
+};
+// ── fetch_pending_work ───────────────────────────────────────────────────────
+export async function handleFetchPendingWork(state, _session, _args) {
+    const { store } = state;
+    if (!store.isAvailable()) {
+        return text("Database unavailable. Cannot fetch pending work.");
+    }
+    try {
+        // Reset stale items stuck in "processing" > 10 min
+        await store.queryExec(`UPDATE pending_work SET status = "pending" WHERE status = "processing" AND created_at < time::now() - 10m`).catch(() => { });
+        // Claim the highest-priority pending item. SurrealDB's UPDATE does not
+        // accept ORDER BY / LIMIT, so we do SELECT-then-UPDATE-by-id. In
+        // single-writer contexts (one daemon) this is race-free; for multi-writer
+        // it would need a transaction.
+        const candidates = await store.queryFirst(`SELECT id FROM pending_work WHERE status = "pending" ORDER BY priority ASC, created_at ASC LIMIT 1`);
+        if (candidates.length === 0) {
+            return text(JSON.stringify({ empty: true, message: "No pending work items. You are done." }));
+        }
+        const claimedId = String(candidates[0].id);
+        assertWorkRecordId(claimedId);
+        // Direct interpolation safe: assertWorkRecordId validates format above.
+        // SurrealDB rejects `UPDATE $id` with a string param — the param has to be
+        // a record-id type, which the JS client doesn't produce for plain strings.
+        const items = await store.queryFirst(`UPDATE ${claimedId} SET status = "processing" RETURN AFTER`);
+        if (items.length === 0) {
+            return text(JSON.stringify({ empty: true, message: "No pending work items. You are done." }));
+        }
+        const item = items[0];
+        log.info(`[pending_work] Claimed ${item.work_type} (${item.id})`);
+        const result = await buildWorkPayload(item, state);
+        return text(JSON.stringify(result));
+    }
+    catch (e) {
+        log.error("[pending_work] fetch error:", e);
+        return text(JSON.stringify({ error: String(e) }));
+    }
+}
+async function buildWorkPayload(item, state) {
+    const { store } = state;
+    switch (item.work_type) {
+        case "extraction": {
+            const turns = await store.getSessionTurnsRich(item.session_id, 50);
+            const transcript = buildTranscript(turns);
+            const prior = { conceptNames: [], artifactPaths: [], skillNames: [] };
+            const instructions = buildSystemPrompt(false, false, prior);
+            return {
+                work_id: item.id,
+                work_type: "extraction",
+                instructions,
+                data: { transcript: transcript.slice(0, 30000), turn_count: turns.length },
+                output_format: "Return ONLY valid JSON matching the schema in the instructions. All fields are arrays — use [] if empty.",
+            };
+        }
+        case "reflection": {
+            const turns = await store.getSessionTurns(item.session_id, 15);
+            const transcript = turns.map(t => `[${t.role}] ${(t.text ?? "").slice(0, 300)}`).join("\n");
+            return {
+                work_id: item.id,
+                work_type: "reflection",
+                instructions: `Reflect on this session. Write 2-4 sentences about: what went well, what could improve, any patterns worth noting. Be specific and actionable. If the session was too trivial for reflection, respond with just "skip".`,
+                data: { transcript: transcript.slice(0, 15000), turn_count: turns.length },
+                output_format: "Return plain text (2-4 sentences). Return exactly 'skip' if the session is too trivial.",
+            };
+        }
+        case "skill_extract": {
+            const turns = await store.getSessionTurns(item.session_id, 30);
+            const transcript = turns.map(t => `[${t.role}] ${(t.text ?? "").slice(0, 300)}`).join("\n");
+            return {
+                work_id: item.id,
+                work_type: "skill_extract",
+                instructions: `Extract a reusable skill procedure from this session. Generic patterns only (no specific file paths or variable names). Return null if no clear multi-step workflow.`,
+                data: { transcript: transcript.slice(0, 20000), turn_count: turns.length },
+                output_format: "Return JSON: " + JSON.stringify(skillSchema) + " or the word 'null' if no skill found.",
+            };
+        }
+        case "causal_graduate": {
+            const groups = await store.queryFirst(`SELECT chain_type, count() AS cnt, array::group(description) AS descriptions
+         FROM causal_chain WHERE success = true AND confidence >= 0.7
+         GROUP BY chain_type`);
+            const eligible = groups.filter(g => g.cnt >= 3);
+            if (eligible.length === 0) {
+                // No chains to graduate — mark complete immediately
+                assertWorkRecordId(item.id);
+                await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
+                return { work_id: item.id, work_type: "causal_graduate", empty: true, message: "No causal chains ready for graduation. Already marked complete." };
+            }
+            return {
+                work_id: item.id,
+                work_type: "causal_graduate",
+                instructions: `Synthesize reusable procedures from these recurring successful patterns. Generic — no specific file paths or variable names. Return one skill JSON per pattern group.`,
+                data: { groups: eligible.map(g => ({ chain_type: g.chain_type, count: g.cnt, descriptions: g.descriptions.slice(0, 8) })) },
+                output_format: "Return JSON array of skills: [" + JSON.stringify(skillSchema) + ", ...]. Return [] if no clear patterns.",
+            };
+        }
+        case "soul_generate": {
+            const report = await checkGraduation(store);
+            if (!report.ready) {
+                assertWorkRecordId(item.id);
+                await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
+                return { work_id: item.id, work_type: "soul_generate", empty: true, message: "Not ready for graduation yet. Already marked complete." };
+            }
+            const [reflections, causalChains, monologues] = await Promise.all([
+                store.queryFirst(`SELECT text, category FROM reflection ORDER BY created_at DESC LIMIT 15`).catch(() => []),
+                store.queryFirst(`SELECT description, chain_type FROM causal_chain ORDER BY created_at DESC LIMIT 10`).catch(() => []),
+                store.queryFirst(`SELECT content FROM monologue ORDER BY timestamp DESC LIMIT 10`).catch(() => []),
+            ]);
+            const quality = await getQualitySignals(store);
+            return {
+                work_id: item.id,
+                work_type: "soul_generate",
+                instructions: `You are KongCode, a graph-backed coding agent with persistent memory. Based on YOUR OWN memory graph data below, write your initial Soul document. Be honest, not aspirational. Only claim what the data supports.`,
+                data: {
+                    reflections: reflections.map(r => `[${r.category}] ${r.text}`),
+                    causal_chains: causalChains.map(c => `[${c.chain_type}] ${c.description}`),
+                    monologues: monologues.map(m => m.content),
+                    quality: {
+                        retrieval_utilization: `${(quality.avgRetrievalUtilization * 100).toFixed(0)}%`,
+                        skill_success_rate: `${(quality.skillSuccessRate * 100).toFixed(0)}%`,
+                        tool_failure_rate: `${(quality.toolFailureRate * 100).toFixed(0)}%`,
+                    },
+                },
+                output_format: "Return JSON: " + JSON.stringify(soulSchema),
+            };
+        }
+        case "soul_evolve": {
+            const soul = await getSoul(store);
+            if (!soul) {
+                assertWorkRecordId(item.id);
+                await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
+                return { work_id: item.id, work_type: "soul_evolve", empty: true, message: "No soul exists yet. Already marked complete." };
+            }
+            const [reflections, causalChains, monologues] = await Promise.all([
+                store.queryFirst(`SELECT text FROM reflection WHERE created_at > $since ORDER BY created_at DESC LIMIT 10`, { since: soul.updated_at }).catch(() => []),
+                store.queryFirst(`SELECT description FROM causal_chain WHERE created_at > $since ORDER BY created_at DESC LIMIT 10`, { since: soul.updated_at }).catch(() => []),
+                store.queryFirst(`SELECT content FROM monologue WHERE timestamp > $since ORDER BY timestamp DESC LIMIT 10`, { since: soul.updated_at }).catch(() => []),
+            ]);
+            if (reflections.length === 0 && causalChains.length === 0 && monologues.length === 0) {
+                assertWorkRecordId(item.id);
+                await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
+                return { work_id: item.id, work_type: "soul_evolve", empty: true, message: "No new experience since last soul update. Already marked complete." };
+            }
+            return {
+                work_id: item.id,
+                work_type: "soul_evolve",
+                instructions: `You are revising your own Soul document based on new experience. Return JSON with ONLY the fields that changed. Omit unchanged fields. If nothing meaningful changed, return {}. Be honest — revise based on evidence, not aspiration.`,
+                data: {
+                    current_soul: { working_style: soul.working_style, emotional_dimensions: soul.emotional_dimensions, self_observations: soul.self_observations, earned_values: soul.earned_values },
+                    new_reflections: reflections.map(r => r.text),
+                    new_causal_chains: causalChains.map(c => c.description),
+                    new_monologues: monologues.map(m => m.content),
+                },
+                output_format: "Return JSON with ONLY changed fields from the soul schema. Return {} if nothing changed.",
+            };
+        }
+        case "handoff_note": {
+            const turns = await store.getSessionTurns(item.session_id, 15);
+            const transcript = turns.map(t => `[${t.role}] ${(t.text ?? "").slice(0, 200)}`).join("\n");
+            return {
+                work_id: item.id,
+                work_type: "handoff_note",
+                instructions: `Summarize this session for handoff to your next self. What was worked on, what's unfinished, what to remember. 2-3 sentences. Write in first person.`,
+                data: { transcript: transcript.slice(0, 10000), turn_count: turns.length },
+                output_format: "Return plain text (2-3 sentences in first person).",
+            };
+        }
+        case "deferred_cleanup": {
+            // Same as extraction but for orphaned sessions
+            const turns = await store.getSessionTurnsRich(item.session_id, 50);
+            const transcript = buildTranscript(turns);
+            const prior = { conceptNames: [], artifactPaths: [], skillNames: [] };
+            const instructions = buildSystemPrompt(false, false, prior);
+            return {
+                work_id: item.id,
+                work_type: "deferred_cleanup",
+                instructions,
+                data: { transcript: transcript.slice(0, 30000), turn_count: turns.length },
+                output_format: "Return ONLY valid JSON matching the schema in the instructions. All fields are arrays — use [] if empty.",
+            };
+        }
+        default: {
+            assertWorkRecordId(item.id);
+            await store.queryExec(`UPDATE ${item.id} SET status = "completed", completed_at = time::now()`);
+            return { work_id: item.id, work_type: item.work_type, empty: true, message: `Unknown work type: ${item.work_type}` };
+        }
+    }
+}
+// ── commit_work_results ──────────────────────────────────────────────────────
+export async function handleCommitWorkResults(state, _session, args) {
+    const { store, embeddings } = state;
+    const workId = String(args.work_id ?? "");
+    const results = args.results;
+    if (!workId)
+        return text("Error: work_id is required");
+    if (!store.isAvailable())
+        return text("Error: database unavailable");
+    // Look up the work item to know what type it is
+    assertWorkRecordId(workId);
+    const items = await store.queryFirst(`SELECT * FROM ${workId}`);
+    if (items.length === 0)
+        return text(`Error: work item not found: ${workId}`);
+    const item = items[0];
+    try {
+        const outcome = await commitResults(item, results, state);
+        // Mark completed (workId already validated above)
+        await store.queryExec(`UPDATE ${workId} SET status = "completed", completed_at = time::now()`);
+        log.info(`[pending_work] Completed ${item.work_type} (${workId})`);
+        return text(JSON.stringify({ success: true, work_type: item.work_type, ...outcome }));
+    }
+    catch (e) {
+        // Mark failed (workId already validated above)
+        await store.queryExec(`UPDATE ${workId} SET status = "failed", completed_at = time::now()`).catch(() => { });
+        log.error(`[pending_work] Failed ${item.work_type} (${workId}):`, e);
+        return text(JSON.stringify({ success: false, error: String(e) }));
+    }
+}
+async function commitResults(item, results, state) {
+    const { store, embeddings } = state;
+    switch (item.work_type) {
+        case "extraction":
+        case "deferred_cleanup": {
+            if (typeof results === "string") {
+                // Try to parse JSON from the subagent's text response
+                try {
+                    results = JSON.parse(results);
+                }
+                catch {
+                    const match = results.match(/\{[\s\S]*\}/);
+                    if (match)
+                        results = JSON.parse(match[0]);
+                    else
+                        throw new Error("Could not parse extraction JSON");
+                }
+            }
+            const prior = { conceptNames: [], artifactPaths: [], skillNames: [] };
+            const counts = await writeExtractionResults(results, item.session_id, store, embeddings, prior, item.task_id, item.project_id);
+            return { counts };
+        }
+        case "reflection": {
+            const reflText = typeof results === "string" ? results : String(results?.text ?? results);
+            if (reflText.length < 20 || reflText.toLowerCase().trim() === "skip") {
+                return { skipped: true };
+            }
+            let reflEmb = null;
+            if (embeddings.isAvailable()) {
+                try {
+                    reflEmb = await embeddings.embed(reflText);
+                }
+                catch { /* ok */ }
+            }
+            // Dedup
+            if (reflEmb?.length) {
+                const existing = await store.queryFirst(`SELECT vector::similarity::cosine(embedding, $vec) AS score FROM reflection WHERE embedding != NONE ORDER BY score DESC LIMIT 1`, { vec: reflEmb });
+                if (existing[0]?.score > 0.85)
+                    return { deduplicated: true };
+            }
+            const record = {
+                session_id: item.session_id,
+                text: reflText,
+                category: "session_review",
+                severity: "minor",
+                importance: 7.0,
+            };
+            if (reflEmb?.length)
+                record.embedding = reflEmb;
+            const rows = await store.queryFirst(`CREATE reflection CONTENT $record RETURN id`, { record });
+            if (rows[0]?.id && item.surreal_session_id) {
+                await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id).catch(() => { });
+            }
+            store.clearReflectionCache();
+            return { reflection_id: rows[0]?.id };
+        }
+        case "skill_extract": {
+            const parsed = parseSkillResult(results);
+            if (!parsed)
+                return { skipped: true, reason: "no valid skill found" };
+            return await createSkillRecord(parsed, item, state);
+        }
+        case "causal_graduate": {
+            const skills = parseCausalGraduationResult(results);
+            let created = 0;
+            for (const parsed of skills) {
+                await createSkillRecord(parsed, item, state);
+                created++;
+            }
+            return { skills_created: created };
+        }
+        case "soul_generate": {
+            const doc = parseSoulResult(results);
+            if (!doc)
+                throw new Error("Invalid soul document JSON");
+            const now = new Date().toISOString();
+            const soulDoc = {
+                working_style: doc.working_style ?? [],
+                emotional_dimensions: (doc.emotional_dimensions ?? []).map((d) => ({ ...d, adopted_at: now })),
+                self_observations: doc.self_observations ?? [],
+                earned_values: doc.earned_values ?? [],
+            };
+            const success = await createSoul(soulDoc, store);
+            if (!success)
+                throw new Error("Failed to create soul record");
+            const soul = await getSoul(store);
+            if (soul)
+                await seedSoulAsCoreMemory(soul, store);
+            log.info("[GRADUATION] Soul created by subagent!");
+            return { graduated: true };
+        }
+        case "soul_evolve": {
+            const changes = parseSoulResult(results);
+            if (!changes || Object.keys(changes).length === 0)
+                return { skipped: true, reason: "no changes" };
+            let revised = 0;
+            for (const section of ["working_style", "emotional_dimensions", "self_observations", "earned_values"]) {
+                if (changes[section] && Array.isArray(changes[section]) && changes[section].length > 0) {
+                    await reviseSoul(section, changes[section], "Evolved by subagent based on new experience", store);
+                    revised++;
+                }
+            }
+            return { sections_revised: revised };
+        }
+        case "handoff_note": {
+            const noteText = typeof results === "string" ? results : String(results?.text ?? results);
+            if (noteText.length < 20)
+                return { skipped: true };
+            let noteEmb = null;
+            if (embeddings.isAvailable()) {
+                try {
+                    noteEmb = await embeddings.embed(noteText);
+                }
+                catch { /* ok */ }
+            }
+            const record = {
+                text: noteText,
+                category: "handoff",
+                importance: 8,
+                source: `session:${item.session_id}`,
+            };
+            if (noteEmb?.length)
+                record.embedding = noteEmb;
+            await store.queryFirst(`CREATE memory CONTENT $record RETURN id`, { record });
+            return { stored: true };
+        }
+        default:
+            return { skipped: true, reason: `unknown work_type: ${item.work_type}` };
+    }
+}
+export async function handleCreateKnowledgeGems(state, session, args) {
+    const { store, embeddings } = state;
+    if (!store.isAvailable())
+        return text("Error: database unavailable");
+    const source = String(args.source ?? "").trim();
+    const sourceType = String(args.source_type ?? "document").trim();
+    const sourceDescription = String(args.source_description ?? "").trim();
+    const gems = Array.isArray(args.gems) ? args.gems : [];
+    const links = Array.isArray(args.links) ? args.links : [];
+    if (!source)
+        return text("Error: source is required");
+    if (gems.length === 0)
+        return text("Error: at least one gem is required");
+    try {
+        // 1. Create artifact for the source document via commitKnowledge so the
+        //    artifact auto-seals artifact_mentions edges to the concept graph.
+        const { id: artifactId } = await commitKnowledge({ store, embeddings }, {
+            kind: "artifact",
+            path: source,
+            type: sourceType,
+            description: sourceDescription || source,
+        });
+        // 2. Create each gem as a concept, build name -> id map
+        const nameToId = new Map();
+        const conceptIds = [];
+        let skipped = 0;
+        for (const gem of gems) {
+            if (!gem?.name || !gem?.content) {
+                skipped++;
+                continue;
+            }
+            let gemEmb = null;
+            if (embeddings.isAvailable()) {
+                try {
+                    gemEmb = await embeddings.embed(gem.content);
+                }
+                catch { /* ok */ }
+            }
+            // Route through commitKnowledge so the gem auto-seals into the graph
+            // (linkConceptHierarchy + linkToRelevantConcepts fire automatically).
+            // Previously this path wrote the concept row but left it unlinked —
+            // the root cause PR #1's merge-duplicate-concepts.mjs was cleaning up.
+            const { id: conceptId } = await commitKnowledge(state, {
+                kind: "concept",
+                name: gem.content,
+                source: `gem:${source}`,
+                provenance: {
+                    session_id: session.sessionId,
+                    source_kind: "gem",
+                    skill_name: "create_knowledge_gems",
+                },
+                precomputedVec: gemEmb,
+            });
+            if (!conceptId) {
+                skipped++;
+                continue;
+            }
+            nameToId.set(gem.name, conceptId);
+            conceptIds.push(conceptId);
+            // derived_from edge: concept -> source artifact
+            if (artifactId) {
+                await store.relate(conceptId, "derived_from", artifactId).catch(e => {
+                    log.warn(`[gems] derived_from failed for ${gem.name}:`, e);
+                });
+            }
+        }
+        // 3. Create cross-link edges between gems
+        let edgesCreated = 0;
+        let edgesSkipped = 0;
+        for (const link of links) {
+            if (!link?.from || !link?.to || !link?.edge) {
+                edgesSkipped++;
+                continue;
+            }
+            const fromId = nameToId.get(link.from);
+            const toId = nameToId.get(link.to);
+            if (!fromId || !toId) {
+                edgesSkipped++;
+                log.warn(`[gems] link unresolved: ${link.from} -${link.edge}-> ${link.to}`);
+                continue;
+            }
+            try {
+                await store.relate(fromId, link.edge, toId);
+                edgesCreated++;
+            }
+            catch (e) {
+                edgesSkipped++;
+                log.warn(`[gems] relate failed: ${link.from} -${link.edge}-> ${link.to}:`, e);
+            }
+        }
+        log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} skipped=${skipped + edgesSkipped}`);
+        return text(JSON.stringify({
+            success: true,
+            source,
+            artifact_id: artifactId,
+            concepts_created: conceptIds.length,
+            concepts_skipped: skipped,
+            edges_created: edgesCreated,
+            edges_skipped: edgesSkipped,
+            concept_ids: conceptIds,
+        }));
+    }
+    catch (e) {
+        log.error("[gems] failed:", e);
+        return text(JSON.stringify({ success: false, error: String(e) }));
+    }
+}
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function text(s) {
+    return { content: [{ type: "text", text: s }] };
+}
+function parseSkillResult(results) {
+    let parsed;
+    if (typeof results === "string") {
+        if (results.trim() === "null" || results.trim() === "None")
+            return null;
+        try {
+            parsed = JSON.parse(results);
+        }
+        catch {
+            const match = results.match(/\{[\s\S]*\}/);
+            if (!match)
+                return null;
+            try {
+                parsed = JSON.parse(match[0]);
+            }
+            catch {
+                return null;
+            }
+        }
+    }
+    else {
+        parsed = results;
+    }
+    if (!parsed?.name || !Array.isArray(parsed?.steps) || parsed.steps.length === 0)
+        return null;
+    return parsed;
+}
+function parseCausalGraduationResult(results) {
+    let arr;
+    if (typeof results === "string") {
+        try {
+            arr = JSON.parse(results);
+        }
+        catch {
+            const match = results.match(/\[[\s\S]*\]/);
+            if (!match)
+                return [];
+            try {
+                arr = JSON.parse(match[0]);
+            }
+            catch {
+                return [];
+            }
+        }
+    }
+    else if (Array.isArray(results)) {
+        arr = results;
+    }
+    else {
+        return [];
+    }
+    return arr.map(item => parseSkillResult(item)).filter((s) => s !== null);
+}
+function parseSoulResult(results) {
+    if (typeof results === "string") {
+        try {
+            return JSON.parse(results);
+        }
+        catch {
+            const match = results.match(/\{[\s\S]*\}/);
+            if (!match)
+                return null;
+            try {
+                return JSON.parse(match[0]);
+            }
+            catch {
+                return null;
+            }
+        }
+    }
+    return (results && typeof results === "object") ? results : null;
+}
+async function createSkillRecord(parsed, item, state) {
+    const { store, embeddings } = state;
+    let skillEmb = null;
+    if (embeddings.isAvailable()) {
+        try {
+            skillEmb = await embeddings.embed(`${parsed.name}: ${parsed.description}`);
+        }
+        catch { /* ok */ }
+    }
+    const record = {
+        name: String(parsed.name).slice(0, 100),
+        description: String(parsed.description).slice(0, 200),
+        preconditions: parsed.preconditions ? String(parsed.preconditions).slice(0, 200) : undefined,
+        steps: parsed.steps.slice(0, 8).map(s => ({ tool: String(s.tool ?? "unknown"), description: String(s.description ?? "").slice(0, 200) })),
+        postconditions: parsed.postconditions ? String(parsed.postconditions).slice(0, 200) : undefined,
+        confidence: 1.0,
+        active: true,
+    };
+    if (skillEmb?.length)
+        record.embedding = skillEmb;
+    const rows = await store.queryFirst(`CREATE skill CONTENT $record RETURN id`, { record });
+    const skillId = String(rows[0]?.id ?? "");
+    if (skillId && item.task_id) {
+        await store.relate(skillId, "skill_from_task", item.task_id).catch(() => { });
+    }
+    return { skill_id: skillId, name: parsed.name };
+}

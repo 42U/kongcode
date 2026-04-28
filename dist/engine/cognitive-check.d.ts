@@ -1,0 +1,59 @@
+/**
+ * Cognitive Check — Periodic reasoning over retrieved context.
+ *
+ * Fires every few turns to evaluate what was retrieved, produce behavioral
+ * directives for the next turn, and grade retrieval quality with LLM-judged
+ * relevance scores that feed back into ACAN training.
+ *
+ * Ported from kongbrain — per-session state via WeakMap, takes SurrealStore param.
+ */
+import type { SessionState } from "./state.js";
+import type { SurrealStore } from "./surreal.js";
+export interface CognitiveDirective {
+    type: "repeat" | "continuation" | "contradiction" | "noise" | "insight";
+    target: string;
+    instruction: string;
+    priority: "high" | "medium" | "low";
+}
+export interface RetrievalGrade {
+    id: string;
+    relevant: boolean;
+    reason: string;
+    score: number;
+    learned: boolean;
+    resolved: boolean;
+}
+export interface UserPreference {
+    observation: string;
+    confidence: "high" | "medium";
+}
+export interface CognitiveCheckResult {
+    directives: CognitiveDirective[];
+    grades: RetrievalGrade[];
+    sessionContinuity: "continuation" | "repeat" | "new_topic" | "tangent";
+    preferences: UserPreference[];
+}
+export interface CognitiveCheckInput {
+    sessionId: string;
+    userQuery: string;
+    responseText: string;
+    retrievedNodes: {
+        id: string;
+        text: string;
+        score: number;
+        table: string;
+    }[];
+    recentTurns: {
+        role: string;
+        text: string;
+    }[];
+}
+/** Returns true on turn 2, then every 5 turns (2, 7, 12, 17...). False if in-flight or retrieval skipped. */
+export declare function shouldRunCheck(turnCount: number, session: SessionState): boolean;
+export declare function getPendingDirectives(session: SessionState): CognitiveDirective[];
+export declare function clearPendingDirectives(session: SessionState): void;
+export declare function getSessionContinuity(session: SessionState): string;
+export declare function getSuppressedNodeIds(session: SessionState): ReadonlySet<string>;
+/** Fire-and-forget LLM call. Stores directives, writes grades to DB. */
+export declare function runCognitiveCheck(params: CognitiveCheckInput, session: SessionState, store: SurrealStore): Promise<void>;
+export declare function parseCheckResponse(text: string): CognitiveCheckResult | null;
