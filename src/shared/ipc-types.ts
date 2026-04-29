@@ -99,6 +99,10 @@ export const IPC_METHODS = [
   "meta.health",
   /** Drain in-flight requests, close DB cleanly, exit. Used by `kongcode-daemon stop`. */
   "meta.shutdown",
+  /** Flag the daemon to exit when the last attached client disconnects.
+   *  Used by mcp-clients newer than the running daemon to schedule a code
+   *  refresh without killing in-flight sessions on older clients. */
+  "meta.requestSupersede",
 
   // ── MCP tool handlers (mirror src/tools/*.ts) ──────────────────
   "tool.recall",
@@ -164,6 +168,24 @@ export interface MetaHealthResponse {
     rpcsServedTotal: number;
     rpcsInFlight: number;
   };
+}
+
+export interface MetaRequestSupersedeRequest {
+  /** Caller's version (e.g. "0.7.7"). Daemon only accepts the supersede
+   *  flag when callerVersion is strictly newer than its own DAEMON_VERSION. */
+  clientVersion: string;
+}
+
+export interface MetaRequestSupersedeResponse {
+  /** True if the daemon accepted the supersede request and will exit when
+   *  the last client disconnects. False if it rejected (e.g. caller version
+   *  is older than or equal to daemon version). */
+  accepted: boolean;
+  /** Daemon's own version, for the client's logging. */
+  daemonVersion: string;
+  /** Number of attached clients at the time of request — caller can use
+   *  this to decide whether to wait or just continue. */
+  attachedClients: number;
 }
 
 /** Tool / hook calls — both share the same envelope at the wire level. The

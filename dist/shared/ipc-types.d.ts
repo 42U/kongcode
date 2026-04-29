@@ -80,7 +80,7 @@ export interface IpcResponse {
  *    2. Implement the handler in `src/daemon/handlers.ts`
  *    3. Add a typed wrapper in `src/mcp-client/rpc-stub.ts`
  *  All three live in the same repo, so type errors flag missing wiring. */
-export declare const IPC_METHODS: readonly ["meta.handshake", "meta.health", "meta.shutdown", "tool.recall", "tool.coreMemory", "tool.introspect", "tool.fetchPendingWork", "tool.commitWorkResults", "tool.createKnowledgeGems", "tool.memoryHealth", "tool.linkHierarchy", "tool.supersede", "tool.recordFinding", "tool.clusterScan", "tool.whatIsMissing", "hook.sessionStart", "hook.userPromptSubmit", "hook.preToolUse", "hook.postToolUse", "hook.stop", "hook.preCompact", "hook.postCompact", "hook.sessionEnd", "hook.taskCreated", "hook.subagentStop"];
+export declare const IPC_METHODS: readonly ["meta.handshake", "meta.health", "meta.shutdown", "meta.requestSupersede", "tool.recall", "tool.coreMemory", "tool.introspect", "tool.fetchPendingWork", "tool.commitWorkResults", "tool.createKnowledgeGems", "tool.memoryHealth", "tool.linkHierarchy", "tool.supersede", "tool.recordFinding", "tool.clusterScan", "tool.whatIsMissing", "hook.sessionStart", "hook.userPromptSubmit", "hook.preToolUse", "hook.postToolUse", "hook.stop", "hook.preCompact", "hook.postCompact", "hook.sessionEnd", "hook.taskCreated", "hook.subagentStop"];
 export type IpcMethod = typeof IPC_METHODS[number];
 /** Type-safety helper: narrows arbitrary strings to known method names at
  *  the dispatcher boundary. Returns null for unknown methods (daemon then
@@ -105,6 +105,22 @@ export interface MetaHealthResponse {
         rpcsServedTotal: number;
         rpcsInFlight: number;
     };
+}
+export interface MetaRequestSupersedeRequest {
+    /** Caller's version (e.g. "0.7.7"). Daemon only accepts the supersede
+     *  flag when callerVersion is strictly newer than its own DAEMON_VERSION. */
+    clientVersion: string;
+}
+export interface MetaRequestSupersedeResponse {
+    /** True if the daemon accepted the supersede request and will exit when
+     *  the last client disconnects. False if it rejected (e.g. caller version
+     *  is older than or equal to daemon version). */
+    accepted: boolean;
+    /** Daemon's own version, for the client's logging. */
+    daemonVersion: string;
+    /** Number of attached clients at the time of request — caller can use
+     *  this to decide whether to wait or just continue. */
+    attachedClients: number;
 }
 /** Tool / hook calls — both share the same envelope at the wire level. The
  *  daemon dispatches by method name to the right handler. */

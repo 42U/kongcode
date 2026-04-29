@@ -51,6 +51,12 @@ export interface DaemonServerOpts {
   tcpPort: number | null;
   /** Logger — daemon's main module wires this to its log facility. */
   log: { info: (msg: string) => void; warn: (msg: string) => void; error: (msg: string, e?: unknown) => void };
+  /** Called when the supersede flag is set and the last attached client
+   *  disconnects. Daemon main wires this to graceful-shutdown logic so a
+   *  newer-version client can flag the daemon for exit and have it actually
+   *  exit at the natural disconnect boundary, without disrupting other
+   *  still-attached older-version clients. */
+  onSupersedeReady?: () => void;
 }
 
 export class DaemonServer {
@@ -61,6 +67,7 @@ export class DaemonServer {
   private rpcsServedTotal = 0;
   private rpcsInFlight = 0;
   private startedAt = Date.now();
+  private pendingSupersede = false;
 
   constructor(private readonly opts: DaemonServerOpts) {}
 
@@ -135,7 +142,43 @@ export class DaemonServer {
       rpcsInFlight: this.rpcsInFlight,
       startedAt: this.startedAt,
       protocolVersion: PROTOCOL_VERSION,
+      pendingSupersede: this.pendingSupersede,
     };
+  }
+
+  /** Number of currently-attached client sockets. Used by meta.requestSupersede
+   *  to report whether the daemon is "orphaned" (zero attached). */
+  get attachedClientCount(): number {
+    return this.clients.size;
+  }
+
+  /** Mark daemon for supersede: it will exit when the last attached client
+   *  disconnects. Idempotent. Safe to call from a handler thread. */
+  markPendingSupersede(): void {
+    this.pendingSupersede = true;
+  }
+
+  isPendingSupersede(): boolean {
+    return this.pendingSupersede;
+  }
+
+  /** When supersede is flagged AND the last client just disconnected, fire
+   *  the registered callback so daemon main can shut down cleanly. The
+   *  callback is invoked exactly once per supersede cycle. */
+  private supersedeFired = false;
+  private checkSupersedeReady(): void {
+    if (
+      this.pendingSupersede &&
+      !this.supersedeFired &&
+      this.clients.size === 0 &&
+      this.opts.onSupersedeReady
+    ) {
+      this.supersedeFired = true;
+      this.opts.log.info("[daemon] last client disconnected with supersede flag set — exiting for code refresh");
+      try { this.opts.onSupersedeReady(); } catch (e) {
+        this.opts.log.warn(`[daemon] onSupersedeReady callback threw: ${(e as Error).message}`);
+      }
+    }
   }
 
   // ── Per-connection handling ─────────────────────────────────────
@@ -164,6 +207,7 @@ export class DaemonServer {
 
     sock.on("close", () => {
       this.clients.delete(sock);
+      this.checkSupersedeReady();
     });
 
     sock.on("error", (err) => {
@@ -174,6 +218,7 @@ export class DaemonServer {
         this.opts.log.warn(`[daemon] client socket error: ${err.message}`);
       }
       this.clients.delete(sock);
+      this.checkSupersedeReady();
     });
   }
 

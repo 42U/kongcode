@@ -53,6 +53,10 @@ export const IPC_METHODS = [
     "meta.health",
     /** Drain in-flight requests, close DB cleanly, exit. Used by `kongcode-daemon stop`. */
     "meta.shutdown",
+    /** Flag the daemon to exit when the last attached client disconnects.
+     *  Used by mcp-clients newer than the running daemon to schedule a code
+     *  refresh without killing in-flight sessions on older clients. */
+    "meta.requestSupersede",
     // ── MCP tool handlers (mirror src/tools/*.ts) ──────────────────
     "tool.recall",
     "tool.coreMemory",

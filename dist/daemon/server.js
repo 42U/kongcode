@@ -27,6 +27,7 @@ export class DaemonServer {
     rpcsServedTotal = 0;
     rpcsInFlight = 0;
     startedAt = Date.now();
+    pendingSupersede = false;
     constructor(opts) {
         this.opts = opts;
     }
@@ -107,7 +108,40 @@ export class DaemonServer {
             rpcsInFlight: this.rpcsInFlight,
             startedAt: this.startedAt,
             protocolVersion: PROTOCOL_VERSION,
+            pendingSupersede: this.pendingSupersede,
         };
+    }
+    /** Number of currently-attached client sockets. Used by meta.requestSupersede
+     *  to report whether the daemon is "orphaned" (zero attached). */
+    get attachedClientCount() {
+        return this.clients.size;
+    }
+    /** Mark daemon for supersede: it will exit when the last attached client
+     *  disconnects. Idempotent. Safe to call from a handler thread. */
+    markPendingSupersede() {
+        this.pendingSupersede = true;
+    }
+    isPendingSupersede() {
+        return this.pendingSupersede;
+    }
+    /** When supersede is flagged AND the last client just disconnected, fire
+     *  the registered callback so daemon main can shut down cleanly. The
+     *  callback is invoked exactly once per supersede cycle. */
+    supersedeFired = false;
+    checkSupersedeReady() {
+        if (this.pendingSupersede &&
+            !this.supersedeFired &&
+            this.clients.size === 0 &&
+            this.opts.onSupersedeReady) {
+            this.supersedeFired = true;
+            this.opts.log.info("[daemon] last client disconnected with supersede flag set — exiting for code refresh");
+            try {
+                this.opts.onSupersedeReady();
+            }
+            catch (e) {
+                this.opts.log.warn(`[daemon] onSupersedeReady callback threw: ${e.message}`);
+            }
+        }
     }
     // ── Per-connection handling ─────────────────────────────────────
     onConnection(sock) {
@@ -133,6 +167,7 @@ export class DaemonServer {
         });
         sock.on("close", () => {
             this.clients.delete(sock);
+            this.checkSupersedeReady();
         });
         sock.on("error", (err) => {
             // ECONNRESET when client disappears mid-request — common, not worth
@@ -142,6 +177,7 @@ export class DaemonServer {
                 this.opts.log.warn(`[daemon] client socket error: ${err.message}`);
             }
             this.clients.delete(sock);
+            this.checkSupersedeReady();
         });
     }
     async dispatchLine(sock, line) {

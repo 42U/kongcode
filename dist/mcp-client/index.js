@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.6";
+const CLIENT_VERSION = "0.7.7";
 let ipc = null;
 /** In-flight connect promise — concurrent callers share it so we never
  *  fire two daemon-spawn attempts in parallel (the lock-contention bug
@@ -39,6 +39,18 @@ let ipcInFlight = null;
  *  is keyed on this. KONGCODE_SESSION_ID env var lets users pin a stable id;
  *  default uses pid for per-process uniqueness. */
 const SESSION_ID = process.env.KONGCODE_SESSION_ID ?? `mcp-client-${process.pid}`;
+function compareSemver(a, b) {
+    const pa = a.split(".").map((s) => Number(s) || 0);
+    const pb = b.split(".").map((s) => Number(s) || 0);
+    const n = Math.max(pa.length, pb.length);
+    for (let i = 0; i < n; i++) {
+        const av = pa[i] ?? 0;
+        const bv = pb[i] ?? 0;
+        if (av !== bv)
+            return av - bv;
+    }
+    return 0;
+}
 async function connectAndHandshake() {
     const { socketPath, spawned } = await ensureDaemon({
         log: { info: log.info, warn: log.warn, error: log.error },
@@ -47,41 +59,42 @@ async function connectAndHandshake() {
     const client = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
     await client.connect();
     const handshake = await client.handshake();
-    // Version mismatch → daemon is running stale code (e.g. plugin update
-    // restarted mcp-client but daemon kept running on the previous binary).
-    // Daemon-arch tradeoff: clients update freely, daemon doesn't, so we have
-    // to recycle it explicitly. Send meta.shutdown, wait for the daemon to
-    // exit, then re-ensureDaemon to spawn a fresh one with new code.
+    // Version-mismatch policy (the user's framing: "if a user has multiple
+    // sessions open some might be versions behind doesn't mean we should
+    // kill/respawn it UNLESS ITS ORPHANED"):
+    //
+    //   client > daemon → call meta.requestSupersede(clientVersion). Daemon
+    //                     flags itself for exit when its LAST attached client
+    //                     disconnects. This client KEEPS USING the current
+    //                     daemon — older sibling sessions stay intact, the
+    //                     code refresh happens at the natural disconnect
+    //                     boundary on next spawn.
+    //   client < daemon → forward-compat: just continue. Older clients work
+    //                     against newer daemons; IPC is additive.
+    //   equal           → unreachable in this branch; nothing to do.
     if (handshake.daemonVersion && handshake.daemonVersion !== CLIENT_VERSION) {
-        log.warn(`[mcp-client] version mismatch: client=${CLIENT_VERSION} daemon=${handshake.daemonVersion} — recycling daemon to load new code`);
-        try {
-            await client.call("meta.shutdown", {});
+        const cmp = compareSemver(CLIENT_VERSION, handshake.daemonVersion);
+        if (cmp > 0) {
+            log.warn(`[mcp-client] client v${CLIENT_VERSION} > daemon v${handshake.daemonVersion} — flagging daemon to supersede after last attached client disconnects`);
+            try {
+                const resp = await client.call("meta.requestSupersede", { clientVersion: CLIENT_VERSION });
+                if (resp?.accepted) {
+                    log.info(`[mcp-client] supersede flag accepted (${resp.attachedClients} attached); daemon will exit when all disconnect`);
+                }
+                else {
+                    log.warn(`[mcp-client] supersede flag declined by daemon`);
+                }
+            }
+            catch (e) {
+                // Older daemons (pre-0.7.7) don't know meta.requestSupersede and
+                // return Method-not-found. That's fine — code refresh just won't
+                // be auto-promoted; user can manually recycle if they want it.
+                log.warn(`[mcp-client] meta.requestSupersede unavailable on this daemon (${e.message}); manual daemon restart required to load v${CLIENT_VERSION} code`);
+            }
         }
-        catch { /* daemon exits before responding sometimes */ }
-        try {
-            client.close();
+        else {
+            log.warn(`[mcp-client] client v${CLIENT_VERSION} < daemon v${handshake.daemonVersion} — using newer daemon (forward-compat)`);
         }
-        catch { }
-        // Wait for socket cleanup so ensureDaemon's fast-path doesn't latch
-        // back onto the dying daemon. Bounded poll, 100ms steps, 10s ceiling.
-        const { existsSync } = await import("node:fs");
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-            if (!existsSync(socketPath))
-                break;
-            await new Promise(r => setTimeout(r, 100));
-        }
-        const fresh = await ensureDaemon({
-            log: { info: log.info, warn: log.warn, error: log.error },
-        });
-        log.info(`[mcp-client] post-recycle daemon ${fresh.spawned ? "spawned" : "found"} at ${fresh.socketPath}`);
-        const newClient = new IpcClient({ socketPath: fresh.socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
-        await newClient.connect();
-        const h2 = await newClient.handshake();
-        if (h2.daemonVersion !== CLIENT_VERSION) {
-            log.warn(`[mcp-client] post-recycle version still mismatched (daemon=${h2.daemonVersion}). Continuing anyway.`);
-        }
-        return newClient;
     }
     return client;
 }

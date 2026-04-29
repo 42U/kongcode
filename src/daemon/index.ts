@@ -69,7 +69,22 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.6";
+const DAEMON_VERSION = "0.7.7";
+
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.7"). Returns negative/0/positive
+ *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
+ *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
+function compareSemver(a: string, b: string): number {
+  const pa = a.split(".").map((s) => Number(s) || 0);
+  const pb = b.split(".").map((s) => Number(s) || 0);
+  const n = Math.max(pa.length, pb.length);
+  for (let i = 0; i < n; i++) {
+    const av = pa[i] ?? 0;
+    const bv = pb[i] ?? 0;
+    if (av !== bv) return av - bv;
+  }
+  return 0;
+}
 
 type BootstrapPhase = MetaHandshakeResponse["bootstrapPhase"];
 let bootstrapPhase: BootstrapPhase = "starting";
@@ -239,6 +254,17 @@ async function main(): Promise<void> {
       warn: (m) => log.warn(m),
       error: (m, e) => log.error(m, e),
     },
+    // Fires once when (a) supersede flagged and (b) last client disconnects.
+    // Triggered by a newer-version mcp-client calling meta.requestSupersede,
+    // letting older still-attached clients keep working until they finish
+    // before we hand control over to fresh daemon code on the next spawn.
+    onSupersedeReady: () => {
+      setImmediate(async () => {
+        try { await server.close(); } catch {}
+        removeOwnPidFile();
+        process.exit(0);
+      });
+    },
   });
 
   // ── Meta handlers (always available, no bootstrap dependency) ──
@@ -260,6 +286,22 @@ async function main(): Promise<void> {
       stats: server.getStats(),
     };
     return resp;
+  });
+
+  server.register("meta.requestSupersede", async (params) => {
+    const { clientVersion } = (params as { clientVersion?: string }) ?? {};
+    const accepted = !!clientVersion && compareSemver(clientVersion, DAEMON_VERSION) > 0;
+    if (accepted) {
+      log.info(`[daemon] supersede requested by client v${clientVersion} (daemon v${DAEMON_VERSION}) — will exit when last client disconnects`);
+      server.markPendingSupersede();
+    } else {
+      log.info(`[daemon] supersede declined: client v${clientVersion ?? "?"} not newer than daemon v${DAEMON_VERSION}`);
+    }
+    return {
+      accepted,
+      daemonVersion: DAEMON_VERSION,
+      attachedClients: server.attachedClientCount,
+    };
   });
 
   server.register("meta.shutdown", async () => {
