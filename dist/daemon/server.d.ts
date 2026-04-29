@@ -49,8 +49,8 @@ export interface DaemonServerOpts {
      *  still-attached older-version clients. */
     onSupersedeReady?: () => void;
     /** Idle-reaper: when clients.size === 0 for this many ms, fire onIdleReap.
-     *  Set to 0 to disable. Default wired in daemon/index.ts (0.7.10+) is
-     *  30 min; users can override via KONGCODE_DAEMON_IDLE_TIMEOUT_MS env var.
+     *  Set to 0 to disable. Default wired in daemon/index.ts (0.7.11+) is
+     *  60s; users can override via KONGCODE_DAEMON_IDLE_TIMEOUT_MS env var.
      *  Without this, a daemon that loses its last client just sits forever
      *  holding BGE-M3 in RAM — the gap the user named when asking "what
      *  happened to the reaper that handled these sorts of things?" */

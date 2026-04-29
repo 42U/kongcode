@@ -54,8 +54,8 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.10";
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.10"). Returns negative/0/positive
+const DAEMON_VERSION = "0.7.11";
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.11"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a, b) {
@@ -217,18 +217,22 @@ async function main() {
     const tcpPort = tcpPortEnv ? Number(tcpPortEnv) : DEFAULT_DAEMON_TCP_PORT;
     // Disable Unix socket if explicitly told to (Windows or paranoid setups).
     const useUds = process.env.KONGCODE_DAEMON_TRANSPORT !== "tcp" && process.platform !== "win32";
-    // Idle reaper config: 30 min default, overridable via env var. Set to 0
-    // to disable (daemon stays alive forever — useful for shared-server
-    // setups where multiple intermittent clients don't want a cold-start
-    // penalty between disconnects). The timer arms on listen() and on every
-    // disconnect-to-zero; cancels on every connect.
+    // Idle reaper config: 60s default, overridable via env var. The only real
+    // value of staying alive past the last disconnect is absorbing an
+    // accidental close-and-reopen — ~3-5s of bootstrap saved on the warm
+    // path. Beyond a minute or two the user is either done for the session
+    // block or away for hours; holding ~150MB of BGE-M3 in RAM benefits
+    // nobody. Set 0 to reap immediately. Set higher (e.g. 30 min) for
+    // shared-server / cron-driven setups where intermittent clients don't
+    // want a cold-start penalty between disconnects. The timer arms on
+    // listen() and on every disconnect-to-zero; cancels on every connect.
     const idleTimeoutMs = (() => {
         const env = process.env.KONGCODE_DAEMON_IDLE_TIMEOUT_MS;
         if (env !== undefined) {
             const n = Number(env);
-            return Number.isFinite(n) && n >= 0 ? n : 30 * 60_000;
+            return Number.isFinite(n) && n >= 0 ? n : 60_000;
         }
-        return 30 * 60_000;
+        return 60_000;
     })();
     const reaperExit = (reason) => () => {
         log.info(`[daemon] graceful exit: ${reason}`);
@@ -264,9 +268,9 @@ async function main() {
     });
     // ── Meta handlers (always available, no bootstrap dependency) ──
     server.register("meta.handshake", async (params, ctx) => {
-        // Register caller identity if provided. Pre-0.7.10 clients send empty
+        // Register caller identity if provided. Pre-0.7.11 clients send empty
         // params and stay anonymous (still counted in activeClients but absent
-        // from the per-client registry). 0.7.10+ clients send {clientInfo}.
+        // from the per-client registry). 0.7.11+ clients send {clientInfo}.
         const p = params ?? {};
         if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
             ctx.registerIdentity(p.clientInfo);
