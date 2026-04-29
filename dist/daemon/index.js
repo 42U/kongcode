@@ -54,8 +54,8 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.7";
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.7"). Returns negative/0/positive
+const DAEMON_VERSION = "0.7.8";
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.8"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a, b) {

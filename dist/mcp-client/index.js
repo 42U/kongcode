@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.7";
+const CLIENT_VERSION = "0.7.8";
 let ipc = null;
 /** In-flight connect promise — concurrent callers share it so we never
  *  fire two daemon-spawn attempts in parallel (the lock-contention bug
@@ -69,6 +69,15 @@ async function connectAndHandshake() {
     //                     daemon — older sibling sessions stay intact, the
     //                     code refresh happens at the natural disconnect
     //                     boundary on next spawn.
+    //
+    //                     Bootstrap gap: pre-0.7.8 daemons don't know
+    //                     meta.requestSupersede. When that throws, we fall
+    //                     back to checking meta.health.activeClients — if
+    //                     we're the only attached client (orphan), call
+    //                     meta.shutdown directly and respawn. If siblings
+    //                     are attached, defer to manual recycle and continue
+    //                     with stale daemon (architectural invariant: never
+    //                     disrupt other sessions to refresh code).
     //   client < daemon → forward-compat: just continue. Older clients work
     //                     against newer daemons; IPC is additive.
     //   equal           → unreachable in this branch; nothing to do.
@@ -76,9 +85,11 @@ async function connectAndHandshake() {
         const cmp = compareSemver(CLIENT_VERSION, handshake.daemonVersion);
         if (cmp > 0) {
             log.warn(`[mcp-client] client v${CLIENT_VERSION} > daemon v${handshake.daemonVersion} — flagging daemon to supersede after last attached client disconnects`);
+            let supersedeAccepted = false;
             try {
                 const resp = await client.call("meta.requestSupersede", { clientVersion: CLIENT_VERSION });
-                if (resp?.accepted) {
+                supersedeAccepted = !!resp?.accepted;
+                if (supersedeAccepted) {
                     log.info(`[mcp-client] supersede flag accepted (${resp.attachedClients} attached); daemon will exit when all disconnect`);
                 }
                 else {
@@ -86,10 +97,14 @@ async function connectAndHandshake() {
                 }
             }
             catch (e) {
-                // Older daemons (pre-0.7.7) don't know meta.requestSupersede and
-                // return Method-not-found. That's fine — code refresh just won't
-                // be auto-promoted; user can manually recycle if they want it.
-                log.warn(`[mcp-client] meta.requestSupersede unavailable on this daemon (${e.message}); manual daemon restart required to load v${CLIENT_VERSION} code`);
+                // Pre-0.7.8 daemons don't know meta.requestSupersede. Fall back
+                // to the "orphan check + direct recycle" path — supported by
+                // every daemon since 0.7.0 (meta.health and meta.shutdown have
+                // been there from the start).
+                log.warn(`[mcp-client] meta.requestSupersede unavailable on this daemon (${e.message}); checking orphan status for direct recycle`);
+                const recycled = await tryOrphanRecycle(client, socketPath, handshake.daemonVersion);
+                if (recycled)
+                    return recycled;
             }
         }
         else {
@@ -97,6 +112,68 @@ async function connectAndHandshake() {
         }
     }
     return client;
+}
+/** Fallback used when meta.requestSupersede isn't supported by the running
+ *  daemon. Reads activeClients from meta.health; if we're the only attached
+ *  client, sends meta.shutdown, waits for socket cleanup, and re-spawns a
+ *  fresh daemon via ensureDaemon. Returns the new IpcClient on success, or
+ *  null when we left the daemon alone (siblings attached, or any safety
+ *  check failed). Never throws — degrades to "keep using stale daemon" on
+ *  any failure path. */
+async function tryOrphanRecycle(client, socketPath, daemonVersion) {
+    let activeClients;
+    try {
+        const health = await client.call("meta.health", {});
+        activeClients = health?.stats?.activeClients;
+    }
+    catch (e) {
+        log.error(`[mcp-client] meta.health failed during orphan check (${e.message}); leaving stale daemon in place`);
+        return null;
+    }
+    if (activeClients === undefined) {
+        log.warn(`[mcp-client] daemon didn't report activeClients in meta.health; leaving stale daemon in place`);
+        return null;
+    }
+    if (activeClients > 1) {
+        log.warn(`[mcp-client] ${activeClients} clients attached to v${daemonVersion} daemon — sibling sessions present, deferring code refresh until they disconnect`);
+        return null;
+    }
+    // activeClients === 1: we are the only client. Daemon is orphaned in the
+    // architectural sense — safe to recycle without disrupting anyone.
+    log.info(`[mcp-client] no sibling clients attached; recycling stale v${daemonVersion} daemon to load v${CLIENT_VERSION} code`);
+    try {
+        await client.call("meta.shutdown", {});
+    }
+    catch {
+        // Daemon may exit before responding — that's fine, we're trying to kill it.
+    }
+    try {
+        client.close();
+    }
+    catch { }
+    // Poll for socket file disappearance so ensureDaemon's fast-path doesn't
+    // latch back onto the dying daemon.
+    const { existsSync } = await import("node:fs");
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+        if (!existsSync(socketPath))
+            break;
+        await new Promise(r => setTimeout(r, 100));
+    }
+    const fresh = await ensureDaemon({
+        log: { info: log.info, warn: log.warn, error: log.error },
+    });
+    log.info(`[mcp-client] post-recycle daemon ${fresh.spawned ? "spawned" : "found"} at ${fresh.socketPath}`);
+    const newClient = new IpcClient({ socketPath: fresh.socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
+    await newClient.connect();
+    const h2 = await newClient.handshake();
+    if (h2.daemonVersion !== CLIENT_VERSION) {
+        log.warn(`[mcp-client] post-recycle daemon reports v${h2.daemonVersion}, expected v${CLIENT_VERSION}; continuing anyway`);
+    }
+    else {
+        log.info(`[mcp-client] post-recycle daemon v${h2.daemonVersion} matches client; bootstrap complete`);
+    }
+    return newClient;
 }
 async function getOrConnectIpc() {
     if (ipc)

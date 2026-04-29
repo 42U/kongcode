@@ -69,9 +69,9 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.7";
+const DAEMON_VERSION = "0.7.8";
 
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.7"). Returns negative/0/positive
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.8"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a: string, b: string): number {
