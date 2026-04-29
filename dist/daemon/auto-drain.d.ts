@@ -30,6 +30,11 @@ interface DrainSchedulerOpts {
     intervalMs: number;
     /** Cache dir for the PID lock file. */
     cacheDir: string;
+    /** Max headless-drain spawns per UTC day. 0 = unlimited (default 50). Above
+     *  this, scheduler logs a warning and skips. Cheap insurance against runaway
+     *  loops since each spawn consumes the user's API quota. Resets when UTC
+     *  date changes (state persisted to <cacheDir>/auto-drain-spending.json). */
+    maxDaily: number;
 }
 /** Start the periodic drain scheduler. Idempotent — calling twice is a no-op. */
 export declare function startDrainScheduler(state: GlobalPluginState, opts: DrainSchedulerOpts): void;

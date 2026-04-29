@@ -133,6 +133,7 @@ export async function handleSessionEnd(state, payload) {
         threshold: Number(process.env.KONGCODE_AUTO_DRAIN_THRESHOLD ?? 5),
         intervalMs: 0,
         cacheDir: state.config.paths.cacheDir,
+        maxDaily: Number(process.env.KONGCODE_AUTO_DRAIN_MAX_DAILY ?? 50),
     }, "session-end");
     return {};
 }

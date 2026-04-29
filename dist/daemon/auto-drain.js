@@ -23,7 +23,7 @@
  *   KONGCODE_CLAUDE_BIN            → explicit path to claude binary
  */
 import { spawn } from "node:child_process";
-import { existsSync, openSync, closeSync, writeSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, openSync, closeSync, writeSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -117,6 +117,37 @@ function releaseLock(fd, lockPath) {
     }
     catch { }
 }
+function spendingFilePath(cacheDir) {
+    return join(cacheDir, "auto-drain-spending.json");
+}
+function todayUtc() {
+    return new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+}
+/** Read today's spawn count from the spending file. Auto-resets to 0 if the
+ *  recorded date is not today. Tolerant of missing/corrupt files. */
+function readSpending(cacheDir) {
+    const path = spendingFilePath(cacheDir);
+    try {
+        const raw = readFileSync(path, "utf-8");
+        const parsed = JSON.parse(raw);
+        if (parsed.date === todayUtc() && Number.isFinite(parsed.count)) {
+            return parsed;
+        }
+    }
+    catch { /* missing or corrupt → fall through */ }
+    return { date: todayUtc(), count: 0 };
+}
+function bumpSpending(cacheDir) {
+    const cur = readSpending(cacheDir);
+    const next = { date: todayUtc(), count: cur.count + 1 };
+    try {
+        writeFileSync(spendingFilePath(cacheDir), JSON.stringify(next), "utf-8");
+    }
+    catch (e) {
+        swallow.warn("auto-drain:spending:write", e);
+    }
+    return next;
+}
 async function getPendingCount(state) {
     if (!state.store.isAvailable())
         return 0;
@@ -145,6 +176,18 @@ async function spawnHeadlessDrainer(state, opts, reason) {
     const count = await getPendingCount(state);
     if (count < opts.threshold) {
         return { spawned: false, reason: `queue=${count} < threshold=${opts.threshold}` };
+    }
+    // Daily-spend cap: refuse to spawn if today's count would exceed maxDaily.
+    // 0 means unlimited (cap disabled). Resets at UTC midnight. Cheap insurance
+    // against runaway loops since each spawn consumes the user's API quota.
+    if (opts.maxDaily > 0) {
+        const spending = readSpending(opts.cacheDir);
+        if (spending.count >= opts.maxDaily) {
+            return {
+                spawned: false,
+                reason: `daily cap reached (${spending.count}/${opts.maxDaily} for ${spending.date})`,
+            };
+        }
     }
     const lockPath = pidFilePath(opts.cacheDir);
     const lockFd = tryAcquireLock(lockPath);
@@ -177,6 +220,13 @@ async function spawnHeadlessDrainer(state, opts, reason) {
         }
         catch { }
         child.unref();
+        // Bump the daily counter once the spawn succeeds (we have a pid). Done
+        // BEFORE awaiting the exit so a long-running extractor doesn't get a
+        // free-pass on its sibling spawn that might land mid-flight.
+        if (opts.maxDaily > 0) {
+            const post = bumpSpending(opts.cacheDir);
+            log.info(`[auto-drain] daily count: ${post.count}/${opts.maxDaily}`);
+        }
         // Watch for exit so we can clean the lock file. Detached + unref'd means
         // the daemon won't block on this, but we still want to know when it's done.
         child.on("exit", (code) => {

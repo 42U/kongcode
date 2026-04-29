@@ -70,9 +70,9 @@ import type { HookResponse } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.15";
+const DAEMON_VERSION = "0.7.16";
 
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.15"). Returns negative/0/positive
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.16"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a: string, b: string): number {
@@ -198,10 +198,19 @@ async function initializeStack(): Promise<void> {
       }
       return 5 * 60_000;
     })();
+    const drainMaxDaily = (() => {
+      const env = process.env.KONGCODE_AUTO_DRAIN_MAX_DAILY;
+      if (env !== undefined) {
+        const n = Number(env);
+        return Number.isFinite(n) && n >= 0 ? n : 50;
+      }
+      return 50;
+    })();
     startDrainScheduler(globalState, {
       threshold: drainThreshold,
       intervalMs: drainIntervalMs,
       cacheDir: config.paths.cacheDir,
+      maxDaily: drainMaxDaily,
     });
   }
 
@@ -331,9 +340,9 @@ async function main(): Promise<void> {
   // ── Meta handlers (always available, no bootstrap dependency) ──
 
   server.register("meta.handshake", async (params, ctx) => {
-    // Register caller identity if provided. Pre-0.7.15 clients send empty
+    // Register caller identity if provided. Pre-0.7.16 clients send empty
     // params and stay anonymous (still counted in activeClients but absent
-    // from the per-client registry). 0.7.15+ clients send {clientInfo}.
+    // from the per-client registry). 0.7.16+ clients send {clientInfo}.
     const p = (params as { clientInfo?: { pid: number; version: string; sessionId: string } }) ?? {};
     if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
       ctx.registerIdentity(p.clientInfo);

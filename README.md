@@ -6,7 +6,7 @@
 
 [![VoidOrigin](https://img.shields.io/badge/VOIDORIGIN-voidorigin.com-0a0a0a?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSI+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiIHN0cm9rZT0iI2ZmNmIzNSIgc3Ryb2tlLXdpZHRoPSIyIi8+PGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iNCIgZmlsbD0iI2ZmNmIzNSIvPjwvc3ZnPg==&logoColor=ff6b35&labelColor=0a0a0a)](https://voidorigin.com)
 
-[![Version](https://img.shields.io/badge/v0.7.0--rc.0-prerelease-f59e0b?style=for-the-badge)](https://github.com/42U/kongcode)
+[![Version](https://img.shields.io/badge/v0.7.15-stable-22c55e?style=for-the-badge)](https://github.com/42U/kongcode)
 [![GitHub Stars](https://img.shields.io/github/stars/42U/kongcode?style=for-the-badge&logo=github&color=gold)](https://github.com/42U/kongcode)
 [![License: MIT](https://img.shields.io/github/license/42U/kongcode?style=for-the-badge&logo=opensourceinitiative&color=blue)](https://opensource.org/licenses/MIT)
 [![Node.js](https://img.shields.io/badge/Node.js-20+-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
@@ -15,7 +15,7 @@
 
 **Graph-backed permanent memory for [Claude Code](https://claude.ai/claude-code).** Forked from [KongBrain](https://github.com/42U/kongbrain).
 
-[Quick Start](#quick-start) | [Architecture](#architecture) | [How It Works](#how-it-works) | [Commands](#commands) | [Development](#development)
+[Quick Start](#quick-start) | [Architecture](#architecture) | [Configuration](#configuration) | [Troubleshooting](#troubleshooting) | [Development](#development)
 
 </div>
 
@@ -35,7 +35,7 @@ KongCode gives Claude Code persistent memory that learns across sessions:
 
 ## Quick Start
 
-KongCode 0.7.0 ships with a self-contained first-run bootstrap. No manual SurrealDB install, no manual model download, no shell scripts. **Zero Node prereq once SEA artifacts ship for your platform** — just two slash commands.
+KongCode ships with a self-contained first-run bootstrap. No manual SurrealDB install, no model download, no shell scripts. Just two slash commands.
 
 ### Prerequisites
 
@@ -48,7 +48,7 @@ Quick installs (only if you need Node + git for the fallback path):
 
 - **macOS**: `brew install node git`
 - **Windows (PowerShell, elevated)**: `winget install OpenJS.NodeJS.LTS Git.Git` then **restart your terminal AND Claude Code** so the new PATH is picked up.
-- **Linux**: use your distro's package manager (`apt install nodejs npm git`) or [nvm](https://github.com/nvm-sh/nvm).
+- **Linux**: distro package manager (`apt install nodejs npm git`) or [nvm](https://github.com/nvm-sh/nvm).
 
 ### 1. Install the plugin
 
@@ -65,14 +65,14 @@ In Claude Code:
 claude
 ```
 
-On first run, the kongcode MCP server provisions everything it needs (one-time, ~2-3 minutes depending on your connection):
+On first run, the kongcode daemon provisions everything it needs (one-time, ~2-3 minutes depending on your connection):
 
-- Installs npm deps under the plugin (pulls node-llama-cpp's platform-correct native binding)
+- Installs npm deps (pulls node-llama-cpp's platform-correct native binding)
 - Downloads the SurrealDB binary for your platform from the official GitHub release into `~/.kongcode/cache/`
 - Downloads the BGE-M3 GGUF embedding model (~420MB) from Hugging Face into `~/.kongcode/cache/models/`
-- Spawns a managed SurrealDB child process on `127.0.0.1:18765` backed by `~/.kongcode/data/`
+- Spawns a managed SurrealDB child process backed by `~/.kongcode/data/`
 
-Subsequent sessions skip bootstrap and start in seconds.
+Subsequent sessions skip bootstrap and start in seconds — they warm-attach to the long-lived daemon.
 
 ### Updating
 
@@ -81,7 +81,7 @@ Subsequent sessions skip bootstrap and start in seconds.
 /plugin update kongcode@kongcode-marketplace
 ```
 
-There's no auto-update — Claude Code's plugin system requires explicit user-initiated updates.
+There's no auto-update — Claude Code's plugin system requires explicit user-initiated updates. Once you update, the new mcp-client detects it's running newer than the daemon, flags the daemon for graceful exit on next disconnect, and the next session you open spawns a fresh daemon with the new code. No manual restart of anything.
 
 ### Bring-your-own-SurrealDB (advanced)
 
@@ -93,7 +93,7 @@ export SURREAL_USER=root
 export SURREAL_PASS=root
 ```
 
-Other override env vars: `SURREAL_BIN_PATH`, `KONGCODE_CACHE_DIR`, `KONGCODE_DATA_DIR`, `EMBED_MODEL_PATH`, `KONGCODE_SURREAL_PORT`, `KONGCODE_SKIP_BOOTSTRAP=1` (disables bootstrap entirely).
+KongCode also auto-detects existing kongcode SurrealDB instances on common ports (8000, 8042) at startup, so you usually don't need to set this manually if you already have one running.
 
 ### Platform support
 
@@ -101,39 +101,73 @@ Other override env vars: `SURREAL_BIN_PATH`, `KONGCODE_CACHE_DIR`, `KONGCODE_DAT
 |---|---|---|
 | linux-x64 | ✅ | ✅ |
 | linux-arm64 | ✅ | ✅ |
-| macOS-x64 | ✅ | ✅ |
 | macOS-arm64 | ✅ | ✅ |
+| macOS-x64 | — | ✅ if Node 18+ available |
 | win32-x64 | ✅ | ✅ |
 | Other | — | ✅ if Node 18+ available |
 
 If you hit issues, please file at https://github.com/42U/kongcode/issues.
 
-### Architecture (0.7.0+)
-
-KongCode runs as two cooperating processes:
-
-- **kongcode-daemon**: long-lived background process owning the SurrealDB connection, BGE-M3 embedding model, ACAN weights, and all 22 tool/hook handlers. Survives plugin updates, MCP restarts, and Claude Code crashes.
-- **kongcode-mcp**: thin per-Claude-Code-session client. Forwards MCP RPC to the daemon over local IPC. Plugin updates only restart this; the daemon keeps running.
-
-Multiple Claude Code sessions share one daemon — one BGE-M3 in RAM instead of N copies.
-
 ## Architecture
 
+KongCode runs as **two cooperating processes**:
+
 ```
-Claude Code Session
-├── MCP Server (kongcode) ← long-lived, owns DB + embeddings + state
-│   ├── MCP Tools: recall, core_memory, introspect, create_knowledge_gems,
-│   │              fetch_pending_work, commit_work_results
-│   └── Unix Socket API ← hook communication
-└── Hook Scripts ← thin proxies to MCP server
-    ├── SessionStart     → bootstrap + wakeup briefing
-    ├── UserPromptSubmit → context retrieval + injection
-    ├── PreToolUse       → tool budget gating
-    ├── PostToolUse      → outcome tracking
-    ├── Stop             → turn ingestion
-    ├── PreCompact       → context preservation
-    └── SessionEnd       → extraction + graduation
+                    ┌────────────────────────────────────────────┐
+                    │  kongcode-daemon (long-lived, 1 per host)  │
+                    │  ┌──────────────────────────────────────┐  │
+                    │  │ SurrealStore (graph DB connection)   │  │
+                    │  │ EmbeddingService (BGE-M3 in RAM)     │  │
+                    │  │ ACAN weights + retrain loop          │  │
+                    │  │ All 12 tool + 10 hook handlers       │  │
+                    │  │ Auto-drain scheduler                 │  │
+                    │  └──────────────────────────────────────┘  │
+                    │                       ▲                    │
+                    │           Unix socket │ JSON-RPC 2.0       │
+                    │     ~/.kongcode-daemon.sock                │
+                    └────────────────────┬─┴──────────────────────┘
+                                         │
+              ┌──────────────────────────┼──────────────────────────┐
+              │                          │                          │
+   ┌──────────┴──────────┐    ┌──────────┴──────────┐    ┌──────────┴──────────┐
+   │  kongcode-mcp #1    │    │  kongcode-mcp #2    │    │  headless drainer   │
+   │  (Claude Code A)    │    │  (Claude Code B)    │    │  (auto-drain spawn) │
+   └─────────────────────┘    └─────────────────────┘    └─────────────────────┘
 ```
+
+- **kongcode-daemon**: long-lived background process owning the SurrealDB connection, BGE-M3 embedding model (~150MB RAM), ACAN weights, all tool/hook handlers, and the auto-drain scheduler. Survives plugin updates, MCP restarts, and Claude Code crashes. Auto-recycles cleanly on version mismatch via the supersede protocol.
+- **kongcode-mcp**: thin per-Claude-Code-session client (~50MB RAM). Forwards MCP RPC to the daemon over local IPC. Plugin updates only restart this; the daemon keeps running.
+
+**Multiple Claude Code sessions share one daemon** — one BGE-M3 in RAM instead of N copies, one SurrealDB connection pool. The daemon tracks per-client identity (`{pid, version, sessionId}` registered at handshake) and serves all attached clients concurrently.
+
+### Lifecycle highlights
+
+- **Spawn**: first mcp-client without a live daemon socket forks one (detached + unref'd, PID-file-locked spawn).
+- **Idle reap**: when no clients are attached for `KONGCODE_DAEMON_IDLE_TIMEOUT_MS` (default 6s), daemon gracefully exits to free RAM. Next client spawns a fresh one.
+- **Supersede on update**: a newer mcp-client calls `meta.requestSupersede` — daemon flags itself for exit when its last attached client disconnects. Older sibling sessions keep working until they naturally close. The next spawn uses the new code.
+- **Auto-drain**: when the `pending_work` queue exceeds `KONGCODE_AUTO_DRAIN_THRESHOLD` (default 5), daemon shells out to `claude --agent kongcode:memory-extractor -p ...` headless. The extractor processes the queue and exits. See [Auto-drain & costs](#auto-drain--costs) below.
+
+## Auto-drain & costs
+
+KongCode's memory extraction (causal chains, concepts, skills, etc.) is cognitive work that needs an LLM. To avoid managing API keys or duplicating the cognitive layer, the daemon **shells out to your already-authenticated `claude` CLI** to drain the queue. Specifically:
+
+```bash
+claude --agent kongcode:memory-extractor --print --permission-mode bypassPermissions "..."
+```
+
+This invocation runs as a regular Claude Code subagent under your existing authentication, **consuming tokens against your normal Claude Code quota**. Each spawn drains roughly 5-15 queued items before exiting.
+
+**Cadence**:
+- Startup check immediately after the daemon initializes
+- Every 5 minutes (`KONGCODE_AUTO_DRAIN_INTERVAL_MS`) while the daemon is alive
+- Once after each `SessionEnd` hook, debounced via PID-file lock
+
+**Cost gating**:
+- `KONGCODE_AUTO_DRAIN_THRESHOLD` (default 5): below this queue size, scheduler is a no-op
+- PID-file lock at `~/.kongcode/cache/auto-drain.pid` prevents overlapping spawns
+- `KONGCODE_AUTO_DRAIN=0` disables the entire scheduler — falls back to manual subagent spawning at session start (the assistant sees an alert and chooses whether to spawn)
+
+If you'd rather kongcode never auto-spawn anything: `export KONGCODE_AUTO_DRAIN=0` in your shell rc.
 
 ## Commands
 
@@ -146,34 +180,127 @@ Claude Code Session
 
 ## Configuration
 
-Environment variables (all optional, sensible defaults):
+All env vars are optional with sensible defaults.
+
+### SurrealDB connection
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SURREAL_URL` | `ws://localhost:8042/rpc` | SurrealDB WebSocket URL |
+| `SURREAL_URL` | `ws://localhost:8042/rpc` | SurrealDB WebSocket URL. Auto-detect probes 8000/8042 first. |
 | `SURREAL_USER` | `root` | SurrealDB username |
 | `SURREAL_PASS` | `root` | SurrealDB password |
 | `SURREAL_NS` | `kong` | SurrealDB namespace |
 | `SURREAL_DB` | `memory` | SurrealDB database |
-| `KONGCODE_LOG_LEVEL` | `warn` | Log level: error, warn, info, debug |
+| `SURREAL_BIN_PATH` | (auto) | Path to surreal binary; bypasses bootstrap download |
+
+### Cache & data paths
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KONGCODE_CACHE_DIR` | `~/.kongcode/cache` | Where binaries, models, and lock files live |
+| `KONGCODE_DATA_DIR` | `~/.kongcode/data` | SurrealDB data directory |
+| `EMBED_MODEL_PATH` | (auto) | Override path to the BGE-M3 GGUF file |
+| `KONGCODE_SURREAL_PORT` | `18765` | Managed SurrealDB child's port (when bootstrap spawns one) |
+
+### Bootstrap & daemon lifecycle
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KONGCODE_SKIP_BOOTSTRAP` | `0` | Set `1` to skip first-run provisioning entirely |
+| `KONGCODE_DAEMON_IDLE_TIMEOUT_MS` | `6000` | Daemon exits this long after the last client disconnects. Set `0` to disable idle reap. |
+| `KONGCODE_DAEMON_TRANSPORT` | `unix` | Set `tcp` to force loopback TCP (Windows/paranoid setups) |
+| `KONGCODE_NODE_LLAMA_CPP_PATH` | (auto) | Override path to node-llama-cpp install |
+| `KONGCODE_LEGACY_MONOLITH` | `0` | Set `1` to fall back to pre-0.7.0 single-process mode (emergency rollback) |
+
+### Auto-drain
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KONGCODE_AUTO_DRAIN` | `1` | Set `0` to disable the auto-drain scheduler entirely |
+| `KONGCODE_AUTO_DRAIN_THRESHOLD` | `5` | Min `pending_work` queue size before scheduler spawns an extractor |
+| `KONGCODE_AUTO_DRAIN_INTERVAL_MS` | `300000` | Periodic check cadence (5 min) |
+| `KONGCODE_CLAUDE_BIN` | (auto) | Explicit path to the `claude` binary; otherwise scheduler uses `which claude` |
+
+### Logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `KONGCODE_LOG_LEVEL` | `warn` | One of `error`, `warn`, `info`, `debug` |
 
 ## How It Works
 
 ### Every Turn
-1. **UserPromptSubmit** — classifies intent, retrieves relevant graph context, injects via `additionalContext`
+1. **UserPromptSubmit** — classifies intent, retrieves relevant graph context, injects via `additionalContext`. Increments `session.turn_count` and ensures a session DB row exists.
 2. **PreToolUse** — tracks tool calls against adaptive budget
 3. **PostToolUse** — records outcomes, tracks artifacts
-4. **Stop** — ingests turn, accumulates tokens
+4. **Stop** — ingests the assistant's response, accumulates token deltas
 
 ### Between Turns
-- Claude subagents extract: concepts, causal chains, monologues, corrections, preferences, artifacts, decisions, skills
+- Background subagent extracts: concepts, causal chains, monologues, corrections, preferences, artifacts, decisions, skills (auto-drain scheduler triggers when the queue exceeds the threshold)
 
 ### Between Sessions
-- Handoff note captures session state for next wakeup
-- Deferred cleanup processes orphaned sessions
+- SessionEnd queues 5-6 cognitive work items (extraction, handoff, reflection, skill, causal graduation, soul evolve)
+- Auto-drain spawns a headless extractor to process them before the next session starts
+- Deferred cleanup processes orphaned sessions (sessions that ended without a clean shutdown)
 
 ### Soul Graduation
 After 15+ sessions with sufficient quality (reflections, causal chains, concepts), the agent earns a Soul — an emergent identity document with working style, self-observations, and evidence-grounded values.
+
+## Troubleshooting
+
+### "Failed to reconnect to plugin:kongcode"
+
+The mcp-client failed to start. Common causes:
+
+- **Node not on PATH** (Windows post-winget install): restart your terminal AND Claude Code so the new PATH takes effect
+- **Daemon binary corrupted**: `rm -rf ~/.kongcode/cache && claude` will re-bootstrap
+- **Port conflict**: another process is on 18765 (the managed SurrealDB port). Set `KONGCODE_SURREAL_PORT` to a free port.
+
+Check the daemon log for the actual error: `tail -100 ~/.kongcode/cache/daemon.log`
+
+### Daemon won't recycle to new version
+
+If you've updated kongcode but the running daemon stays on the old code:
+
+- Other Claude Code sessions or background extractors may still be attached. Daemon waits for ALL clients to disconnect before honoring the supersede flag (architectural invariant: never disrupt a sibling session for an upgrade).
+- Force-recycle: `kill -TERM $(cat ~/.kongcode/cache/daemon.pid)`. The next client will spawn a fresh daemon. Cost: ~3-5s of cold-start on the next session.
+
+### Auto-drain isn't running
+
+Check:
+
+```bash
+# Is auto-drain disabled?
+echo $KONGCODE_AUTO_DRAIN  # should be empty or "1"
+# Is the scheduler holding a lock?
+cat ~/.kongcode/cache/auto-drain.pid 2>/dev/null
+# Is claude binary findable?
+which claude
+```
+
+If the binary isn't on PATH, set `KONGCODE_CLAUDE_BIN=/path/to/claude` and restart Claude Code.
+
+### Pending_work queue keeps growing
+
+Each session end queues 5-6 items. If queue is growing faster than draining:
+
+- Check daemon log: `grep auto-drain ~/.kongcode/cache/daemon.log`
+- Threshold gate may be skipping spawns: lower `KONGCODE_AUTO_DRAIN_THRESHOLD=1` to trigger more aggressively
+- Manually trigger a drain via the `kongcode-health` skill or by spawning a `kongcode:memory-extractor` subagent
+
+### Files & paths to know
+
+| Path | Purpose |
+|------|---------|
+| `~/.kongcode/cache/daemon.pid` | PID of the running daemon |
+| `~/.kongcode/cache/daemon.log` | Daemon stdout/stderr (lifecycle, errors) |
+| `~/.kongcode/cache/daemon.spawn.lock` | Held during daemon spawn; cleaned on exit |
+| `~/.kongcode/cache/auto-drain.pid` | Held while a headless extractor is running |
+| `~/.kongcode/cache/surreal.pid` | Managed SurrealDB child's PID (if bootstrapped) |
+| `~/.kongcode-daemon.sock` | Daemon's IPC listening socket |
+| `~/.kongcode-<pid>.sock` | Daemon's per-PID HTTP socket for hook-proxy.cjs |
+| `~/.kongcode/data/` | SurrealDB data files |
+| `~/.kongcode/cache/models/` | Downloaded GGUF embedding model |
 
 ## Skill Suite
 
@@ -198,25 +325,16 @@ KongCode ships a suite of production-grade skills that encode reusable patterns 
 
 Canonical edge vocabulary: `src/engine/edge-vocabulary.ts`. Full workflow docs: [`docs/WORKFLOWS.md`](docs/WORKFLOWS.md).
 
-## Upgrade tracking
-
-Non-trivial changes to kongcode use a JSON-driven executor pattern at `.upgrade/`:
-
-- `.upgrade/plan.json` — source of truth for phases, tasks, bugs, metrics, and decisions
-- `.upgrade/exec.sh` — idempotent task runner with `status`, `next`, `run`, `phase`, `mark`, `metric`, and `util` subcommands
-- `.upgrade/actions/phase*.sh` — per-phase action implementations
-- `.upgrade/tools/check-utilization.mjs` — windowed `retrieval_outcome` analysis (invoked via `./exec.sh util`)
-
-The `./exec.sh util` command reports per-window retrieval utilization (lifetime / last 7d / last 24h / last 1h) directly from SurrealDB — use this to track grounding-metric movement over time instead of the lifetime average, which is dragged down by historical data.
-
 ## Development
 
 ```bash
 npm run build      # Compile TypeScript
 npm run dev        # Watch mode
 npm run typecheck  # Type check only
-npm test           # Run tests
+npm test           # Run tests (498 passing)
 ```
+
+The `dist/` directory ships in releases (un-gitignored); contributors developing against the dev tree should `npm run build` to regenerate before testing.
 
 ---
 
