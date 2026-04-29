@@ -54,7 +54,7 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.2";
+const DAEMON_VERSION = "0.7.3";
 let bootstrapPhase = "starting";
 let bootstrapError = null;
 const startedAt = Date.now();

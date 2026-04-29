@@ -46,8 +46,15 @@ function tryAcquireSpawnLock(lockPath: string): number | null {
   try {
     return openSync(lockPath, "wx", 0o644);
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "EEXIST") return null;
-    throw e;
+    if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
+    try {
+      const holderPid = Number(readFileSync(lockPath, "utf-8").trim());
+      if (!isPidAlive(holderPid)) {
+        require("node:fs").unlinkSync(lockPath);
+        try { return openSync(lockPath, "wx", 0o644); } catch {}
+      }
+    } catch {}
+    return null;
   }
 }
 
