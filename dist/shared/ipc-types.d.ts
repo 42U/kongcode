@@ -86,6 +86,23 @@ export type IpcMethod = typeof IPC_METHODS[number];
  *  the dispatcher boundary. Returns null for unknown methods (daemon then
  *  responds with JSON-RPC's standard "Method not found" error -32601). */
 export declare function isKnownMethod(name: string): name is IpcMethod;
+export interface ClientInfo {
+    /** OS pid of the mcp-client process (process.pid in Node). */
+    pid: number;
+    /** mcp-client semver (e.g. "0.7.9"). Lets daemon log who's attached. */
+    version: string;
+    /** Claude Code session id the client is serving (or its self-assigned id). */
+    sessionId: string;
+    /** epoch ms when this socket connected. Set daemon-side at registration. */
+    attachedAt?: number;
+}
+export interface MetaHandshakeRequest {
+    /** Optional — pre-0.7.9 clients don't send this and stay anonymous. Daemon
+     *  records this against the socket so meta.health can return a per-client
+     *  registry, not just an opaque count. Used by orphan detection: instead
+     *  of "is activeClients === 1", we can ask "are there any OTHER clients". */
+    clientInfo?: ClientInfo;
+}
 export interface MetaHandshakeResponse {
     daemonVersion: string;
     protocolVersion: number;
@@ -104,6 +121,13 @@ export interface MetaHealthResponse {
         activeSessions: number;
         rpcsServedTotal: number;
         rpcsInFlight: number;
+        /** Per-client identity (0.7.9+ daemons). One entry per attached socket
+         *  that completed handshake with clientInfo. Anonymous sockets (pre-0.7.9
+         *  clients that didn't send identity) are still counted in activeClients
+         *  but absent from this list. Used by orphan-recycle to distinguish
+         *  "I'm the only attached client" from "I'm the only attached client
+         *  with identity, but there could be anonymous siblings". */
+        clients?: ClientInfo[];
     };
 }
 export interface MetaRequestSupersedeRequest {

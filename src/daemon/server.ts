@@ -23,12 +23,24 @@ import {
   IpcErrorCode,
   isKnownMethod,
   type IpcMethod,
+  type ClientInfo,
 } from "../shared/ipc-types.js";
+
+/** Per-connection context passed to handlers — identity for the socket that
+ *  made the call, plus a hook to register/update client identity from inside
+ *  meta.handshake. Handlers that don't care about identity just ignore it. */
+export interface HandlerContext {
+  /** Register or update the calling socket's client identity. Called by
+   *  meta.handshake when the client sends clientInfo in its params. */
+  registerIdentity(info: ClientInfo): void;
+  /** Identity already registered for this socket, or null. Read-only. */
+  getIdentity(): ClientInfo | null;
+}
 
 /** Handler signature — every IPC method registers one of these. The dispatcher
  *  calls it with the parsed `params` object (already validated as JSON-RPC
- *  shape) and returns whatever the handler resolves to. */
-export type IpcHandler = (params: unknown) => Promise<unknown>;
+ *  shape) and a per-call context. Returns whatever the handler resolves to. */
+export type IpcHandler = (params: unknown, ctx: HandlerContext) => Promise<unknown>;
 
 /** Standard JSON-RPC 2.0 request shape. */
 interface JsonRpcRequest {
@@ -63,7 +75,12 @@ export class DaemonServer {
   private udsServer: Server | null = null;
   private tcpServer: Server | null = null;
   private handlers = new Map<IpcMethod, IpcHandler>();
-  private clients = new Set<Socket>();
+  /** Per-attached-socket identity registry. Value is the ClientInfo the
+   *  client sent in its meta.handshake, or null if the client hasn't
+   *  identified itself yet (transient state during handshake) or is a
+   *  pre-0.7.9 client that doesn't pass clientInfo. Set membership doubles
+   *  as the active-clients count. */
+  private clients = new Map<Socket, ClientInfo | null>();
   private rpcsServedTotal = 0;
   private rpcsInFlight = 0;
   private startedAt = Date.now();
@@ -118,8 +135,8 @@ export class DaemonServer {
    *  Caller (daemon main) is responsible for closing SurrealStore and
    *  saving any pending state before this is called. */
   async close(): Promise<void> {
-    for (const c of this.clients) {
-      try { c.end(); } catch {}
+    for (const sock of this.clients.keys()) {
+      try { sock.end(); } catch {}
     }
     this.clients.clear();
     if (this.udsServer) {
@@ -135,6 +152,10 @@ export class DaemonServer {
 
   /** Stats surfaced via meta.health for ops visibility. */
   getStats() {
+    const clients: ClientInfo[] = [];
+    for (const info of this.clients.values()) {
+      if (info) clients.push(info);
+    }
     return {
       activeClients: this.clients.size,
       activeSessions: 0, // populated once handlers track session registry
@@ -143,6 +164,7 @@ export class DaemonServer {
       startedAt: this.startedAt,
       protocolVersion: PROTOCOL_VERSION,
       pendingSupersede: this.pendingSupersede,
+      clients,
     };
   }
 
@@ -184,7 +206,11 @@ export class DaemonServer {
   // ── Per-connection handling ─────────────────────────────────────
 
   private onConnection(sock: Socket): void {
-    this.clients.add(sock);
+    // Register socket immediately with null identity. Identity gets populated
+    // when (and if) the client calls meta.handshake with clientInfo. This
+    // lets us count anonymous clients toward activeClients while still
+    // distinguishing them in the per-client registry.
+    this.clients.set(sock, null);
     let buffer = "";
 
     sock.on("data", (chunk) => {
@@ -206,7 +232,11 @@ export class DaemonServer {
     });
 
     sock.on("close", () => {
+      const info = this.clients.get(sock);
       this.clients.delete(sock);
+      if (info) {
+        this.opts.log.info(`[daemon] client disconnected: pid=${info.pid} v${info.version} session=${info.sessionId}`);
+      }
       this.checkSupersedeReady();
     });
 
@@ -267,8 +297,16 @@ export class DaemonServer {
       return;
     }
     this.rpcsInFlight++;
+    const ctx: HandlerContext = {
+      registerIdentity: (info) => {
+        const stamped: ClientInfo = { ...info, attachedAt: info.attachedAt ?? Date.now() };
+        this.clients.set(sock, stamped);
+        this.opts.log.info(`[daemon] client connected: pid=${stamped.pid} v${stamped.version} session=${stamped.sessionId}`);
+      },
+      getIdentity: () => this.clients.get(sock) ?? null,
+    };
     try {
-      const result = await handler(req.params);
+      const result = await handler(req.params, ctx);
       this.rpcsServedTotal++;
       this.sendResponse(sock, { jsonrpc: "2.0", id: req.id, result });
     } catch (e) {

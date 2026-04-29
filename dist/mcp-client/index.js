@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.8";
+const CLIENT_VERSION = "0.7.9";
 let ipc = null;
 /** In-flight connect promise — concurrent callers share it so we never
  *  fire two daemon-spawn attempts in parallel (the lock-contention bug
@@ -58,7 +58,11 @@ async function connectAndHandshake() {
     log.info(`[mcp-client] daemon ${spawned ? "spawned" : "found"} at ${socketPath}`);
     const client = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
     await client.connect();
-    const handshake = await client.handshake();
+    const handshake = await client.handshake({
+        pid: process.pid,
+        version: CLIENT_VERSION,
+        sessionId: SESSION_ID,
+    });
     // Version-mismatch policy (the user's framing: "if a user has multiple
     // sessions open some might be versions behind doesn't mean we should
     // kill/respawn it UNLESS ITS ORPHANED"):
@@ -70,7 +74,7 @@ async function connectAndHandshake() {
     //                     code refresh happens at the natural disconnect
     //                     boundary on next spawn.
     //
-    //                     Bootstrap gap: pre-0.7.8 daemons don't know
+    //                     Bootstrap gap: pre-0.7.9 daemons don't know
     //                     meta.requestSupersede. When that throws, we fall
     //                     back to checking meta.health.activeClients — if
     //                     we're the only attached client (orphan), call
@@ -97,7 +101,7 @@ async function connectAndHandshake() {
                 }
             }
             catch (e) {
-                // Pre-0.7.8 daemons don't know meta.requestSupersede. Fall back
+                // Pre-0.7.9 daemons don't know meta.requestSupersede. Fall back
                 // to the "orphan check + direct recycle" path — supported by
                 // every daemon since 0.7.0 (meta.health and meta.shutdown have
                 // been there from the start).

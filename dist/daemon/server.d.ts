@@ -15,11 +15,21 @@
  * dispatched concurrently via Promise. Daemon-internal state (SurrealStore,
  * EmbeddingService) handles its own concurrency.
  */
-import { type IpcMethod } from "../shared/ipc-types.js";
+import { type IpcMethod, type ClientInfo } from "../shared/ipc-types.js";
+/** Per-connection context passed to handlers — identity for the socket that
+ *  made the call, plus a hook to register/update client identity from inside
+ *  meta.handshake. Handlers that don't care about identity just ignore it. */
+export interface HandlerContext {
+    /** Register or update the calling socket's client identity. Called by
+     *  meta.handshake when the client sends clientInfo in its params. */
+    registerIdentity(info: ClientInfo): void;
+    /** Identity already registered for this socket, or null. Read-only. */
+    getIdentity(): ClientInfo | null;
+}
 /** Handler signature — every IPC method registers one of these. The dispatcher
  *  calls it with the parsed `params` object (already validated as JSON-RPC
- *  shape) and returns whatever the handler resolves to. */
-export type IpcHandler = (params: unknown) => Promise<unknown>;
+ *  shape) and a per-call context. Returns whatever the handler resolves to. */
+export type IpcHandler = (params: unknown, ctx: HandlerContext) => Promise<unknown>;
 export interface DaemonServerOpts {
     /** Unix socket path or null for TCP-only mode. */
     socketPath: string | null;
@@ -44,6 +54,11 @@ export declare class DaemonServer {
     private udsServer;
     private tcpServer;
     private handlers;
+    /** Per-attached-socket identity registry. Value is the ClientInfo the
+     *  client sent in its meta.handshake, or null if the client hasn't
+     *  identified itself yet (transient state during handshake) or is a
+     *  pre-0.7.9 client that doesn't pass clientInfo. Set membership doubles
+     *  as the active-clients count. */
     private clients;
     private rpcsServedTotal;
     private rpcsInFlight;
@@ -72,6 +87,7 @@ export declare class DaemonServer {
         startedAt: number;
         protocolVersion: number;
         pendingSupersede: boolean;
+        clients: ClientInfo[];
     };
     /** Number of currently-attached client sockets. Used by meta.requestSupersede
      *  to report whether the daemon is "orphaned" (zero attached). */

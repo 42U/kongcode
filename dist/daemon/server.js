@@ -23,7 +23,12 @@ export class DaemonServer {
     udsServer = null;
     tcpServer = null;
     handlers = new Map();
-    clients = new Set();
+    /** Per-attached-socket identity registry. Value is the ClientInfo the
+     *  client sent in its meta.handshake, or null if the client hasn't
+     *  identified itself yet (transient state during handshake) or is a
+     *  pre-0.7.9 client that doesn't pass clientInfo. Set membership doubles
+     *  as the active-clients count. */
+    clients = new Map();
     rpcsServedTotal = 0;
     rpcsInFlight = 0;
     startedAt = Date.now();
@@ -79,9 +84,9 @@ export class DaemonServer {
      *  Caller (daemon main) is responsible for closing SurrealStore and
      *  saving any pending state before this is called. */
     async close() {
-        for (const c of this.clients) {
+        for (const sock of this.clients.keys()) {
             try {
-                c.end();
+                sock.end();
             }
             catch { }
         }
@@ -101,6 +106,11 @@ export class DaemonServer {
     }
     /** Stats surfaced via meta.health for ops visibility. */
     getStats() {
+        const clients = [];
+        for (const info of this.clients.values()) {
+            if (info)
+                clients.push(info);
+        }
         return {
             activeClients: this.clients.size,
             activeSessions: 0, // populated once handlers track session registry
@@ -109,6 +119,7 @@ export class DaemonServer {
             startedAt: this.startedAt,
             protocolVersion: PROTOCOL_VERSION,
             pendingSupersede: this.pendingSupersede,
+            clients,
         };
     }
     /** Number of currently-attached client sockets. Used by meta.requestSupersede
@@ -145,7 +156,11 @@ export class DaemonServer {
     }
     // ── Per-connection handling ─────────────────────────────────────
     onConnection(sock) {
-        this.clients.add(sock);
+        // Register socket immediately with null identity. Identity gets populated
+        // when (and if) the client calls meta.handshake with clientInfo. This
+        // lets us count anonymous clients toward activeClients while still
+        // distinguishing them in the per-client registry.
+        this.clients.set(sock, null);
         let buffer = "";
         sock.on("data", (chunk) => {
             buffer += chunk.toString("utf8");
@@ -166,7 +181,11 @@ export class DaemonServer {
             }
         });
         sock.on("close", () => {
+            const info = this.clients.get(sock);
             this.clients.delete(sock);
+            if (info) {
+                this.opts.log.info(`[daemon] client disconnected: pid=${info.pid} v${info.version} session=${info.sessionId}`);
+            }
             this.checkSupersedeReady();
         });
         sock.on("error", (err) => {
@@ -226,8 +245,16 @@ export class DaemonServer {
             return;
         }
         this.rpcsInFlight++;
+        const ctx = {
+            registerIdentity: (info) => {
+                const stamped = { ...info, attachedAt: info.attachedAt ?? Date.now() };
+                this.clients.set(sock, stamped);
+                this.opts.log.info(`[daemon] client connected: pid=${stamped.pid} v${stamped.version} session=${stamped.sessionId}`);
+            },
+            getIdentity: () => this.clients.get(sock) ?? null,
+        };
         try {
-            const result = await handler(req.params);
+            const result = await handler(req.params, ctx);
             this.rpcsServedTotal++;
             this.sendResponse(sock, { jsonrpc: "2.0", id: req.id, result });
         }

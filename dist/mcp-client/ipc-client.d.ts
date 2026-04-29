@@ -53,8 +53,15 @@ export declare class IpcClient {
     private doConnect;
     /** Verify protocol compatibility. Throws if the daemon's protocol version
      *  doesn't match ours — the calling layer should treat this as fatal,
-     *  trigger daemon-restart, and retry. */
-    handshake(): Promise<MetaHandshakeResponse>;
+     *  trigger daemon-restart, and retry.
+     *
+     *  Optionally register this client's identity with the daemon (0.7.9+).
+     *  Older daemons silently ignore the extra params field. */
+    handshake(clientInfo?: {
+        pid: number;
+        version: string;
+        sessionId: string;
+    }): Promise<MetaHandshakeResponse>;
     /** Make an RPC call. Returns the daemon's `result` payload, or throws
      *  IpcError on JSON-RPC error / timeout / disconnect. */
     call<T = unknown>(method: IpcMethod | string, params: unknown, timeoutMs?: number): Promise<T>;

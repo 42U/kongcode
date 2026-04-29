@@ -79,9 +79,13 @@ export class IpcClient {
     }
     /** Verify protocol compatibility. Throws if the daemon's protocol version
      *  doesn't match ours — the calling layer should treat this as fatal,
-     *  trigger daemon-restart, and retry. */
-    async handshake() {
-        const resp = await this.call("meta.handshake", {});
+     *  trigger daemon-restart, and retry.
+     *
+     *  Optionally register this client's identity with the daemon (0.7.9+).
+     *  Older daemons silently ignore the extra params field. */
+    async handshake(clientInfo) {
+        const params = clientInfo ? { clientInfo } : {};
+        const resp = await this.call("meta.handshake", params);
         if (resp.protocolVersion !== PROTOCOL_VERSION) {
             throw new IpcError(-32004 /* IpcErrorCode.PROTOCOL_VERSION_MISMATCH */, `daemon protocol v${resp.protocolVersion} != client v${PROTOCOL_VERSION} — restart required`);
         }

@@ -69,9 +69,9 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.8";
+const DAEMON_VERSION = "0.7.9";
 
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.8"). Returns negative/0/positive
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.9"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a: string, b: string): number {
@@ -269,7 +269,14 @@ async function main(): Promise<void> {
 
   // ── Meta handlers (always available, no bootstrap dependency) ──
 
-  server.register("meta.handshake", async () => {
+  server.register("meta.handshake", async (params, ctx) => {
+    // Register caller identity if provided. Pre-0.7.9 clients send empty
+    // params and stay anonymous (still counted in activeClients but absent
+    // from the per-client registry). 0.7.9+ clients send {clientInfo}.
+    const p = (params as { clientInfo?: { pid: number; version: string; sessionId: string } }) ?? {};
+    if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
+      ctx.registerIdentity(p.clientInfo);
+    }
     const resp: MetaHandshakeResponse = {
       daemonVersion: DAEMON_VERSION,
       protocolVersion: PROTOCOL_VERSION,
