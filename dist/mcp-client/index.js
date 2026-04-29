@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.0";
+const CLIENT_VERSION = "0.7.1";
 let ipc = null;
 /** Track our session ID so every IPC call carries it — daemon's session map
  *  is keyed on this. KONGCODE_SESSION_ID env var lets users pin a stable id;

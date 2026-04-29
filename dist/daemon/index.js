@@ -52,8 +52,9 @@ import { handleStop } from "../hook-handlers/stop.js";
 import { handlePreCompact } from "../hook-handlers/pre-compact.js";
 import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
+import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.0";
+const DAEMON_VERSION = "0.7.1";
 let bootstrapPhase = "starting";
 let bootstrapError = null;
 const startedAt = Date.now();
@@ -131,6 +132,32 @@ async function initializeStack() {
     }
     catch (err) {
         log.error("[daemon] Embedding model failed — vector search disabled:", err);
+    }
+    // Register hook handlers + start the legacy HTTP API on a per-PID Unix
+    // socket. hook-proxy.cjs (the script Claude Code's hooks.json invokes)
+    // expects to find ~/.kongcode-<pid>.sock and POST hook events to it.
+    // Without this, SessionStart/UserPromptSubmit/Stop all silently no-op
+    // because the new IPC socket (~/.kongcode-daemon.sock) isn't what
+    // hook-proxy.cjs looks for. Same handlers as the IPC routes — we just
+    // expose them over both transports for compat.
+    registerHookHandler("session-start", handleSessionStart);
+    registerHookHandler("session-end", handleSessionEnd);
+    registerHookHandler("user-prompt-submit", handleUserPromptSubmit);
+    registerHookHandler("pre-tool-use", handlePreToolUse);
+    registerHookHandler("post-tool-use", handlePostToolUse);
+    registerHookHandler("stop", handleStop);
+    registerHookHandler("pre-compact", handlePreCompact);
+    registerHookHandler("post-compact", handlePostCompact);
+    registerHookHandler("task-created", handleTaskCreated);
+    registerHookHandler("subagent-stop", handleSubagentStop);
+    const homeDir = process.env.HOME || process.env.USERPROFILE || "/tmp";
+    const hookSocketPath = `${homeDir}/.kongcode-${process.pid}.sock`;
+    try {
+        await startHttpApi(globalState, hookSocketPath, homeDir);
+        log.info(`[daemon] hook HTTP API listening on ${hookSocketPath}`);
+    }
+    catch (err) {
+        log.error("[daemon] failed to start hook HTTP API:", err);
     }
     setBootstrapPhase("ready");
     log.info("[daemon] kongcode stack ready");
@@ -285,6 +312,12 @@ async function main() {
     const shutdown = async (signal) => {
         log.info(`[daemon] ${signal} — graceful shutdown`);
         await server.close();
+        try {
+            await stopHttpApi();
+        }
+        catch (e) {
+            log.warn(`[daemon] stopHttpApi: ${e.message}`);
+        }
         if (globalState) {
             try {
                 await globalState.shutdown();
