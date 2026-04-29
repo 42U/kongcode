@@ -69,9 +69,9 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.12";
+const DAEMON_VERSION = "0.7.13";
 
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.12"). Returns negative/0/positive
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.13"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a: string, b: string): number {
@@ -246,22 +246,22 @@ async function main(): Promise<void> {
   // Disable Unix socket if explicitly told to (Windows or paranoid setups).
   const useUds = process.env.KONGCODE_DAEMON_TRANSPORT !== "tcp" && process.platform !== "win32";
 
-  // Idle reaper config: 60s default, overridable via env var. The only real
-  // value of staying alive past the last disconnect is absorbing an
-  // accidental close-and-reopen — ~3-5s of bootstrap saved on the warm
-  // path. Beyond a minute or two the user is either done for the session
-  // block or away for hours; holding ~150MB of BGE-M3 in RAM benefits
-  // nobody. Set 0 to reap immediately. Set higher (e.g. 30 min) for
-  // shared-server / cron-driven setups where intermittent clients don't
-  // want a cold-start penalty between disconnects. The timer arms on
-  // listen() and on every disconnect-to-zero; cancels on every connect.
+  // Idle reaper config: 6s default (per user direction — anything longer
+  // mostly just holds RAM for nobody). The only real value of staying
+  // alive past the last disconnect is absorbing a fast close-and-reopen,
+  // and Claude Code restarts land within ~3-5s on warm cache. 6s gives
+  // a small grace window past that and reaps cleanly otherwise. Set 0 to
+  // reap immediately. Set higher (e.g. 30 min) for shared-server /
+  // cron-driven setups where intermittent clients don't want a cold-start
+  // penalty between disconnects. The timer arms on listen() and on every
+  // disconnect-to-zero; cancels on every connect.
   const idleTimeoutMs = (() => {
     const env = process.env.KONGCODE_DAEMON_IDLE_TIMEOUT_MS;
     if (env !== undefined) {
       const n = Number(env);
-      return Number.isFinite(n) && n >= 0 ? n : 60_000;
+      return Number.isFinite(n) && n >= 0 ? n : 6_000;
     }
-    return 60_000;
+    return 6_000;
   })();
 
   const reaperExit = (reason: string) => () => {
@@ -298,9 +298,9 @@ async function main(): Promise<void> {
   // ── Meta handlers (always available, no bootstrap dependency) ──
 
   server.register("meta.handshake", async (params, ctx) => {
-    // Register caller identity if provided. Pre-0.7.12 clients send empty
+    // Register caller identity if provided. Pre-0.7.13 clients send empty
     // params and stay anonymous (still counted in activeClients but absent
-    // from the per-client registry). 0.7.12+ clients send {clientInfo}.
+    // from the per-client registry). 0.7.13+ clients send {clientInfo}.
     const p = (params as { clientInfo?: { pid: number; version: string; sessionId: string } }) ?? {};
     if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
       ctx.registerIdentity(p.clientInfo);
