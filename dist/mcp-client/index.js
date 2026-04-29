@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.5";
+const CLIENT_VERSION = "0.7.6";
 let ipc = null;
 /** In-flight connect promise — concurrent callers share it so we never
  *  fire two daemon-spawn attempts in parallel (the lock-contention bug
@@ -39,6 +39,52 @@ let ipcInFlight = null;
  *  is keyed on this. KONGCODE_SESSION_ID env var lets users pin a stable id;
  *  default uses pid for per-process uniqueness. */
 const SESSION_ID = process.env.KONGCODE_SESSION_ID ?? `mcp-client-${process.pid}`;
+async function connectAndHandshake() {
+    const { socketPath, spawned } = await ensureDaemon({
+        log: { info: log.info, warn: log.warn, error: log.error },
+    });
+    log.info(`[mcp-client] daemon ${spawned ? "spawned" : "found"} at ${socketPath}`);
+    const client = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
+    await client.connect();
+    const handshake = await client.handshake();
+    // Version mismatch → daemon is running stale code (e.g. plugin update
+    // restarted mcp-client but daemon kept running on the previous binary).
+    // Daemon-arch tradeoff: clients update freely, daemon doesn't, so we have
+    // to recycle it explicitly. Send meta.shutdown, wait for the daemon to
+    // exit, then re-ensureDaemon to spawn a fresh one with new code.
+    if (handshake.daemonVersion && handshake.daemonVersion !== CLIENT_VERSION) {
+        log.warn(`[mcp-client] version mismatch: client=${CLIENT_VERSION} daemon=${handshake.daemonVersion} — recycling daemon to load new code`);
+        try {
+            await client.call("meta.shutdown", {});
+        }
+        catch { /* daemon exits before responding sometimes */ }
+        try {
+            client.close();
+        }
+        catch { }
+        // Wait for socket cleanup so ensureDaemon's fast-path doesn't latch
+        // back onto the dying daemon. Bounded poll, 100ms steps, 10s ceiling.
+        const { existsSync } = await import("node:fs");
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+            if (!existsSync(socketPath))
+                break;
+            await new Promise(r => setTimeout(r, 100));
+        }
+        const fresh = await ensureDaemon({
+            log: { info: log.info, warn: log.warn, error: log.error },
+        });
+        log.info(`[mcp-client] post-recycle daemon ${fresh.spawned ? "spawned" : "found"} at ${fresh.socketPath}`);
+        const newClient = new IpcClient({ socketPath: fresh.socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
+        await newClient.connect();
+        const h2 = await newClient.handshake();
+        if (h2.daemonVersion !== CLIENT_VERSION) {
+            log.warn(`[mcp-client] post-recycle version still mismatched (daemon=${h2.daemonVersion}). Continuing anyway.`);
+        }
+        return newClient;
+    }
+    return client;
+}
 async function getOrConnectIpc() {
     if (ipc)
         return ipc;
@@ -46,13 +92,7 @@ async function getOrConnectIpc() {
         return ipcInFlight;
     ipcInFlight = (async () => {
         log.info(`[mcp-client] ensuring daemon is running...`);
-        const { socketPath, spawned } = await ensureDaemon({
-            log: { info: log.info, warn: log.warn, error: log.error },
-        });
-        log.info(`[mcp-client] daemon ${spawned ? "spawned" : "found"} at ${socketPath}`);
-        const client = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
-        await client.connect();
-        await client.handshake();
+        const client = await connectAndHandshake();
         ipc = client;
         return client;
     })().finally(() => { ipcInFlight = null; });
