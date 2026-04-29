@@ -12,7 +12,7 @@
  * when multiple Claude Code sessions race on first daemon start.
  */
 import { spawn } from "node:child_process";
-import { existsSync, openSync, closeSync, writeSync, readFileSync } from "node:fs";
+import { existsSync, openSync, closeSync, writeSync, readFileSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -33,7 +33,7 @@ function tryAcquireSpawnLock(lockPath) {
         try {
             const holderPid = Number(readFileSync(lockPath, "utf-8").trim());
             if (!isPidAlive(holderPid)) {
-                require("node:fs").unlinkSync(lockPath);
+                unlinkSync(lockPath);
                 try {
                     return openSync(lockPath, "wx", 0o644);
                 }
@@ -50,7 +50,7 @@ function releaseSpawnLock(fd, lockPath) {
     }
     catch { }
     try {
-        require("node:fs").unlinkSync(lockPath);
+        unlinkSync(lockPath);
     }
     catch { }
 }
@@ -143,7 +143,7 @@ export async function ensureDaemon(opts = {}) {
             return { socketPath, spawned: false };
         // Lock holder died without spawning — remove stale lock and try again
         try {
-            require("node:fs").unlinkSync(lockPath);
+            unlinkSync(lockPath);
         }
         catch { }
         lockFd = tryAcquireSpawnLock(lockPath);

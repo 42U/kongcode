@@ -115,6 +115,12 @@ export declare class SurrealStore {
     ensureProject(name: string): Promise<string>;
     createTask(description: string): Promise<string>;
     createSession(agentId?: string, kcSessionId?: string): Promise<string>;
+    /** Idempotent session-row resolver. If a session row already exists for the
+     *  given Claude Code session id, returns it; otherwise creates one. Used by
+     *  UserPromptSubmit to backfill resumed conversations that Claude Code's
+     *  hook engine doesn't refire SessionStart for — without this, every
+     *  resumed session is a graph orphan (turns ingested but unattributable). */
+    ensureSessionRow(kcSessionId: string, agentId?: string): Promise<string>;
     updateSessionStats(sessionId: string, inputTokens: number, outputTokens: number): Promise<void>;
     endSession(sessionId: string, summary?: string): Promise<void>;
     markSessionActive(sessionId: string): Promise<void>;

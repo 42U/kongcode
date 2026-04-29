@@ -13,7 +13,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, openSync, closeSync, writeSync, readFileSync, statSync } from "node:fs";
+import { existsSync, openSync, closeSync, writeSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -50,7 +50,7 @@ function tryAcquireSpawnLock(lockPath: string): number | null {
     try {
       const holderPid = Number(readFileSync(lockPath, "utf-8").trim());
       if (!isPidAlive(holderPid)) {
-        require("node:fs").unlinkSync(lockPath);
+        unlinkSync(lockPath);
         try { return openSync(lockPath, "wx", 0o644); } catch {}
       }
     } catch {}
@@ -60,7 +60,7 @@ function tryAcquireSpawnLock(lockPath: string): number | null {
 
 function releaseSpawnLock(fd: number, lockPath: string): void {
   try { closeSync(fd); } catch {}
-  try { require("node:fs").unlinkSync(lockPath); } catch {}
+  try { unlinkSync(lockPath); } catch {}
 }
 
 function isPidAlive(pid: number): boolean {
@@ -151,7 +151,7 @@ export async function ensureDaemon(opts: DaemonSpawnOpts = {}): Promise<{ socket
     const ok = await pollSocketReady(socketPath, deadline, log);
     if (ok) return { socketPath, spawned: false };
     // Lock holder died without spawning — remove stale lock and try again
-    try { require("node:fs").unlinkSync(lockPath); } catch {}
+    try { unlinkSync(lockPath); } catch {}
     lockFd = tryAcquireSpawnLock(lockPath);
     if (lockFd === null) throw new Error("daemon spawn lock contention — give up");
   }

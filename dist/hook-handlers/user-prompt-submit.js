@@ -48,6 +48,25 @@ export async function handleUserPromptSubmit(state, payload) {
     const session = state.getSession(sessionId) ?? state.getOrCreateSession(sessionId, sessionId);
     // Reset per-turn state
     session.resetTurn();
+    // Backfill DB rows for resumed sessions. Claude Code does not refire
+    // SessionStart on `claude --resume`, so without this every resumed
+    // conversation lacks a session row — turns ingested OK but unattributable
+    // (session.turn_count stays at 0, graduation thresholds undercount, the
+    // X-close orphan pattern persists). ensureSessionRow is idempotent so
+    // SessionStart can still own first-fire and this just no-ops on warm
+    // sessions.
+    if (state.store.isAvailable() && !session.surrealSessionId) {
+        try {
+            if (!session.agentId) {
+                session.agentId = await state.store.ensureAgent("kongcode", "claude");
+            }
+            session.surrealSessionId = await state.store.ensureSessionRow(session.sessionId, session.agentId);
+            log.info(`[user-prompt-submit] backfilled session row for ${sessionId} → ${session.surrealSessionId}`);
+        }
+        catch (e) {
+            swallow("userPromptSubmit:ensureSessionRow", e);
+        }
+    }
     // Claude Code sends the user's text in `prompt`. Earlier code read
     // `payload.user_prompt`, which never existed in the actual hook payload —
     // the handler silently early-returned on every prompt for ~20 days,

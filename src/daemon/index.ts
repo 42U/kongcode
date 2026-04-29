@@ -23,7 +23,7 @@
  * commits migrate tool/hook handlers from the legacy mcp-server.ts.
  */
 
-import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, unlinkSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import {
@@ -69,7 +69,7 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.3";
+const DAEMON_VERSION = "0.7.4";
 
 type BootstrapPhase = MetaHandshakeResponse["bootstrapPhase"];
 let bootstrapPhase: BootstrapPhase = "starting";
@@ -197,7 +197,7 @@ function writeOwnPidFile(): void {
   // mkdir before write — first run on a fresh machine may not have the
   // cache dir yet. Same path 0.6.3 already creates for surreal.pid.
   try {
-    require("node:fs").mkdirSync(dirname(path), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
   } catch {}
   writeFileSync(path, String(process.pid), "utf8");
   log.info(`[daemon] wrote pid file ${path} (pid=${process.pid})`);

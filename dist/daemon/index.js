@@ -22,7 +22,7 @@
  * everything else returns a "not yet implemented" error. Subsequent
  * commits migrate tool/hook handlers from the legacy mcp-server.ts.
  */
-import { writeFileSync, unlinkSync, existsSync, readFileSync } from "node:fs";
+import { writeFileSync, unlinkSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
 import { PROTOCOL_VERSION, DEFAULT_DAEMON_SOCKET_PATH, DEFAULT_DAEMON_TCP_PORT, DAEMON_PID_FILE, } from "../shared/ipc-types.js";
@@ -54,7 +54,7 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.3";
+const DAEMON_VERSION = "0.7.4";
 let bootstrapPhase = "starting";
 let bootstrapError = null;
 const startedAt = Date.now();
@@ -170,7 +170,7 @@ function writeOwnPidFile() {
     // mkdir before write — first run on a fresh machine may not have the
     // cache dir yet. Same path 0.6.3 already creates for surreal.pid.
     try {
-        require("node:fs").mkdirSync(dirname(path), { recursive: true });
+        mkdirSync(dirname(path), { recursive: true });
     }
     catch { }
     writeFileSync(path, String(process.pid), "utf8");

@@ -530,6 +530,21 @@ export class SurrealStore {
     return String(rows[0]?.id ?? "");
   }
 
+  /** Idempotent session-row resolver. If a session row already exists for the
+   *  given Claude Code session id, returns it; otherwise creates one. Used by
+   *  UserPromptSubmit to backfill resumed conversations that Claude Code's
+   *  hook engine doesn't refire SessionStart for — without this, every
+   *  resumed session is a graph orphan (turns ingested but unattributable). */
+  async ensureSessionRow(kcSessionId: string, agentId = "default"): Promise<string> {
+    if (!kcSessionId) return this.createSession(agentId);
+    const existing = await this.queryFirst<{ id: string }>(
+      `SELECT id FROM session WHERE kc_session_id = $kc LIMIT 1`,
+      { kc: kcSessionId },
+    );
+    if (existing[0]?.id) return String(existing[0].id);
+    return this.createSession(agentId, kcSessionId);
+  }
+
   async updateSessionStats(
     sessionId: string,
     inputTokens: number,
