@@ -29,8 +29,12 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.1";
+const CLIENT_VERSION = "0.7.2";
 let ipc = null;
+/** In-flight connect promise — concurrent callers share it so we never
+ *  fire two daemon-spawn attempts in parallel (the lock-contention bug
+ *  c3fb591 documented). The cache clears on success or failure. */
+let ipcInFlight = null;
 /** Track our session ID so every IPC call carries it — daemon's session map
  *  is keyed on this. KONGCODE_SESSION_ID env var lets users pin a stable id;
  *  default uses pid for per-process uniqueness. */
@@ -38,15 +42,21 @@ const SESSION_ID = process.env.KONGCODE_SESSION_ID ?? `mcp-client-${process.pid}
 async function getOrConnectIpc() {
     if (ipc)
         return ipc;
-    log.info(`[mcp-client] ensuring daemon is running...`);
-    const { socketPath, spawned } = await ensureDaemon({
-        log: { info: log.info, warn: log.warn, error: log.error },
-    });
-    log.info(`[mcp-client] daemon ${spawned ? "spawned" : "found"} at ${socketPath}`);
-    ipc = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
-    await ipc.connect();
-    await ipc.handshake();
-    return ipc;
+    if (ipcInFlight)
+        return ipcInFlight;
+    ipcInFlight = (async () => {
+        log.info(`[mcp-client] ensuring daemon is running...`);
+        const { socketPath, spawned } = await ensureDaemon({
+            log: { info: log.info, warn: log.warn, error: log.error },
+        });
+        log.info(`[mcp-client] daemon ${spawned ? "spawned" : "found"} at ${socketPath}`);
+        const client = new IpcClient({ socketPath, log: { info: log.info, warn: log.warn, error: log.error } });
+        await client.connect();
+        await client.handshake();
+        ipc = client;
+        return client;
+    })().finally(() => { ipcInFlight = null; });
+    return ipcInFlight;
 }
 async function handleToolCall(toolName, args) {
     const ipcMethod = MCP_TO_IPC_METHOD[toolName];
@@ -107,17 +117,23 @@ async function main() {
     process.on("SIGTERM", async () => { await shutdown(); process.exit(0); });
     process.on("SIGINT", async () => { await shutdown(); process.exit(0); });
     // Connect stdio FIRST — Claude Code's handshake window is short. Daemon
-    // ensure runs lazily on first tool call; if user's first prompt comes
-    // during cold daemon spawn, they see "still initializing" via the
-    // bootstrap-aware error path inherited from the daemon.
+    // ensure runs in the background after handshake completes.
     const transport = new StdioServerTransport();
     await server.connect(transport);
     log.info(`[mcp-client] kongcode MCP client running on stdio (v${CLIENT_VERSION}, session=${SESSION_ID})`);
-    // No eager background daemon connect. Earlier (0.6.7) we did it for "first
-    // tool call is fast" but it caused lock contention with the foreground
-    // tool-call path's getOrConnectIpc(): both raced for the spawn lock, the
-    // foreground gave up with "lock contention — give up". Connect lazily on
-    // first tool call instead — mcp-client's init handshake is unaffected.
+    // Eagerly trigger daemon spawn in the background. Required so hook-proxy.cjs
+    // can find the daemon's per-PID socket when SessionStart/UserPromptSubmit/
+    // Stop hooks fire — those go through hook-proxy directly (NOT through MCP
+    // RPC), so they need the per-PID HTTP socket the daemon opens during its
+    // own startup. Without this eager call, hooks silently no-op until the
+    // user happens to invoke a tool, which may never happen in a session.
+    //
+    // The in-flight promise cache in getOrConnectIpc() prevents the lock
+    // contention bug 0.6.7 hit (background-eager + foreground-tool-call both
+    // racing for the spawn lock). Now they share the same in-flight promise.
+    getOrConnectIpc().catch((e) => {
+        log.warn(`[mcp-client] background daemon connect failed (will retry on first tool call): ${e.message}`);
+    });
 }
 main().catch((err) => {
     log.error("[mcp-client] fatal:", err);
