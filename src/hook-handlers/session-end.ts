@@ -125,11 +125,16 @@ export async function handleSessionEnd(
     swallow("sessionEnd:stageTransition", e);
   }
 
-  // Mark session ended in DB
-  try {
-    await store.endSession(session.surrealSessionId);
-  } catch (e) {
-    swallow.warn("sessionEnd:endSession", e);
+  // Mark session ended in DB. Guard on surrealSessionId being set —
+  // pre-0.7.4 sessions on `claude --resume` never had a row created (no
+  // SessionStart hook + no UserPromptSubmit backfill), so endSession
+  // would throw "Invalid record ID format: " on an empty string.
+  if (session.surrealSessionId) {
+    try {
+      await store.endSession(session.surrealSessionId);
+    } catch (e) {
+      swallow.warn("sessionEnd:endSession", e);
+    }
   }
 
   // Write handoff file (sync, for crash safety)

@@ -100,6 +100,20 @@ export async function handleStop(
     session._turnToolCalls = 0;
   }
 
+  // Increment session turn counter + flush per-turn token deltas to the
+  // session row. Without this, session.turn_count stays at 0 forever — the
+  // only existing updateSessionStats call lives in PreCompact, which fires
+  // only on compaction events. turn_count drives graduation thresholds and
+  // per-session analytics; the stuck-zero made every dashboard undercount.
+  // Sister bug to the 0.7.4 SessionStart-on-resume fix: both kept session
+  // rows partially populated.
+  if (store.isAvailable() && session.surrealSessionId) {
+    const tokensIn = Math.max(0, session._pendingInputTokens - session._turnTokensInStart);
+    const tokensOut = Math.max(0, session._pendingOutputTokens - session._turnTokensOutStart);
+    store.updateSessionStats(session.surrealSessionId, tokensIn, tokensOut)
+      .catch(e => swallow("stop:sessionStats", e));
+  }
+
   // Daily rollup trigger — turn-driven (no setInterval drift). On the
   // first Stop after midnight UTC, roll up yesterday's metrics into
   // orchestrator_metrics_daily and prune raw rows older than 30d. Cheap
