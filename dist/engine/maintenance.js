@@ -41,27 +41,25 @@ async function backfillSessionTurnCounts(state) {
     if (!state.store.isAvailable())
         return;
     try {
+        // turn.session_id stores the Claude Code session id (a UUID string), NOT
+        // a SurrealDB record id. So we look up the matching session row via the
+        // kc_session_id field, not by interpolating into the UPDATE target.
+        // (Earlier 0.7.12 attempt did the wrong thing and tripped SurrealDB's
+        // SQL parser on UUIDs that contain hex sequences read as arithmetic.)
         const counts = await state.store.queryFirst(`SELECT session_id, count() AS n FROM turn WHERE session_id IS NOT NONE GROUP BY session_id`);
         if (!counts.length)
             return;
-        let updated = 0;
         for (const row of counts) {
             if (!row?.session_id || !row?.n)
                 continue;
             try {
-                await state.store.queryExec(`UPDATE ${row.session_id} SET turn_count = $n WHERE turn_count == 0 OR turn_count IS NONE`, { n: row.n });
-                updated++;
+                await state.store.queryExec(`UPDATE session SET turn_count = $n
+            WHERE kc_session_id = $kc
+              AND (turn_count == 0 OR turn_count IS NONE)`, { n: row.n, kc: row.session_id });
             }
             catch (e) {
                 swallow.warn("maintenance:backfillTurnCount:update", e);
             }
-        }
-        if (updated > 0) {
-            // Caller's logger isn't passed in here, so we just count; show via the
-            // stats path next time someone introspects. Worth noting in the log
-            // facility — but maintenance.ts intentionally has no logger import to
-            // stay leaf-level, so we trust the next introspect to surface the
-            // recovered counts.
         }
     }
     catch (e) {
