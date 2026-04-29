@@ -291,3 +291,16 @@ export function triggerDrainCheck(state, opts, reason = "session-end") {
     })
         .catch(e => swallow.warn("auto-drain:trigger", e));
 }
+/** Test-only exports. Not part of the public API. */
+export const __testing = {
+    findClaudeBin,
+    resetClaudeBinCache: () => { claudeBinPath = null; claudeBinUnavailable = false; },
+    tryAcquireLock,
+    releaseLock,
+    isPidAlive,
+    readSpending,
+    bumpSpending,
+    todayUtc,
+    spendingFilePath,
+    pidFilePath,
+};

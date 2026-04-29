@@ -29,7 +29,7 @@ import { IpcClient } from "./ipc-client.js";
 import { ensureDaemon } from "./daemon-spawn.js";
 import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { log } from "../engine/log.js";
-const CLIENT_VERSION = "0.7.16";
+const CLIENT_VERSION = "0.7.17";
 let ipc = null;
 /** In-flight connect promise — concurrent callers share it so we never
  *  fire two daemon-spawn attempts in parallel (the lock-contention bug
@@ -39,6 +39,19 @@ let ipcInFlight = null;
  *  is keyed on this. KONGCODE_SESSION_ID env var lets users pin a stable id;
  *  default uses pid for per-process uniqueness. */
 const SESSION_ID = process.env.KONGCODE_SESSION_ID ?? `mcp-client-${process.pid}`;
+/** Decide what to do given a version-mismatch outcome from meta.requestSupersede.
+ *  Pure function so the policy is testable without real socket setup. */
+export function decideOrphanAction(activeClients) {
+    if (activeClients === undefined)
+        return "abstain";
+    if (activeClients > 1)
+        return "wait";
+    return "recycle";
+}
+/** Test-only exports. Not part of the public API. */
+export const __testing = {
+    compareSemver: (a, b) => compareSemver(a, b),
+};
 function compareSemver(a, b) {
     const pa = a.split(".").map((s) => Number(s) || 0);
     const pb = b.split(".").map((s) => Number(s) || 0);
@@ -74,7 +87,7 @@ async function connectAndHandshake() {
     //                     code refresh happens at the natural disconnect
     //                     boundary on next spawn.
     //
-    //                     Bootstrap gap: pre-0.7.16 daemons don't know
+    //                     Bootstrap gap: pre-0.7.17 daemons don't know
     //                     meta.requestSupersede. When that throws, we fall
     //                     back to checking meta.health.activeClients — if
     //                     we're the only attached client (orphan), call
@@ -101,7 +114,7 @@ async function connectAndHandshake() {
                 }
             }
             catch (e) {
-                // Pre-0.7.16 daemons don't know meta.requestSupersede. Fall back
+                // Pre-0.7.17 daemons don't know meta.requestSupersede. Fall back
                 // to the "orphan check + direct recycle" path — supported by
                 // every daemon since 0.7.0 (meta.health and meta.shutdown have
                 // been there from the start).
@@ -134,15 +147,16 @@ async function tryOrphanRecycle(client, socketPath, daemonVersion) {
         log.error(`[mcp-client] meta.health failed during orphan check (${e.message}); leaving stale daemon in place`);
         return null;
     }
-    if (activeClients === undefined) {
+    const action = decideOrphanAction(activeClients);
+    if (action === "abstain") {
         log.warn(`[mcp-client] daemon didn't report activeClients in meta.health; leaving stale daemon in place`);
         return null;
     }
-    if (activeClients > 1) {
+    if (action === "wait") {
         log.warn(`[mcp-client] ${activeClients} clients attached to v${daemonVersion} daemon — sibling sessions present, deferring code refresh until they disconnect`);
         return null;
     }
-    // activeClients === 1: we are the only client. Daemon is orphaned in the
+    // action === "recycle": we are the only client. Daemon is orphaned in the
     // architectural sense — safe to recycle without disrupting anyone.
     log.info(`[mcp-client] no sibling clients attached; recycling stale v${daemonVersion} daemon to load v${CLIENT_VERSION} code`);
     try {

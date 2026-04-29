@@ -36,8 +36,42 @@ interface DrainSchedulerOpts {
      *  date changes (state persisted to <cacheDir>/auto-drain-spending.json). */
     maxDaily: number;
 }
+/** Look up the claude binary — env override, then PATH, then known locations.
+ *  Cached after first lookup. Returns null if not findable; caller should
+ *  log once and self-disable. */
+declare function findClaudeBin(): string | null;
+declare function pidFilePath(cacheDir: string): string;
+declare function isPidAlive(pid: number): boolean;
+/** Try to acquire the auto-drain lock. Returns the fd on success, or null
+ *  if another extractor is already running (live PID in lock file). Stale
+ *  locks (dead PID) are auto-cleaned. */
+declare function tryAcquireLock(lockPath: string): number | null;
+declare function releaseLock(fd: number, lockPath: string): void;
+declare function spendingFilePath(cacheDir: string): string;
+declare function todayUtc(): string;
+interface SpendingState {
+    date: string;
+    count: number;
+}
+/** Read today's spawn count from the spending file. Auto-resets to 0 if the
+ *  recorded date is not today. Tolerant of missing/corrupt files. */
+declare function readSpending(cacheDir: string): SpendingState;
+declare function bumpSpending(cacheDir: string): SpendingState;
 /** Start the periodic drain scheduler. Idempotent — calling twice is a no-op. */
 export declare function startDrainScheduler(state: GlobalPluginState, opts: DrainSchedulerOpts): void;
 /** Event-driven trigger — call from SessionEnd handler after items get queued. */
 export declare function triggerDrainCheck(state: GlobalPluginState, opts: DrainSchedulerOpts, reason?: string): void;
+/** Test-only exports. Not part of the public API. */
+export declare const __testing: {
+    findClaudeBin: typeof findClaudeBin;
+    resetClaudeBinCache: () => void;
+    tryAcquireLock: typeof tryAcquireLock;
+    releaseLock: typeof releaseLock;
+    isPidAlive: typeof isPidAlive;
+    readSpending: typeof readSpending;
+    bumpSpending: typeof bumpSpending;
+    todayUtc: typeof todayUtc;
+    spendingFilePath: typeof spendingFilePath;
+    pidFilePath: typeof pidFilePath;
+};
 export {};

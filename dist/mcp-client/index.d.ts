@@ -16,4 +16,10 @@
  * lines) so plugin updates are fast and the SEA-bundle for it is tiny
  * (no embedding model, no SurrealDB, no native bindings to pull in).
  */
-export {};
+/** Decide what to do given a version-mismatch outcome from meta.requestSupersede.
+ *  Pure function so the policy is testable without real socket setup. */
+export declare function decideOrphanAction(activeClients: number | undefined): "recycle" | "wait" | "abstain";
+/** Test-only exports. Not part of the public API. */
+export declare const __testing: {
+    compareSemver: (a: string, b: string) => number;
+};
