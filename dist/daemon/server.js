@@ -33,6 +33,8 @@ export class DaemonServer {
     rpcsInFlight = 0;
     startedAt = Date.now();
     pendingSupersede = false;
+    idleTimer = null;
+    idleSince = null;
     constructor(opts) {
         this.opts = opts;
     }
@@ -79,11 +81,54 @@ export class DaemonServer {
             });
             this.opts.log.info(`[daemon] listening on TCP 127.0.0.1:${this.opts.tcpPort}`);
         }
+        // Daemon just started listening with zero clients. Start the idle timer
+        // immediately — covers the case where mcp-client crashed before
+        // handshaking, leaving an orphaned daemon nobody will ever talk to.
+        // First connect cancels the timer.
+        this.armIdleTimer();
+    }
+    /** Start (or restart) the idle reaper. No-op if idleTimeoutMs is unset/0
+     *  or a timer is already armed. */
+    armIdleTimer() {
+        if (this.idleTimer)
+            return;
+        const ms = this.opts.idleTimeoutMs ?? 0;
+        if (ms <= 0)
+            return;
+        if (this.clients.size > 0)
+            return;
+        this.idleSince = Date.now();
+        this.opts.log.info(`[daemon] idle timer armed: will reap in ${Math.round(ms / 1000)}s if no client connects`);
+        this.idleTimer = setTimeout(() => {
+            this.idleTimer = null;
+            // Re-check at fire time — race-safe against a connect that just landed.
+            if (this.clients.size === 0 && this.opts.onIdleReap) {
+                this.opts.log.info(`[daemon] idle reaper firing: zero clients for ${ms}ms, exiting`);
+                try {
+                    this.opts.onIdleReap();
+                }
+                catch (e) {
+                    this.opts.log.warn(`[daemon] onIdleReap callback threw: ${e.message}`);
+                }
+            }
+        }, ms);
+        // Don't keep the daemon alive just for this timer.
+        this.idleTimer.unref?.();
+    }
+    /** Cancel the idle timer (a client just connected, or daemon is shutting
+     *  down). Safe to call repeatedly. */
+    disarmIdleTimer() {
+        if (this.idleTimer) {
+            clearTimeout(this.idleTimer);
+            this.idleTimer = null;
+            this.idleSince = null;
+        }
     }
     /** Drain in-flight requests, close listeners, close client sockets, exit.
      *  Caller (daemon main) is responsible for closing SurrealStore and
      *  saving any pending state before this is called. */
     async close() {
+        this.disarmIdleTimer();
         for (const sock of this.clients.keys()) {
             try {
                 sock.end();
@@ -120,6 +165,8 @@ export class DaemonServer {
             protocolVersion: PROTOCOL_VERSION,
             pendingSupersede: this.pendingSupersede,
             clients,
+            idleSince: this.idleSince,
+            idleTimeoutMs: this.opts.idleTimeoutMs ?? 0,
         };
     }
     /** Number of currently-attached client sockets. Used by meta.requestSupersede
@@ -161,6 +208,8 @@ export class DaemonServer {
         // lets us count anonymous clients toward activeClients while still
         // distinguishing them in the per-client registry.
         this.clients.set(sock, null);
+        // A live client cancels any pending idle reap.
+        this.disarmIdleTimer();
         let buffer = "";
         sock.on("data", (chunk) => {
             buffer += chunk.toString("utf8");
@@ -187,6 +236,11 @@ export class DaemonServer {
                 this.opts.log.info(`[daemon] client disconnected: pid=${info.pid} v${info.version} session=${info.sessionId}`);
             }
             this.checkSupersedeReady();
+            // If that was the last client, start the idle reaper. Supersede check
+            // above runs first because supersede is "exit immediately"; idle is
+            // "exit after a grace period" — supersede always wins when both apply.
+            if (this.clients.size === 0)
+                this.armIdleTimer();
         });
         sock.on("error", (err) => {
             // ECONNRESET when client disappears mid-request — common, not worth
@@ -197,6 +251,8 @@ export class DaemonServer {
             }
             this.clients.delete(sock);
             this.checkSupersedeReady();
+            if (this.clients.size === 0)
+                this.armIdleTimer();
         });
     }
     async dispatchLine(sock, line) {

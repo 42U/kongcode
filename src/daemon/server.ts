@@ -69,6 +69,17 @@ export interface DaemonServerOpts {
    *  exit at the natural disconnect boundary, without disrupting other
    *  still-attached older-version clients. */
   onSupersedeReady?: () => void;
+  /** Idle-reaper: when clients.size === 0 for this many ms, fire onIdleReap.
+   *  Set to 0 to disable. Default wired in daemon/index.ts (0.7.10+) is
+   *  30 min; users can override via KONGCODE_DAEMON_IDLE_TIMEOUT_MS env var.
+   *  Without this, a daemon that loses its last client just sits forever
+   *  holding BGE-M3 in RAM — the gap the user named when asking "what
+   *  happened to the reaper that handled these sorts of things?" */
+  idleTimeoutMs?: number;
+  /** Called when the idle timer fires (clients.size === 0 for the configured
+   *  duration). Daemon main wires this to the same drain-and-exit path
+   *  used by meta.shutdown / onSupersedeReady. */
+  onIdleReap?: () => void;
 }
 
 export class DaemonServer {
@@ -85,6 +96,8 @@ export class DaemonServer {
   private rpcsInFlight = 0;
   private startedAt = Date.now();
   private pendingSupersede = false;
+  private idleTimer: NodeJS.Timeout | null = null;
+  private idleSince: number | null = null;
 
   constructor(private readonly opts: DaemonServerOpts) {}
 
@@ -129,12 +142,51 @@ export class DaemonServer {
       });
       this.opts.log.info(`[daemon] listening on TCP 127.0.0.1:${this.opts.tcpPort}`);
     }
+    // Daemon just started listening with zero clients. Start the idle timer
+    // immediately — covers the case where mcp-client crashed before
+    // handshaking, leaving an orphaned daemon nobody will ever talk to.
+    // First connect cancels the timer.
+    this.armIdleTimer();
+  }
+
+  /** Start (or restart) the idle reaper. No-op if idleTimeoutMs is unset/0
+   *  or a timer is already armed. */
+  private armIdleTimer(): void {
+    if (this.idleTimer) return;
+    const ms = this.opts.idleTimeoutMs ?? 0;
+    if (ms <= 0) return;
+    if (this.clients.size > 0) return;
+    this.idleSince = Date.now();
+    this.opts.log.info(`[daemon] idle timer armed: will reap in ${Math.round(ms / 1000)}s if no client connects`);
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      // Re-check at fire time — race-safe against a connect that just landed.
+      if (this.clients.size === 0 && this.opts.onIdleReap) {
+        this.opts.log.info(`[daemon] idle reaper firing: zero clients for ${ms}ms, exiting`);
+        try { this.opts.onIdleReap(); } catch (e) {
+          this.opts.log.warn(`[daemon] onIdleReap callback threw: ${(e as Error).message}`);
+        }
+      }
+    }, ms);
+    // Don't keep the daemon alive just for this timer.
+    this.idleTimer.unref?.();
+  }
+
+  /** Cancel the idle timer (a client just connected, or daemon is shutting
+   *  down). Safe to call repeatedly. */
+  private disarmIdleTimer(): void {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+      this.idleSince = null;
+    }
   }
 
   /** Drain in-flight requests, close listeners, close client sockets, exit.
    *  Caller (daemon main) is responsible for closing SurrealStore and
    *  saving any pending state before this is called. */
   async close(): Promise<void> {
+    this.disarmIdleTimer();
     for (const sock of this.clients.keys()) {
       try { sock.end(); } catch {}
     }
@@ -165,6 +217,8 @@ export class DaemonServer {
       protocolVersion: PROTOCOL_VERSION,
       pendingSupersede: this.pendingSupersede,
       clients,
+      idleSince: this.idleSince,
+      idleTimeoutMs: this.opts.idleTimeoutMs ?? 0,
     };
   }
 
@@ -211,6 +265,8 @@ export class DaemonServer {
     // lets us count anonymous clients toward activeClients while still
     // distinguishing them in the per-client registry.
     this.clients.set(sock, null);
+    // A live client cancels any pending idle reap.
+    this.disarmIdleTimer();
     let buffer = "";
 
     sock.on("data", (chunk) => {
@@ -238,6 +294,10 @@ export class DaemonServer {
         this.opts.log.info(`[daemon] client disconnected: pid=${info.pid} v${info.version} session=${info.sessionId}`);
       }
       this.checkSupersedeReady();
+      // If that was the last client, start the idle reaper. Supersede check
+      // above runs first because supersede is "exit immediately"; idle is
+      // "exit after a grace period" — supersede always wins when both apply.
+      if (this.clients.size === 0) this.armIdleTimer();
     });
 
     sock.on("error", (err) => {
@@ -249,6 +309,7 @@ export class DaemonServer {
       }
       this.clients.delete(sock);
       this.checkSupersedeReady();
+      if (this.clients.size === 0) this.armIdleTimer();
     });
   }
 

@@ -37,7 +37,7 @@ import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { IpcErrorCode } from "../shared/ipc-types.js";
 import { log } from "../engine/log.js";
 
-const CLIENT_VERSION = "0.7.9";
+const CLIENT_VERSION = "0.7.10";
 
 let ipc: IpcClient | null = null;
 /** In-flight connect promise — concurrent callers share it so we never
@@ -85,7 +85,7 @@ async function connectAndHandshake(): Promise<IpcClient> {
   //                     code refresh happens at the natural disconnect
   //                     boundary on next spawn.
   //
-  //                     Bootstrap gap: pre-0.7.9 daemons don't know
+  //                     Bootstrap gap: pre-0.7.10 daemons don't know
   //                     meta.requestSupersede. When that throws, we fall
   //                     back to checking meta.health.activeClients — if
   //                     we're the only attached client (orphan), call
@@ -113,7 +113,7 @@ async function connectAndHandshake(): Promise<IpcClient> {
           log.warn(`[mcp-client] supersede flag declined by daemon`);
         }
       } catch (e) {
-        // Pre-0.7.9 daemons don't know meta.requestSupersede. Fall back
+        // Pre-0.7.10 daemons don't know meta.requestSupersede. Fall back
         // to the "orphan check + direct recycle" path — supported by
         // every daemon since 0.7.0 (meta.health and meta.shutdown have
         // been there from the start).

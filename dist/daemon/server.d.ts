@@ -48,6 +48,17 @@ export interface DaemonServerOpts {
      *  exit at the natural disconnect boundary, without disrupting other
      *  still-attached older-version clients. */
     onSupersedeReady?: () => void;
+    /** Idle-reaper: when clients.size === 0 for this many ms, fire onIdleReap.
+     *  Set to 0 to disable. Default wired in daemon/index.ts (0.7.10+) is
+     *  30 min; users can override via KONGCODE_DAEMON_IDLE_TIMEOUT_MS env var.
+     *  Without this, a daemon that loses its last client just sits forever
+     *  holding BGE-M3 in RAM — the gap the user named when asking "what
+     *  happened to the reaper that handled these sorts of things?" */
+    idleTimeoutMs?: number;
+    /** Called when the idle timer fires (clients.size === 0 for the configured
+     *  duration). Daemon main wires this to the same drain-and-exit path
+     *  used by meta.shutdown / onSupersedeReady. */
+    onIdleReap?: () => void;
 }
 export declare class DaemonServer {
     private readonly opts;
@@ -64,6 +75,8 @@ export declare class DaemonServer {
     private rpcsInFlight;
     private startedAt;
     private pendingSupersede;
+    private idleTimer;
+    private idleSince;
     constructor(opts: DaemonServerOpts);
     /** Register a handler for an IPC method. The dispatcher rejects calls to
      *  methods that aren't both in IPC_METHODS (compile-time) AND registered
@@ -74,6 +87,12 @@ export declare class DaemonServer {
      *  daemon already running on the same path — caller should detect via
      *  the spawn lock + PID file probe before calling listen()). */
     listen(): Promise<void>;
+    /** Start (or restart) the idle reaper. No-op if idleTimeoutMs is unset/0
+     *  or a timer is already armed. */
+    private armIdleTimer;
+    /** Cancel the idle timer (a client just connected, or daemon is shutting
+     *  down). Safe to call repeatedly. */
+    private disarmIdleTimer;
     /** Drain in-flight requests, close listeners, close client sockets, exit.
      *  Caller (daemon main) is responsible for closing SurrealStore and
      *  saving any pending state before this is called. */
@@ -88,6 +107,8 @@ export declare class DaemonServer {
         protocolVersion: number;
         pendingSupersede: boolean;
         clients: ClientInfo[];
+        idleSince: number | null;
+        idleTimeoutMs: number;
     };
     /** Number of currently-attached client sockets. Used by meta.requestSupersede
      *  to report whether the daemon is "orphaned" (zero attached). */
