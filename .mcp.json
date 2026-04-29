@@ -1,9 +1,9 @@
 {
-  "$comment": "0.6.x command: invoke via Node directly. 0.7.0+ will switch to bin/kongcode-launch (Unix) / bin/kongcode-launch.cmd (Windows) once CI ships per-platform SEA binaries to bin/kongcode-<os>-<arch>. The launcher scripts already fall back to this Node invocation when no SEA binary is present, so the transition can be staged: ship binaries first, then flip the command field, no breaking change.",
+  "$comment": "0.7.0 daemon architecture: Node spawns kongcode-mcp (thin client). mcp-client either connects to an already-running kongcode-daemon or forks one detached. Daemon owns SurrealStore + BGE-M3 + all tool/hook handlers. The 'mcp-server.js' legacy single-process entry point is still present in dist/ for emergency rollback (just point command back at it).",
   "mcpServers": {
     "kongcode": {
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-server.js"],
+      "args": ["${CLAUDE_PLUGIN_ROOT}/dist/mcp-client/index.js"],
       "alwaysLoad": true
     }
   }
