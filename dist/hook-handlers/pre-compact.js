@@ -24,7 +24,11 @@ export async function handlePreCompact(state, payload) {
     const { store } = state;
     if (store.isAvailable() && session.surrealSessionId) {
         try {
-            await store.updateSessionStats(session.surrealSessionId, session._pendingInputTokens, session._pendingOutputTokens);
+            // 0.7.12+: addSessionTokens (no turn_count bump from this path —
+            // that's owned exclusively by UserPromptSubmit now). PreCompact
+            // is a flush of any tokens accrued since the last Stop, NOT a
+            // turn boundary, so incrementing turn_count here was always wrong.
+            await store.addSessionTokens(session.surrealSessionId, session._pendingInputTokens, session._pendingOutputTokens);
             session._pendingInputTokens = 0;
             session._pendingOutputTokens = 0;
             session._statsFlushCounter = 0;

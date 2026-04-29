@@ -27,6 +27,48 @@ export function runBootstrapMaintenance(state: GlobalPluginState): void {
     store.consolidateMemories((text) => embeddings.embed(text)),
     store.garbageCollectMemories(),
     store.purgeStalePendingWork(),
+    backfillSessionTurnCounts(state),
     checkACANReadiness(store, config.thresholds.acanTrainingThreshold),
   ]).catch(e => swallow.warn("bootstrap:maintenance", e));
+}
+
+/** One-shot reconciliation: every session row pre-0.7.12 has turn_count=0
+ *  because the increment lived in Stop and Stop's been flaky. The `turn`
+ *  table has the truth — every ingested turn carries its session_id.
+ *  Reconstruct turn_count from turn rows for any session with turn_count=0
+ *  or NONE. Idempotent (only updates rows where turn_count is missing/zero
+ *  AND the turn table has matching rows), so running on every daemon
+ *  startup is safe. Cheap: a single grouped query plus N small updates,
+ *  where N = sessions-needing-backfill (one-time, drops to ~0 going forward
+ *  since 0.7.12+ writes turn_count on UserPromptSubmit). */
+async function backfillSessionTurnCounts(state: GlobalPluginState): Promise<void> {
+  if (!state.store.isAvailable()) return;
+  try {
+    const counts = await state.store.queryFirst<{ session_id: string; n: number }>(
+      `SELECT session_id, count() AS n FROM turn WHERE session_id IS NOT NONE GROUP BY session_id`,
+    );
+    if (!counts.length) return;
+    let updated = 0;
+    for (const row of counts) {
+      if (!row?.session_id || !row?.n) continue;
+      try {
+        await state.store.queryExec(
+          `UPDATE ${row.session_id} SET turn_count = $n WHERE turn_count == 0 OR turn_count IS NONE`,
+          { n: row.n },
+        );
+        updated++;
+      } catch (e) {
+        swallow.warn("maintenance:backfillTurnCount:update", e);
+      }
+    }
+    if (updated > 0) {
+      // Caller's logger isn't passed in here, so we just count; show via the
+      // stats path next time someone introspects. Worth noting in the log
+      // facility — but maintenance.ts intentionally has no logger import to
+      // stay leaf-level, so we trust the next introspect to surface the
+      // recovered counts.
+    }
+  } catch (e) {
+    swallow.warn("maintenance:backfillTurnCount", e);
+  }
 }

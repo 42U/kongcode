@@ -395,13 +395,34 @@ export class SurrealStore {
             return String(existing[0].id);
         return this.createSession(agentId, kcSessionId);
     }
-    async updateSessionStats(sessionId, inputTokens, outputTokens) {
+    /** Increment turn_count by 1 and bump last_active. Called from
+     *  UserPromptSubmit (0.7.12+) — the reliable hook that fires at turn
+     *  start. Earlier versions did this from Stop, which is dropped/timed-out
+     *  often enough to leave session.turn_count chronically undercounted. */
+    async bumpSessionTurn(sessionId) {
+        assertRecordId(sessionId);
+        await this.queryExec(`UPDATE ${sessionId} SET turn_count += 1, last_active = time::now()`);
+    }
+    /** Add the per-turn input/output token deltas to the session row's
+     *  cumulative totals. Called from Stop (when the assistant response
+     *  has been transcribed and token usage is known) and PreCompact (to
+     *  flush any tokens accrued mid-compaction). No-op when both deltas
+     *  are zero, which is the common-no-tokens-accrued path. */
+    async addSessionTokens(sessionId, inputTokens, outputTokens) {
+        if (!inputTokens && !outputTokens)
+            return;
         assertRecordId(sessionId);
         await this.queryExec(`UPDATE ${sessionId} SET
-        turn_count += 1,
-        total_input_tokens += $input,
-        total_output_tokens += $output,
-        last_active = time::now()`, { input: inputTokens, output: outputTokens });
+         total_input_tokens += $input,
+         total_output_tokens += $output,
+         last_active = time::now()`, { input: inputTokens, output: outputTokens });
+    }
+    /** @deprecated since 0.7.12 — split into bumpSessionTurn + addSessionTokens.
+     *  Kept as a backward-compat shim for any external caller; new code should
+     *  call the split methods directly. Will be removed in 0.8.x. */
+    async updateSessionStats(sessionId, inputTokens, outputTokens) {
+        await this.bumpSessionTurn(sessionId);
+        await this.addSessionTokens(sessionId, inputTokens, outputTokens);
     }
     async endSession(sessionId, summary) {
         assertRecordId(sessionId);

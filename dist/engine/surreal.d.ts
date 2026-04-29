@@ -121,6 +121,20 @@ export declare class SurrealStore {
      *  hook engine doesn't refire SessionStart for — without this, every
      *  resumed session is a graph orphan (turns ingested but unattributable). */
     ensureSessionRow(kcSessionId: string, agentId?: string): Promise<string>;
+    /** Increment turn_count by 1 and bump last_active. Called from
+     *  UserPromptSubmit (0.7.12+) — the reliable hook that fires at turn
+     *  start. Earlier versions did this from Stop, which is dropped/timed-out
+     *  often enough to leave session.turn_count chronically undercounted. */
+    bumpSessionTurn(sessionId: string): Promise<void>;
+    /** Add the per-turn input/output token deltas to the session row's
+     *  cumulative totals. Called from Stop (when the assistant response
+     *  has been transcribed and token usage is known) and PreCompact (to
+     *  flush any tokens accrued mid-compaction). No-op when both deltas
+     *  are zero, which is the common-no-tokens-accrued path. */
+    addSessionTokens(sessionId: string, inputTokens: number, outputTokens: number): Promise<void>;
+    /** @deprecated since 0.7.12 — split into bumpSessionTurn + addSessionTokens.
+     *  Kept as a backward-compat shim for any external caller; new code should
+     *  call the split methods directly. Will be removed in 0.8.x. */
     updateSessionStats(sessionId: string, inputTokens: number, outputTokens: number): Promise<void>;
     endSession(sessionId: string, summary?: string): Promise<void>;
     markSessionActive(sessionId: string): Promise<void>;

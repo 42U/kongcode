@@ -78,6 +78,18 @@ export async function handleUserPromptSubmit(
     }
   }
 
+  // Increment session turn_count at turn START (0.7.12+). Previously this
+  // was done in Stop, which is the most fragile lifecycle hook (timeouts,
+  // transcript-read failures, occasional drops). UserPromptSubmit is
+  // reliable: fires synchronously when the user types, never dropped,
+  // no transcript dependency. Token accounting still happens in Stop
+  // because token counts aren't known until the assistant has responded.
+  // Fire-and-forget so the hook returns promptly.
+  if (state.store.isAvailable() && session.surrealSessionId) {
+    state.store.bumpSessionTurn(session.surrealSessionId)
+      .catch(e => swallow("userPromptSubmit:bumpTurn", e));
+  }
+
   // Claude Code sends the user's text in `prompt`. Earlier code read
   // `payload.user_prompt`, which never existed in the actual hook payload —
   // the handler silently early-returned on every prompt for ~20 days,
