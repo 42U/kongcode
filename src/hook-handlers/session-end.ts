@@ -12,6 +12,7 @@ import { hasSoul, checkStageTransition } from "../engine/soul.js";
 import { writeHandoffFileSync } from "../engine/handoff-file.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
+import { triggerDrainCheck } from "../daemon/auto-drain.js";
 
 export async function handleSessionEnd(
   state: GlobalPluginState,
@@ -153,6 +154,20 @@ export async function handleSessionEnd(
 
   // Cleanup session from state
   state.removeSession(sessionId);
+
+  // Trigger auto-drain — this session just queued 5-6 items; let the
+  // scheduler decide whether to spawn a headless extractor right now
+  // (gated by threshold + PID-file lock). Fire-and-forget. No-op when
+  // KONGCODE_AUTO_DRAIN=0 or queue is below threshold.
+  triggerDrainCheck(
+    state,
+    {
+      threshold: Number(process.env.KONGCODE_AUTO_DRAIN_THRESHOLD ?? 5),
+      intervalMs: 0,
+      cacheDir: state.config.paths.cacheDir,
+    },
+    "session-end",
+  );
 
   return {};
 }
