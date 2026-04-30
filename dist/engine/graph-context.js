@@ -10,7 +10,7 @@ import { queryCausalContext } from "./causal.js";
 import { findRelevantSkills, formatSkillContext } from "./skills.js";
 import { retrieveReflections, formatReflectionContext } from "./reflection.js";
 import { getCachedContext, recordPrefetchHit, recordPrefetchMiss } from "./prefetch.js";
-import { stageRetrieval, getHistoricalUtilityBatch } from "./retrieval-quality.js";
+import { stageRetrieval, getHistoricalUtilityBatch, getLastTurnGroundingTrace } from "./retrieval-quality.js";
 import { isACANActive, scoreWithACAN } from "./acan.js";
 import { swallow } from "./errors.js";
 import { log } from "./log.js";
@@ -632,6 +632,31 @@ async function formatContextMessage(nodes, store, session, skillContext = "", ti
             sections.push(t1Section);
             session.injectedSections.add("tier1");
         }
+    }
+    // 0.7.31: Reflexion grounding nudge — Self-RAG/Reflexion pattern routing
+    // last turn's `cited` audit signal back into the model as next-turn
+    // behavioral feedback. Fires when last turn injected ≥3 high-salience
+    // items and the model cited 0 of them. 1-turn cooldown prevents nagging
+    // when the model ignores items two turns in a row. Mechanical signal
+    // (cited-field counts) — distinct from the LLM-graded cognitive-check
+    // pipeline that produces CognitiveDirective objects.
+    try {
+        const trace = await getLastTurnGroundingTrace(session.sessionId, store);
+        if (trace &&
+            trace.injected >= 3 &&
+            trace.cited === 0 &&
+            trace.ignored_high_salience.length >= 3 &&
+            session.userTurnCount > session.lastReflexionFireTurn + 1) {
+            const n = trace.ignored_high_salience.length;
+            sections.push(`GROUNDING NUDGE (prior turn): ${n} load-bearing items injected, 0 cited. ` +
+                `Either ground on them this turn (use [#N] indices) or explicitly note ` +
+                `why they're inapplicable. Repeated ignore-without-explanation degrades ` +
+                `retrieval utility scores.`);
+            session.lastReflexionFireTurn = session.userTurnCount;
+        }
+    }
+    catch (e) {
+        swallow.warn("graph-context:reflexionNudge", e);
     }
     // Cognitive directives
     const directives = getPendingDirectives(session);

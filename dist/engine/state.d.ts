@@ -51,6 +51,10 @@ export declare class SessionState {
     projectId: string;
     taskId: string;
     surrealSessionId: string;
+    /** 0.7.31: turn number on which the Reflexion grounding-nudge most recently
+     *  fired. Used to apply a 1-turn cooldown so we don't nag the model when
+     *  it ignores high-salience items twice in a row. -1 sentinel = never. */
+    lastReflexionFireTurn: number;
     /** Structured summary stashed after compaction for next assemble() injection. */
     _compactionSummary?: string;
     /** Promise resolving to wakeup briefing text (synthesized at session start). */

@@ -8,6 +8,47 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.31] — 2026-04-30
+
+### Added (Reflexion-style grounding nudge — context-grounding plan phase 4)
+
+Phase 2 (v0.7.27) wired the citation audit (`retrieval_outcome.cited` populated each turn from `[#N]` regex parsing) and added the helper `getLastTurnGroundingTrace` in `retrieval-quality.ts` — but the helper had no caller. The audit signal flowed to the DB and stopped there. Self-RAG/Reflexion (research from gap 3 synthesis) is to surface this trace back into the model as next-turn behavioral feedback. Without it, `cited` is dashboard-only and doesn't shape model behavior. This release closes the loop.
+
+**Implementation:**
+- `state.ts:85` — new `lastReflexionFireTurn: number = -1` on `SessionState` for cooldown tracking.
+- `graph-context.ts:739-762` — at the start of the BEHAVIORAL DIRECTIVES rendering block, calls `getLastTurnGroundingTrace(session.sessionId, store)` and applies fire conditions. If firing, prepends a single-line nudge as its own section above BEHAVIORAL DIRECTIVES and updates `session.lastReflexionFireTurn`. swallow.warn-wrapped — the audit-loop code path is non-critical and must not break context injection.
+
+**Fire conditions (all must hold):**
+1. Last turn had retrieval (`injected >= 3`).
+2. Zero structural citations (`cited === 0`).
+3. At least 3 high-salience items were ignored (`ignored_high_salience.length >= 3`, where high-salience = retrieval_score ≥ 0.6).
+4. Cooldown: didn't fire on the immediately preceding turn (`session.userTurnCount > session.lastReflexionFireTurn + 1`).
+
+**Inject format:**
+```
+GROUNDING NUDGE (prior turn): N load-bearing items injected, 0 cited.
+Either ground on them this turn (use [#N] indices) or explicitly note
+why they're inapplicable. Repeated ignore-without-explanation degrades
+retrieval utility scores.
+```
+
+**Why not a new CognitiveDirective type:** the `CognitiveDirective` union (`repeat | continuation | contradiction | noise | insight`) is for the LLM-graded cognitive-check pipeline. This nudge is mechanical — derived from `cited` field counts, not LLM judgment. Inject directly into the directive section text rather than extend the type union.
+
+### Tests
+- New `test/reflexion-nudge.test.ts` — 9 cases across 2 describe blocks pinning the trace contract (4) and fire-condition gates (5: volume threshold, engagement signal, cooldown, null-trace).
+- 579 tests pass (was 570 + 9).
+
+### Plan complete
+With phases 1–4 shipped (v0.7.26–28 + v0.7.31), the four context-grounding gaps from the 2026-04-30 plan are closed end-to-end:
+1. **Project-scoped retrieval** (v0.7.26 + 0.7.29 + 0.7.30 follow-ups for backfill robustness)
+2. **Citation pattern via [#N]** (v0.7.27)
+3. **Reranker-calibrated salience bands** (v0.7.28)
+4. **Reflexion-style grounding feedback loop** (v0.7.31)
+
+Remaining deferred polish (out of scope for this release train, but tracked):
+- WMR-distribution-derived bands when reranker is offline (cosmetic — only matters if the reranker model dies).
+- `citation_method='lexical'` for paraphrased items the model didn't cite by `[#N]` (audit-only enrichment; current code only sets `cited=true` on `[#N]` matches).
+
 ## [0.7.30] — 2026-04-30
 
 ### Fixed

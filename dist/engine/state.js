@@ -65,6 +65,10 @@ export class SessionState {
     projectId = "";
     taskId = "";
     surrealSessionId = "";
+    /** 0.7.31: turn number on which the Reflexion grounding-nudge most recently
+     *  fired. Used to apply a 1-turn cooldown so we don't nag the model when
+     *  it ignores high-salience items twice in a row. -1 sentinel = never. */
+    lastReflexionFireTurn = -1;
     // Cross-concern state (set by hook handlers, consumed by context assembly)
     /** Structured summary stashed after compaction for next assemble() injection. */
     _compactionSummary;
