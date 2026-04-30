@@ -13,17 +13,21 @@
  * Ported from kongbrain — uses SurrealStore instead of module-level DB.
  */
 import { swallow } from "./errors.js";
-// Per-turn state — module-level since only one turn is active at a time
+// Per-turn state — module-level since only one turn is active at a time.
+// 0.7.27: indexMap holds the [#N] → memory_id map built at injection time
+// so Stop can parse the assistant response for [#1], [#2], etc. and write
+// `cited=true` to matching retrieval_outcome rows.
 let _pendingRetrieval = null;
 export function getStagedItems() {
     return _pendingRetrieval?.items ? [..._pendingRetrieval.items] : [];
 }
-export function stageRetrieval(sessionId, items, queryEmbedding) {
+export function stageRetrieval(sessionId, items, queryEmbedding, indexMap) {
     _pendingRetrieval = {
         sessionId,
         items,
         toolResults: [],
         queryEmbedding,
+        indexMap,
     };
 }
 export function recordToolOutcome(success) {
@@ -39,7 +43,7 @@ export async function evaluateRetrieval(responseTurnId, responseText, store) {
         _pendingRetrieval = null;
         return;
     }
-    const { sessionId, items, toolResults, queryEmbedding } = _pendingRetrieval;
+    const { sessionId, items, toolResults, queryEmbedding, indexMap } = _pendingRetrieval;
     _pendingRetrieval = null;
     // Use majority-based success: mark as successful if >= 50% of tool calls
     // succeeded. The previous `every()` logic caused 99%+ failure rates because
@@ -48,13 +52,29 @@ export async function evaluateRetrieval(responseTurnId, responseText, store) {
         ? toolResults.filter((r) => r.success).length / toolResults.length >= 0.5
         : null;
     const responseLower = responseText.toLowerCase();
+    // 0.7.27: parse [#N] citations from the response. Build a set of cited
+    // memory_ids by intersecting parsed indexes with the indexMap built at
+    // injection time. This is the structural-citation signal — distinct from
+    // (and stronger than) the lexical utilization signal computed below.
+    const citedIds = new Set();
+    if (indexMap) {
+        const matches = responseText.matchAll(/\[#(\d+)\]/g);
+        for (const m of matches) {
+            const idx = parseInt(m[1], 10);
+            const id = indexMap.get(idx);
+            if (id)
+                citedIds.add(id);
+        }
+    }
     for (const item of items) {
         const signals = computeSignals(item, responseLower, toolSuccess);
+        const idStr = String(item.id);
+        const wasCited = citedIds.has(idStr);
         try {
             const record = {
                 session_id: sessionId,
                 turn_id: responseTurnId,
-                memory_id: String(item.id),
+                memory_id: idStr,
                 memory_table: item.table,
                 retrieval_score: item.finalScore ?? 0,
                 utilization: signals.utilization,
@@ -70,13 +90,44 @@ export async function evaluateRetrieval(responseTurnId, responseText, store) {
             if (queryEmbedding) {
                 record.query_embedding = queryEmbedding;
             }
+            // 0.7.27: structural-citation signal. cited=true means the model
+            // explicitly emitted [#N] referencing this item; cited=false means it
+            // was offered but ignored. Distinct from the lexical utilization
+            // overlap. citation_method='index' for [#N], 'lexical' for content
+            // matches when no [#N] hit landed (future), 'none' otherwise.
+            if (indexMap) {
+                record.cited = wasCited;
+                record.citation_method = wasCited ? "index" : "none";
+            }
             await store.queryExec(`CREATE retrieval_outcome CONTENT $data`, { data: record });
-            store.updateUtilityCache(String(item.id), signals.utilization)
+            store.updateUtilityCache(idStr, signals.utilization)
                 .catch(e => swallow.warn("retrieval-quality:utilityCache", e));
         }
         catch {
             // non-critical telemetry
         }
+    }
+}
+/** 0.7.27: count how many high-salience items the assistant ignored last
+ *  turn. Used by cognitive-check to inject a Reflexion-style nudge. */
+export async function getLastTurnGroundingTrace(sessionId, store) {
+    try {
+        const rows = await store.queryFirst(`SELECT memory_id, retrieval_score, cited FROM retrieval_outcome
+       WHERE session_id = $sid AND turn_id IN (
+         SELECT turn_id FROM retrieval_outcome
+         WHERE session_id = $sid
+         GROUP BY turn_id ORDER BY MAX(created_at) DESC LIMIT 1
+       )`, { sid: sessionId });
+        if (rows.length === 0)
+            return null;
+        const cited = rows.filter((r) => r.cited === true).length;
+        const ignored = rows
+            .filter((r) => r.cited !== true && (r.retrieval_score ?? 0) >= 0.6)
+            .map((r) => String(r.memory_id));
+        return { injected: rows.length, cited, ignored_high_salience: ignored };
+    }
+    catch {
+        return null;
     }
 }
 // --- Signal computation ---

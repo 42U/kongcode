@@ -8,6 +8,32 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.27] — 2026-04-30
+
+### Added (citation pattern + grounding-trace observability — context-grounding plan phase 2)
+
+The pre-0.7.27 directive *"Cite items by their concept id when citing"* required emitting opaque ids like `concept:iw9rd1zsai2y2wmlqv2a` — useless to humans, so the model either ignored the directive (no audit signal) or followed it and produced unreadable output. The grounding-trace observability gap was that `retrieval_outcome` (36k+ rows) tracked **lexical** overlap as a proxy for whether items were used, but had no **structural** citation signal — so dashboards couldn't distinguish "model used this and rephrased it" from "model ignored it but happened to mention a similar word."
+
+Adopting the Anthropic-Citations-API / Perplexity numbered-marker pattern: items are now rendered with `[#N]` prefixes (e.g. `[#3] [concept] (relevance: 67%) ...`); the directive tells the model to cite by `[#N]`; the substrate parses `[#N]` regex out of the response at Stop time and writes `cited: true` to the matching retrieval_outcome row.
+
+**Implementation:**
+- `user-prompt-submit.ts:38-42` — directive updated: *"Items are numbered [#N] — cite by index (e.g. [#3]) when grounding on them; the substrate maps the index back to the source."*
+- `graph-context.ts:744-810` — builds `idToIndex: Map<string, number>` from the dedup+sort by finalScore. Same `[#N]` is used in TOP HITS and per-section listings (one stable handle per item across both views).
+- `graph-context.ts:stageRetrieval` call — passes a `Map<number, string>` (1-based index → memory_id) alongside the items, so Stop has the lookup table at evaluation time.
+- `retrieval-quality.ts:stageRetrieval` — accepts optional `indexMap` parameter; persists alongside items on the per-turn `_pendingRetrieval` state.
+- `retrieval-quality.ts:evaluateRetrieval` — runs `responseText.matchAll(/\[#(\d+)\]/g)`, maps indices back via `indexMap`, writes `cited: bool` and `citation_method: 'index' | 'none'` to each `retrieval_outcome` row when an indexMap was provided.
+- `retrieval-quality.ts:getLastTurnGroundingTrace` — new helper. Returns `{ injected, cited, ignored_high_salience }` from the last turn's retrieval_outcome rows. Foundation for the upcoming Reflexion-style "you ignored item X" feedback loop (deferred to 0.7.27.x).
+
+**Schema:** SCHEMALESS so no DEFINE FIELD changes; `cited` and `citation_method` start appearing on rows after this release ships.
+
+### Tests
+- New `test/citation-grounding.test.ts` — 4 cases pinning the citation parser: hits + misses + idempotency on duplicate citations + back-compat for legacy callers without indexMap.
+- 566 tests pass (was 562 + 4).
+
+### Out of scope (deferred to 0.7.27.x or 0.7.28)
+- Reflexion-style "last turn you ignored 3 high-salience items" injection in BEHAVIORAL DIRECTIVES — `getLastTurnGroundingTrace` is wired but the cognitive-check inject path is a separate change.
+- Lexical-fallback `citation_method='lexical'` for items the model paraphrased without [#N] — the existing `utilization` lexical signal stays separate; only [#N] sets `cited=true` for now.
+
 ## [0.7.26] — 2026-04-30
 
 ### Fixed (cross-project bleed — context-grounding plan phase 1)

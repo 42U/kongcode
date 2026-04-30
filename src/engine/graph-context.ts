@@ -741,6 +741,17 @@ async function formatContextMessage(
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
   });
 
+  // 0.7.27: build a per-turn index map [#N] → memory_id, sorted by finalScore
+  // descending. The same item shows up in both TOP HITS and a per-section
+  // listing — both reference the same [#N] so the model has one stable
+  // citation handle per item. Returned out via stageRetrieval so Stop can
+  // parse [#N] from the response.
+  const idIndexed = [...nodes]
+    .sort((a, b) => (b.finalScore ?? 0) - (a.finalScore ?? 0))
+    .map((n, i) => ({ id: String(n.id), index: i + 1 }));
+  const idToIndex = new Map<string, number>();
+  for (const { id, index } of idIndexed) idToIndex.set(id, index);
+
   // TOP HITS — hoist the highest-scoring items across all sections to the
   // top of the block. The section breakdown below still includes them, so
   // this is intentionally redundant: duplication is the point. Without this,
@@ -759,7 +770,9 @@ async function formatContextMessage(
       let text = n.text ?? "";
       if (text.length > MAX_ITEM_CHARS) text = text.slice(0, MAX_ITEM_CHARS) + "... [truncated]";
       const age = n.timestamp ? ` [${formatRelativeTime(n.timestamp)}]` : "";
-      return `  - [${key}]${score}${age} ${text}`;
+      const idx = idToIndex.get(String(n.id));
+      const idxTag = idx != null ? `[#${idx}] ` : "";
+      return `  - ${idxTag}[${key}]${score}${age} ${text}`;
     });
     sections.push(
       `TOP HITS (highest relevance — read these first, ground your response on them before any tool call):\n${lines.join("\n")}`,
@@ -789,7 +802,9 @@ async function formatContextMessage(
         text = text.replace(/^\[(user|assistant)\] /, "[past_$1] ");
       }
       const age = n.timestamp ? ` [${formatRelativeTime(n.timestamp)}]` : "";
-      return `  - ${text}${score}${via}${age}`;
+      const idx = idToIndex.get(String(n.id));
+      const idxTag = idx != null ? `[#${idx}] ` : "";
+      return `  - ${idxTag}${text}${score}${via}${age}`;
     });
     sections.push(`${label}:\n${formatted.join("\n")}`);
   }
@@ -1243,7 +1258,16 @@ async function graphTransformInner(
             contextNodes.filter((n) => n.table === "concept" || n.table === "memory").map((n) => n.id),
           ).catch(e => swallow.warn("graph-context:bumpAccess", e));
         }
-        stageRetrieval(session.sessionId, contextNodes, queryVec);
+        // 0.7.27: build the [#N] → memory_id map from the final ordered list and
+    // hand it to stageRetrieval so Stop's evaluateRetrieval can parse [#N]
+    // citations out of the assistant response.
+    {
+      const stageIndexMap = new Map<number, string>();
+      [...contextNodes]
+        .sort((a, b) => (b.finalScore ?? 0) - (a.finalScore ?? 0))
+        .forEach((n, i) => stageIndexMap.set(i + 1, String(n.id)));
+      stageRetrieval(session.sessionId, contextNodes, queryVec, stageIndexMap);
+    }
 
         const skillCtx = cached.skills.length > 0 ? formatSkillContext(cached.skills) : "";
         const reflCtx = cached.reflections.length > 0 ? formatReflectionContext(cached.reflections) : "";
@@ -1329,7 +1353,16 @@ async function graphTransformInner(
       store.bumpAccessCounts(retrievedIds).catch(e => swallow.warn("graph-context:bumpAccess", e));
     }
 
-    stageRetrieval(session.sessionId, contextNodes, queryVec);
+    // 0.7.27: build the [#N] → memory_id map from the final ordered list and
+    // hand it to stageRetrieval so Stop's evaluateRetrieval can parse [#N]
+    // citations out of the assistant response.
+    {
+      const stageIndexMap = new Map<number, string>();
+      [...contextNodes]
+        .sort((a, b) => (b.finalScore ?? 0) - (a.finalScore ?? 0))
+        .forEach((n, i) => stageIndexMap.set(i + 1, String(n.id)));
+      stageRetrieval(session.sessionId, contextNodes, queryVec, stageIndexMap);
+    }
 
     // Skill retrieval
     let skillContext = "";

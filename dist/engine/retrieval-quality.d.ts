@@ -25,12 +25,19 @@ interface QualitySignals {
     recency: number;
 }
 export declare function getStagedItems(): RetrievedItem[];
-export declare function stageRetrieval(sessionId: string, items: RetrievedItem[], queryEmbedding?: number[]): void;
+export declare function stageRetrieval(sessionId: string, items: RetrievedItem[], queryEmbedding?: number[], indexMap?: Map<number, string>): void;
 export declare function recordToolOutcome(success: boolean): void;
 /**
  * Evaluate retrieval quality after assistant response.
  */
 export declare function evaluateRetrieval(responseTurnId: string, responseText: string, store: SurrealStore): Promise<void>;
+/** 0.7.27: count how many high-salience items the assistant ignored last
+ *  turn. Used by cognitive-check to inject a Reflexion-style nudge. */
+export declare function getLastTurnGroundingTrace(sessionId: string, store: SurrealStore): Promise<{
+    injected: number;
+    cited: number;
+    ignored_high_salience: string[];
+} | null>;
 export declare function computeSignals(item: RetrievedItem, responseLower: string, toolSuccess: boolean | null): QualitySignals;
 export declare function getHistoricalUtilityBatch(ids: string[], store?: SurrealStore): Promise<Map<string, number>>;
 export declare function getRecentUtilizationAvg(sessionId: string, windowSize?: number, store?: SurrealStore): Promise<number | null>;
