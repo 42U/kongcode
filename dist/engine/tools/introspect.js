@@ -363,23 +363,65 @@ async function backfillDerivedFromAction(state) {
        AND array::len(->derived_from->?) = 0`);
     let daemonFixed = 0;
     let missingTask = 0;
+    // 0.7.39: synthesize placeholder tasks per unique session_id whose
+    // session row doesn't exist (pre-kongcode-substrate import residue).
+    // One task per session, reused across all orphan concepts from that
+    // session. Cached via the session→task map so re-runs find the
+    // existing placeholder rather than creating duplicates.
+    const placeholderTasks = new Map(); // sid → taskId
+    let synthesizedTasks = 0;
+    let synthesizedEdges = 0;
     for (const o of daemonOrphans) {
         const sid = String(o.source).slice(7); // strip "daemon:"
         // Look up session row by kc_session_id; if found, traverse to task.
         const taskRows = await store.queryFirst(`SELECT (->session_task->task[0].id) AS task_id
        FROM session
        WHERE kc_session_id = $sid LIMIT 1`, { sid });
-        const taskId = taskRows[0]?.task_id;
+        let taskId = taskRows[0]?.task_id;
         if (!taskId) {
-            missingTask++;
-            continue;
+            // Path 3: session row doesn't exist — synthesize a placeholder
+            // task for this session_id (cached so all orphans from the same
+            // session reuse it). Idempotent: look up first by description
+            // pattern, only create if missing.
+            const cached = placeholderTasks.get(sid);
+            if (cached) {
+                taskId = cached;
+            }
+            else {
+                const placeholderDesc = `[pre-substrate import] session ${sid}`;
+                const existing = await store.queryFirst(`SELECT id FROM task WHERE description = $desc LIMIT 1`, { desc: placeholderDesc });
+                if (existing.length > 0) {
+                    taskId = String(existing[0].id);
+                    placeholderTasks.set(sid, taskId);
+                }
+                else {
+                    try {
+                        taskId = await store.createTask(placeholderDesc);
+                        placeholderTasks.set(sid, taskId);
+                        synthesizedTasks++;
+                    }
+                    catch {
+                        missingTask++;
+                        continue;
+                    }
+                }
+            }
+            try {
+                await store.relate(String(o.id), "derived_from", String(taskId));
+                synthesizedEdges++;
+            }
+            catch {
+                relateFailed++;
+            }
         }
-        try {
-            await store.relate(String(o.id), "derived_from", String(taskId));
-            daemonFixed++;
-        }
-        catch {
-            relateFailed++;
+        else {
+            try {
+                await store.relate(String(o.id), "derived_from", String(taskId));
+                daemonFixed++;
+            }
+            catch {
+                relateFailed++;
+            }
         }
     }
     const lines = [];
@@ -389,7 +431,9 @@ async function backfillDerivedFromAction(state) {
     lines.push(`Gem edges created:         ${fixed}`);
     lines.push(`Missing source artifact:   ${missingArtifact}`);
     lines.push(`Daemon orphans found:      ${daemonOrphans.length}`);
-    lines.push(`Daemon edges created:      ${daemonFixed}`);
+    lines.push(`Daemon edges (resolved):   ${daemonFixed}`);
+    lines.push(`Daemon edges (synth task): ${synthesizedEdges}`);
+    lines.push(`Synthesized placeholders:  ${synthesizedTasks}`);
     lines.push(`Missing source task:       ${missingTask}`);
     lines.push(`RELATE failed (total):     ${relateFailed}`);
     if (unmatched.length > 0) {
@@ -403,6 +447,7 @@ async function backfillDerivedFromAction(state) {
         details: {
             orphans: gemOrphans.length, fixed, missingArtifact, relateFailed,
             daemonOrphans: daemonOrphans.length, daemonFixed, missingTask,
+            synthesizedTasks, synthesizedEdges,
         },
     };
 }

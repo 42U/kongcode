@@ -8,6 +8,29 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.39] — 2026-04-30
+
+### Added — placeholder-task synthesis for pre-substrate import orphans
+
+After v0.7.38's daemon-orphan repair recovered 67 of 206 concepts, 139 remained whose source `daemon:<sessionid>` referenced sessions that don't exist in this DB at all (pre-kongcode-substrate import residue from old kongbrain/whatsapp gateway data). User chose option 2 (synthesize placeholders) over option 1 (leave-as-is) — restoring edge structure rather than carrying the gap forward.
+
+`backfill_derived_from` migrate sub-mode now adds Path 3:
+- For each unique `daemon:<sessionid>` that has no resolvable session row, look up an existing placeholder task by `description = "[pre-substrate import] session <sid>"`.
+- If none exists, `createTask(description)` and cache the new id keyed by sid.
+- RELATE the orphan concept→derived_from→placeholder_task.
+- Reused placeholder per session (cached in-memory + idempotent DB lookup), so re-runs find existing rows.
+
+Report adds two new lines:
+```
+Daemon edges (synth task): N    ← edges via synthesized placeholder
+Synthesized placeholders:  N    ← unique placeholder tasks created
+```
+
+This is genuinely structural cleanup: the 139 orphans now have a `derived_from` edge to a task whose description self-documents its origin (`[pre-substrate import] session ...`). Future provenance queries hit the canonical edge instead of returning empty.
+
+### Tests
+- 596 pass.
+
 ## [0.7.38] — 2026-04-30
 
 ### Fixed — daemon-extracted concept orphans (forward + retroactive)
