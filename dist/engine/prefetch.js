@@ -79,7 +79,7 @@ function extractKeyTerms(input) {
         .join(" ");
 }
 // --- Prefetching ---
-export async function prefetchContext(queries, sessionId, embeddings, store) {
+export async function prefetchContext(queries, sessionId, embeddings, store, projectId) {
     if (!embeddings.isAvailable() || !store.isAvailable())
         return;
     if (queries.length === 0)
@@ -90,7 +90,7 @@ export async function prefetchContext(queries, sessionId, embeddings, store) {
             const queryVec = await embeddings.embed(query);
             const results = await store.vectorSearch(queryVec, sessionId, {
                 turn: 5, identity: 2, concept: 3, memory: 3, artifact: 2,
-            });
+            }, false, projectId);
             const topIds = results
                 .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
                 .slice(0, 5)
@@ -108,7 +108,7 @@ export async function prefetchContext(queries, sessionId, embeddings, store) {
             }
             const [skills, reflections] = await Promise.all([
                 findRelevantSkills(queryVec, 2, store).catch(() => []),
-                retrieveReflections(queryVec, 2, store).catch(() => []),
+                retrieveReflections(queryVec, 2, store, projectId).catch(() => []),
             ]);
             warmCache.set(query, {
                 queryVec,

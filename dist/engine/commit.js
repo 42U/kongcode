@@ -48,7 +48,7 @@ async function commitConcept(deps, data) {
         }
     }
     // 2. Upsert the concept row (provenance passed through when supplied).
-    const conceptId = await store.upsertConcept(data.name, embedding, data.source, data.provenance);
+    const conceptId = await store.upsertConcept(data.name, embedding, data.source, data.provenance, data.projectId);
     let edges = 0;
     // 3. Link source → concept via the requested edge, if caller provided one.
     if (data.sourceId && data.edgeName) {
@@ -103,7 +103,7 @@ async function commitMemory(deps, data) {
     }
     // 2. Insert the memory row. createMemory signature is
     //    (text, embedding, importance, category, sessionId?).
-    const memoryId = await store.createMemory(data.text, embedding, data.importance, data.category, data.sessionId);
+    const memoryId = await store.createMemory(data.text, embedding, data.importance, data.category, data.sessionId, data.projectId);
     let edges = 0;
     // 3. Auto-seal: memory → concepts (about_concept) by semantic similarity.
     //    Previously this linking was only done inside the dormant memory-daemon;
@@ -136,7 +136,7 @@ async function commitArtifact(deps, data) {
         }
     }
     // Insert the artifact row.
-    const artifactId = await store.createArtifact(data.path, data.type, data.description, embedding);
+    const artifactId = await store.createArtifact(data.path, data.type, data.description, embedding, data.projectId);
     let edges = 0;
     // Auto-seal: artifact → concepts (artifact_mentions) by similarity.
     // Previously only the dormant memory-daemon did this for artifact writes;

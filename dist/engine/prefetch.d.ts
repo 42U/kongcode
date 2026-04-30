@@ -20,7 +20,7 @@ export declare function getPrefetchHitRate(): {
     hitRate: number;
 };
 export declare function predictQueries(input: string, intent: IntentCategory): string[];
-export declare function prefetchContext(queries: string[], sessionId: string, embeddings: EmbeddingService, store: SurrealStore): Promise<void>;
+export declare function prefetchContext(queries: string[], sessionId: string, embeddings: EmbeddingService, store: SurrealStore, projectId?: string): Promise<void>;
 export interface CachedContext {
     results: VectorSearchResult[];
     skills: Skill[];

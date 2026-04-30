@@ -45,6 +45,10 @@ export interface CommitConceptData {
     linkRelated?: boolean;
     /** Precomputed embedding vector. Skip embed() if provided. */
     precomputedVec?: number[] | null;
+    /** 0.7.26: project this concept belongs to (denormalized for fast retrieval
+     *  filter). Caller passes session.projectId. NONE-on-write means cross-
+     *  project visibility under the soft filter. */
+    projectId?: string;
 }
 export interface CommitMemoryData {
     kind: "memory";
@@ -60,6 +64,8 @@ export interface CommitMemoryData {
     linkConcepts?: boolean;
     /** Precomputed embedding vector. Skip embed() if provided. */
     precomputedVec?: number[] | null;
+    /** 0.7.26: project scope — see CommitConceptData.projectId. */
+    projectId?: string;
 }
 export interface CommitArtifactData {
     kind: "artifact";
@@ -73,6 +79,8 @@ export interface CommitArtifactData {
     linkConcepts?: boolean;
     /** Precomputed embedding vector. Skip embed() if provided. */
     precomputedVec?: number[] | null;
+    /** 0.7.26: project scope — see CommitConceptData.projectId. */
+    projectId?: string;
 }
 export type CommitData = CommitConceptData | CommitMemoryData | CommitArtifactData;
 export interface CommitResult {

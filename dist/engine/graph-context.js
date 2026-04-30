@@ -1092,7 +1092,7 @@ tier0FromWrapper = []) {
         // Vector search + tag-boosted retrieval (cache miss path, run in parallel)
         recordPrefetchMiss();
         const [vectorResultsRaw, tagResults] = await Promise.all([
-            store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive()),
+            store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive(), session.projectId || undefined),
             store.tagBoostedConcepts(queryText, queryVec, 10).catch(e => { swallow.warn("graph-context:tagBoost", e); return []; }),
         ]);
         // Filter out the user's just-stored turn(s): vector search would otherwise
@@ -1175,7 +1175,7 @@ tier0FromWrapper = []) {
         // Reflection retrieval
         let reflectionContext = "";
         try {
-            const reflections = await retrieveReflections(queryVec, 5, store);
+            const reflections = await retrieveReflections(queryVec, 5, store, session.projectId || undefined);
             if (reflections.length > 0)
                 reflectionContext = formatReflectionContext(reflections);
         }

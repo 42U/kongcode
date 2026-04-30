@@ -138,6 +138,7 @@ export async function upsertAndLinkConcepts(
           sourceId,
           edgeName,
           source: logTag,
+          projectId: opts?.projectId,
         },
       );
 

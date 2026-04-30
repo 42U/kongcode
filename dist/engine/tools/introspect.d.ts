@@ -86,6 +86,21 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
             type: "text";
             text: string;
         }[];
+        details: {
+            concepts: {
+                found: number;
+                fixed: number;
+            };
+            memories: {
+                found: number;
+                fixed: number;
+            };
+        };
+    } | {
+        content: {
+            type: "text";
+            text: string;
+        }[];
         details: import("../workspace-migrate.js").MigrationResult;
     } | {
         content: {

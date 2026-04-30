@@ -1,0 +1,12 @@
+#V2
+DEFINE NAMESPACE kctest;
+USE NS kctest;
+DEFINE DATABASE m;
+USE DB m;
+DEFINE TABLE concept SCHEMALESS;
+DEFINE TABLE task SCHEMALESS;
+DEFINE TABLE artifact SCHEMALESS;
+DEFINE TABLE subagent SCHEMALESS;
+-- Now the under-test line: OVERWRITE on a relation that doesn't exist yet
+DEFINE TABLE OVERWRITE derived_from TYPE RELATION IN concept|subagent OUT task|artifact;
+INFO FOR TABLE derived_from;

@@ -259,8 +259,13 @@ export class SurrealStore {
         }
     }
     // ── Vector search ──────────────────────────────────────────────────────
-    /** Multi-table cosine similarity search across turns, concepts, memories, artifacts, monologues, and identity chunks. Returns merged results sorted by score. */
-    async vectorSearch(vec, sessionId, limits = {}, withEmbeddings = false) {
+    /** Multi-table cosine similarity search across turns, concepts, memories, artifacts, monologues, and identity chunks. Returns merged results sorted by score.
+     *
+     * 0.7.26: optional projectId scopes concept/memory/artifact retrieval. Soft
+     * filter: rows without project_id (pre-migration) still surface, items with
+     * scope='global' always surface, items with project_id matching $pid surface.
+     * Pass undefined for cross-project retrieval (legacy behavior). */
+    async vectorSearch(vec, sessionId, limits = {}, withEmbeddings = false, projectId) {
         const lim = {
             turn: limits.turn ?? 20,
             identity: limits.identity ?? 10,
@@ -276,6 +281,11 @@ export class SurrealStore {
         const crossTurnLim = Math.ceil(lim.turn * 0.3);
         const archiveTurnLim = Math.max(1, lim.turn - sessionTurnLim - crossTurnLim);
         const emb = withEmbeddings ? ", embedding" : "";
+        // 0.7.26 project scope filter (soft: NONE allowed for back-compat with
+        // pre-migration rows). Empty string when no projectId provided.
+        const projectFilter = projectId
+            ? ` AND (project_id IS NONE OR project_id = $pid OR scope = 'global')`
+            : "";
         // Batch all 8 vector searches into a single round-trip (limits inlined — per-table)
         const stmts = [
             `SELECT id, text, role, timestamp, 0 AS accessCount, 'turn' AS table,
@@ -297,17 +307,17 @@ export class SurrealStore {
             `SELECT id, content AS text, stability AS importance, access_count AS accessCount,
               created_at AS timestamp, 'concept' AS table,
               vector::similarity::cosine(embedding, $vec) AS score${emb}
-       FROM concept WHERE embedding != NONE AND array::len(embedding) > 0
+       FROM concept WHERE embedding != NONE AND array::len(embedding) > 0${projectFilter}
        ORDER BY score DESC LIMIT ${lim.concept}`,
             `SELECT id, text, importance, access_count AS accessCount,
               created_at AS timestamp, session_id AS sessionId, 'memory' AS table,
               vector::similarity::cosine(embedding, $vec) AS score${emb}
        FROM memory WHERE embedding != NONE AND array::len(embedding) > 0
-         AND (status = 'active' OR status IS NONE) ORDER BY score DESC LIMIT ${lim.memory}`,
+         AND (status = 'active' OR status IS NONE)${projectFilter} ORDER BY score DESC LIMIT ${lim.memory}`,
             `SELECT id, description AS text, 0 AS accessCount,
               created_at AS timestamp, 'artifact' AS table,
               vector::similarity::cosine(embedding, $vec) AS score${emb}
-       FROM artifact WHERE embedding != NONE AND array::len(embedding) > 0
+       FROM artifact WHERE embedding != NONE AND array::len(embedding) > 0${projectFilter}
        ORDER BY score DESC LIMIT ${lim.artifact}`,
             `SELECT id, content AS text, category AS source, 0.5 AS importance, 0 AS accessCount,
               timestamp, 'monologue' AS table,
@@ -322,7 +332,10 @@ export class SurrealStore {
         ];
         let batchResults;
         try {
-            batchResults = await this.queryBatch(stmts, { vec, sid: sessionId });
+            const bindings = { vec, sid: sessionId };
+            if (projectId)
+                bindings.pid = projectId;
+            batchResults = await this.queryBatch(stmts, bindings);
         }
         catch (e) {
             swallow.warn("surreal:vectorSearch:batch", e);
@@ -674,16 +687,21 @@ export class SurrealStore {
         }
     }
     // ── Concept / Memory / Artifact CRUD ───────────────────────────────────
-    async upsertConcept(content, embedding, source, provenance) {
+    async upsertConcept(content, embedding, source, provenance, projectId) {
         if (!content?.trim())
             return "";
         content = content.trim();
         const rows = await this.queryFirst(`SELECT id FROM concept WHERE string::lowercase(content) = string::lowercase($content) LIMIT 1`, { content });
         if (rows.length > 0) {
             const id = String(rows[0].id);
-            // Backfill embedding if the existing concept is missing one
+            // Backfill embedding if the existing concept is missing one. Also
+            // backfill project_id if missing (0.7.26 — concepts created pre-project-
+            // scoping won't have it; first re-touch fills it in).
             if (embedding?.length) {
-                await this.queryExec(`UPDATE ${id} SET access_count += 1, last_accessed = time::now(), embedding = IF embedding IS NONE OR array::len(embedding) = 0 THEN $emb ELSE embedding END`, { emb: embedding });
+                await this.queryExec(`UPDATE ${id} SET access_count += 1, last_accessed = time::now(), embedding = IF embedding IS NONE OR array::len(embedding) = 0 THEN $emb ELSE embedding END${projectId ? ", project_id = IF project_id IS NONE THEN $pid ELSE project_id END" : ""}`, projectId ? { emb: embedding, pid: projectId } : { emb: embedding });
+            }
+            else if (projectId) {
+                await this.queryExec(`UPDATE ${id} SET access_count += 1, last_accessed = time::now(), project_id = IF project_id IS NONE THEN $pid ELSE project_id END`, { pid: projectId });
             }
             else {
                 await this.queryExec(`UPDATE ${id} SET access_count += 1, last_accessed = time::now()`);
@@ -696,17 +714,21 @@ export class SurrealStore {
             record.embedding = emb;
         if (provenance)
             record.provenance = provenance;
+        if (projectId)
+            record.project_id = projectId;
         const created = await this.queryFirst(`CREATE concept CONTENT $record RETURN id`, { record });
         return String(created[0]?.id ?? "");
     }
-    async createArtifact(path, type, description, embedding) {
+    async createArtifact(path, type, description, embedding, projectId) {
         const record = { path, type, description };
         if (embedding?.length)
             record.embedding = embedding;
+        if (projectId)
+            record.project_id = projectId;
         const rows = await this.queryFirst(`CREATE artifact CONTENT $record RETURN id`, { record });
         return String(rows[0]?.id ?? "");
     }
-    async createMemory(text, embedding, importance, category, sessionId) {
+    async createMemory(text, embedding, importance, category, sessionId, projectId) {
         const source = category ?? "general";
         if (embedding?.length) {
             const dupes = await this.queryFirst(`SELECT id, importance,
@@ -728,6 +750,8 @@ export class SurrealStore {
             record.embedding = embedding;
         if (sessionId)
             record.session_id = sessionId;
+        if (projectId)
+            record.project_id = projectId;
         const rows = await this.queryFirst(`CREATE memory CONTENT $record RETURN id`, { record });
         return String(rows[0]?.id ?? "");
     }

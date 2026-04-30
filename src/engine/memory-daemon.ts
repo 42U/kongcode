@@ -152,7 +152,7 @@ export async function writeExtractionResults(
         if (embeddings.isAvailable()) {
           try { emb = await embeddings.embed(c.content); } catch (e) { swallow("daemon:embedConcept", e); }
         }
-        const conceptId = await store.upsertConcept(c.content, emb, `daemon:${sessionId}`);
+        const conceptId = await store.upsertConcept(c.content, emb, `daemon:${sessionId}`, undefined, projectId);
         if (conceptId) {
           extractedConceptIds.push(conceptId);
           await linkConceptHierarchy(conceptId, c.name, store, embeddings, "daemon:concept");
@@ -253,7 +253,7 @@ export async function writeExtractionResults(
         if (embeddings.isAvailable()) {
           try { emb = await embeddings.embed(text); } catch (e) { swallow("daemon:embedCorrection", e); }
         }
-        const memId = await store.createMemory(text, emb, 9, "correction", sessionId);
+        const memId = await store.createMemory(text, emb, 9, "correction", sessionId, projectId);
         if (memId) {
           await linkToRelevantConcepts(memId, "about_concept", text, store, embeddings, "daemon:correction:about_concept", 5, 0.65, emb);
         }
@@ -272,7 +272,7 @@ export async function writeExtractionResults(
         if (embeddings.isAvailable()) {
           try { emb = await embeddings.embed(text); } catch (e) { swallow("daemon:embedPreference", e); }
         }
-        const memId = await store.createMemory(text, emb, 7, "preference", sessionId);
+        const memId = await store.createMemory(text, emb, 7, "preference", sessionId, projectId);
         if (memId) {
           await linkToRelevantConcepts(memId, "about_concept", text, store, embeddings, "daemon:preference:about_concept", 5, 0.65, emb);
         }
@@ -293,7 +293,7 @@ export async function writeExtractionResults(
         if (embeddings.isAvailable()) {
           try { emb = await embeddings.embed(`${a.path} ${desc}`); } catch (e) { swallow("daemon:embedArtifact", e); }
         }
-        const artId = await store.createArtifact(a.path, a.action ?? "modified", desc, emb);
+        const artId = await store.createArtifact(a.path, a.action ?? "modified", desc, emb, projectId);
         if (artId) {
           await linkToRelevantConcepts(artId, "artifact_mentions", `${a.path} ${desc}`, store, embeddings, "daemon:artifact:artifact_mentions", 5, 0.65, emb);
           // used_in: artifact → project
@@ -317,7 +317,7 @@ export async function writeExtractionResults(
         if (embeddings.isAvailable()) {
           try { emb = await embeddings.embed(text); } catch (e) { swallow("daemon:embedDecision", e); }
         }
-        const memId = await store.createMemory(text, emb, 7, "decision", sessionId);
+        const memId = await store.createMemory(text, emb, 7, "decision", sessionId, projectId);
         if (memId) {
           await linkToRelevantConcepts(memId, "about_concept", text, store, embeddings, "daemon:decision:about_concept", 5, 0.65, emb);
         }

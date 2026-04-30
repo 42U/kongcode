@@ -113,6 +113,7 @@ export async function upsertAndLinkConcepts(sourceId, edgeName, text, store, emb
                 sourceId,
                 edgeName,
                 source: logTag,
+                projectId: opts?.projectId,
             });
             if (conceptId) {
                 // Outgoing task/project relations aren't part of generic auto-seal;

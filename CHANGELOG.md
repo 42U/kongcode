@@ -8,6 +8,34 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.26] — 2026-04-30
+
+### Fixed (cross-project bleed — context-grounding plan phase 1)
+
+Retrieval was global by default — `vectorSearch` and `retrieveReflections` had **zero project-scoped WHERE clauses**, so `<reflection_context>` and recall blocks routinely injected lessons from unrelated projects (finance/trading, WhatsApp tooling, heartbeat polls) into kongcode-engineering turns. ICLR 2025 ("Long-Context LLMs Meet RAG") confirms cross-domain hard negatives hurt accuracy more than no retrieval at all. The substrate already had project pillars (`session.projectId` populated at session-start, `relevant_to`/`used_in` edges) — the retriever just wasn't honoring them.
+
+**Read path:**
+- `surreal.ts:vectorSearch` — accepts optional `projectId`; soft filter `(project_id IS NONE OR project_id = $pid OR scope = 'global')` applied to concept, memory, artifact subqueries. NONE-on-row preserves pre-migration data.
+- `reflection.ts:retrieveReflections` — accepts `projectId`; filters by `session_id IN (SELECT id FROM session WHERE project_id = $pid)` traversal on top of direct project_id/scope match.
+- `graph-context.ts:1261, 1347` — pipes `session.projectId` into both calls.
+- `prefetch.ts:prefetchContext` — accepts `projectId`; piped through to vectorSearch + retrieveReflections.
+- `context-engine.ts:301` — passes `session.projectId` to prefetchContext.
+
+**Write path (denormalize project_id field):**
+- `surreal.ts:upsertConcept/createMemory/createArtifact` — accept `projectId`, write `project_id` field on CREATE. Concept upsert path also backfills the field on re-touch when missing.
+- `commit.ts:CommitConceptData/MemoryData/ArtifactData` — `projectId?: string` added to all three; piped to store.
+- `concept-extract.ts:133` — passes `opts.projectId` to commitKnowledge.
+- `memory-daemon.ts` — 5 sites updated (3× createMemory + 1× createArtifact + 1× upsertConcept) pass `projectId`.
+
+**Backfill:**
+- New `introspect.action=migrate, filter=backfill_project_id` sub-mode. Concepts: derives from outgoing `->relevant_to->project` edge. Memories: traverses `memory.session_id → session.project_id`. Idempotent — only touches rows where `project_id IS NONE`.
+
+**Soft-launch semantics:** the WHERE filter accepts `project_id IS NONE` so pre-migration rows still surface (no regression). Once `backfill_project_id` runs, NONE rows are limited to truly unscoped data (bootstrap directives intended as global). A future release can tighten the filter once `scope='global'` tagging is mature.
+
+### Tests
+- New `test/project-scoped-retrieval.test.ts` — 4 cases pinning the backfill migration: concept-edge backfill, memory-session-traversal backfill, idempotency, broken-edge tolerance.
+- 562 tests pass (was 558 + 4).
+
 ## [0.7.25] — 2026-04-30
 
 ### Fixed

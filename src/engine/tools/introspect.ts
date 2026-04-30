@@ -83,9 +83,9 @@ const introspectSchema = Type.Object({
     Type.Literal("query"),
     Type.Literal("migrate"),
     Type.Literal("trends"),
-  ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (default: ingest workspace .md files; filter=backfill_derived_from to repair pre-0.7.23 orphan provenance edges — ask user first), trends (daily rolling means + anomaly flags from orchestrator_metrics_daily)." }),
+  ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (default: ingest workspace .md files; filter=backfill_derived_from for pre-0.7.23 orphan provenance, filter=backfill_project_id for pre-0.7.26 unscoped concepts/memories — ask user first), trends (daily rolling means + anomaly flags from orchestrator_metrics_daily)." }),
   table: Type.Optional(Type.String({ description: "Table name for count/query actions." })),
-  filter: Type.Optional(Type.String({ description: "For count: active, inactive, recent_24h, with_embedding, unresolved. For query: template name. For migrate: backfill_derived_from to repair concept→artifact provenance edges that the pre-0.7.23 schema rejected." })),
+  filter: Type.Optional(Type.String({ description: "For count: active, inactive, recent_24h, with_embedding, unresolved. For query: template name. For migrate: backfill_derived_from (pre-0.7.23 orphan edges) or backfill_project_id (pre-0.7.26 missing project scope on concepts/memories)." })),
   record_id: Type.Optional(Type.String({ description: "Record ID for verify action (e.g. memory:abc123)." })),
 });
 
@@ -302,6 +302,9 @@ async function migrateAction(state: GlobalPluginState, filter?: string) {
   if (filter === "backfill_derived_from") {
     return await backfillDerivedFromAction(state);
   }
+  if (filter === "backfill_project_id") {
+    return await backfillProjectIdAction(state);
+  }
   const { store, embeddings, workspaceDir } = state;
   if (!workspaceDir) {
     return {
@@ -389,6 +392,67 @@ async function backfillDerivedFromAction(state: GlobalPluginState) {
   return {
     content: [{ type: "text" as const, text: lines.join("\n") }],
     details: { orphans: orphans.length, fixed, missingArtifact, relateFailed },
+  };
+}
+
+// 0.7.26: backfill `project_id` field on concepts and memories created before
+// project-scoped retrieval landed. Concepts: derive from existing
+// ->relevant_to->project edge. Memories: derive from session.project_id of
+// the originating session (memory.session_id → session.project_id).
+// Idempotent — only updates rows where project_id IS NONE.
+async function backfillProjectIdAction(state: GlobalPluginState) {
+  const { store } = state;
+
+  // Concepts: id, project_id from outgoing relevant_to edge
+  const conceptRows = await store.queryFirst<{ id: string; project_id: string }>(
+    `SELECT id, ->relevant_to->project[0].id AS project_id
+     FROM concept
+     WHERE project_id IS NONE
+       AND ->relevant_to->project[0] IS NOT NONE`,
+  );
+  let conceptsFixed = 0;
+  for (const row of conceptRows) {
+    if (!row.project_id) continue;
+    try {
+      await store.queryExec(
+        `UPDATE ${row.id} SET project_id = $pid`,
+        { pid: row.project_id },
+      );
+      conceptsFixed++;
+    } catch { /* skip */ }
+  }
+
+  // Memories: id, project_id from session.project_id
+  const memoryRows = await store.queryFirst<{ id: string; project_id: string }>(
+    `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+     FROM memory
+     WHERE project_id IS NONE AND session_id IS NOT NONE`,
+  );
+  let memoriesFixed = 0;
+  for (const row of memoryRows) {
+    if (!row.project_id) continue;
+    try {
+      await store.queryExec(
+        `UPDATE ${row.id} SET project_id = $pid`,
+        { pid: row.project_id },
+      );
+      memoriesFixed++;
+    } catch { /* skip */ }
+  }
+
+  const lines: string[] = [];
+  lines.push("BACKFILL project_id");
+  lines.push("═══════════════════════════════════");
+  lines.push(`Concept rows backfilled:  ${conceptsFixed} / ${conceptRows.length}`);
+  lines.push(`Memory rows backfilled:   ${memoriesFixed} / ${memoryRows.length}`);
+  lines.push("");
+  lines.push("Re-runnable: only updates rows where project_id IS NONE.");
+  return {
+    content: [{ type: "text" as const, text: lines.join("\n") }],
+    details: {
+      concepts: { found: conceptRows.length, fixed: conceptsFixed },
+      memories: { found: memoryRows.length, fixed: memoriesFixed },
+    },
   };
 }
 

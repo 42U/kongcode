@@ -41,6 +41,7 @@ describe("commitKnowledge — concept kind", () => {
       expect.any(Array),
       "test",
       undefined,
+      undefined,
     );
   });
 
@@ -86,7 +87,7 @@ describe("commitKnowledge — concept kind", () => {
       precomputedVec: vec,
     });
     expect(state.embeddings.embed).not.toHaveBeenCalled();
-    expect(state.store.upsertConcept).toHaveBeenCalledWith("with-vec", vec, "test", undefined);
+    expect(state.store.upsertConcept).toHaveBeenCalledWith("with-vec", vec, "test", undefined, undefined);
   });
 
   it("still commits the concept row even when linking fails", async () => {
@@ -119,6 +120,7 @@ describe("commitKnowledge — memory kind", () => {
       7,
       "preference",
       "session:s1",
+      undefined,
     );
   });
 
@@ -161,7 +163,7 @@ describe("commitKnowledge — memory kind", () => {
     });
     expect(state.embeddings.embed).not.toHaveBeenCalled();
     expect(state.store.createMemory).toHaveBeenCalledWith(
-      "precomputed case", vec, 5, "test", undefined,
+      "precomputed case", vec, 5, "test", undefined, undefined,
     );
   });
 });
@@ -181,6 +183,7 @@ describe("commitKnowledge — artifact kind", () => {
       "file",
       "Edit: refactored to use jwt lib",
       expect.any(Array),
+      undefined,
     );
   });
 

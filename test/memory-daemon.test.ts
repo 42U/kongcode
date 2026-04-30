@@ -125,6 +125,7 @@ describe("writeExtractionResults", () => {
       9, // importance = 9 (highest for corrections)
       "correction",
       "session:s1",
+      undefined,
     );
   });
 
@@ -201,6 +202,7 @@ describe("writeExtractionResults", () => {
       7, // importance
       "preference",
       "session:s1",
+      undefined,
     );
   });
 
@@ -254,6 +256,7 @@ describe("writeExtractionResults", () => {
       7,
       "decision",
       "session:s1",
+      undefined,
     );
   });
 
@@ -342,7 +345,7 @@ describe("writeExtractionResults", () => {
     expect(embeddings.embed).not.toHaveBeenCalled();
     // upsertConcept called with null embedding
     expect(store.upsertConcept).toHaveBeenCalledWith(
-      "works without embeddings", null, "daemon:session:s1",
+      "works without embeddings", null, "daemon:session:s1", undefined, undefined,
     );
   });
 

@@ -298,7 +298,7 @@ export class KongCodeContextEngine {
           if (worthEmbedding && session.currentConfig) {
             const predicted = predictQueries(text, (session.currentConfig.intent ?? "general") as import("./intent.js").IntentCategory);
             if (predicted.length > 0) {
-              prefetchContext(predicted, session.sessionId, embeddings, store)
+              prefetchContext(predicted, session.sessionId, embeddings, store, session.projectId || undefined)
                 .catch(e => swallow("ingest:prefetch", e));
             }
           }

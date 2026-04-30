@@ -109,6 +109,7 @@ export async function prefetchContext(
   sessionId: string,
   embeddings: EmbeddingService,
   store: SurrealStore,
+  projectId?: string,
 ): Promise<void> {
   if (!embeddings.isAvailable() || !store.isAvailable()) return;
   if (queries.length === 0) return;
@@ -121,7 +122,7 @@ export async function prefetchContext(
 
       const results = await store.vectorSearch(queryVec, sessionId, {
         turn: 5, identity: 2, concept: 3, memory: 3, artifact: 2,
-      });
+      }, false, projectId);
 
       const topIds = results
         .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
@@ -139,7 +140,7 @@ export async function prefetchContext(
 
       const [skills, reflections] = await Promise.all([
         findRelevantSkills(queryVec, 2, store).catch(() => [] as Skill[]),
-        retrieveReflections(queryVec, 2, store).catch(() => [] as Reflection[]),
+        retrieveReflections(queryVec, 2, store, projectId).catch(() => [] as Reflection[]),
       ]);
 
       warmCache.set(query, {

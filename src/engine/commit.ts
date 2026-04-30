@@ -55,6 +55,10 @@ export interface CommitConceptData {
   linkRelated?: boolean;
   /** Precomputed embedding vector. Skip embed() if provided. */
   precomputedVec?: number[] | null;
+  /** 0.7.26: project this concept belongs to (denormalized for fast retrieval
+   *  filter). Caller passes session.projectId. NONE-on-write means cross-
+   *  project visibility under the soft filter. */
+  projectId?: string;
 }
 
 export interface CommitMemoryData {
@@ -71,6 +75,8 @@ export interface CommitMemoryData {
   linkConcepts?: boolean;
   /** Precomputed embedding vector. Skip embed() if provided. */
   precomputedVec?: number[] | null;
+  /** 0.7.26: project scope — see CommitConceptData.projectId. */
+  projectId?: string;
 }
 
 export interface CommitArtifactData {
@@ -85,6 +91,8 @@ export interface CommitArtifactData {
   linkConcepts?: boolean;
   /** Precomputed embedding vector. Skip embed() if provided. */
   precomputedVec?: number[] | null;
+  /** 0.7.26: project scope — see CommitConceptData.projectId. */
+  projectId?: string;
 }
 
 // Future kinds will extend this union:
@@ -141,7 +149,7 @@ async function commitConcept(
   }
 
   // 2. Upsert the concept row (provenance passed through when supplied).
-  const conceptId = await store.upsertConcept(data.name, embedding, data.source, data.provenance);
+  const conceptId = await store.upsertConcept(data.name, embedding, data.source, data.provenance, data.projectId);
   let edges = 0;
 
   // 3. Link source → concept via the requested edge, if caller provided one.
@@ -209,6 +217,7 @@ async function commitMemory(
     data.importance,
     data.category,
     data.sessionId,
+    data.projectId,
   );
   let edges = 0;
 
@@ -254,6 +263,7 @@ async function commitArtifact(
     data.type,
     data.description,
     embedding,
+    data.projectId,
   );
   let edges = 0;
 

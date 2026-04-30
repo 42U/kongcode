@@ -91,7 +91,12 @@ export declare class SurrealStore {
      */
     queryBatch<T = any>(statements: string[], bindings?: Record<string, unknown>): Promise<T[][]>;
     private safeQuery;
-    /** Multi-table cosine similarity search across turns, concepts, memories, artifacts, monologues, and identity chunks. Returns merged results sorted by score. */
+    /** Multi-table cosine similarity search across turns, concepts, memories, artifacts, monologues, and identity chunks. Returns merged results sorted by score.
+     *
+     * 0.7.26: optional projectId scopes concept/memory/artifact retrieval. Soft
+     * filter: rows without project_id (pre-migration) still surface, items with
+     * scope='global' always surface, items with project_id matching $pid surface.
+     * Pass undefined for cross-project retrieval (legacy behavior). */
     vectorSearch(vec: number[], sessionId: string, limits?: {
         turn?: number;
         identity?: number;
@@ -99,7 +104,7 @@ export declare class SurrealStore {
         memory?: number;
         artifact?: number;
         monologue?: number;
-    }, withEmbeddings?: boolean): Promise<VectorSearchResult[]>;
+    }, withEmbeddings?: boolean, projectId?: string): Promise<VectorSearchResult[]>;
     upsertTurn(turn: TurnRecord): Promise<string>;
     getSessionTurns(sessionId: string, limit?: number): Promise<{
         role: string;
@@ -166,9 +171,9 @@ export declare class SurrealStore {
     tagBoostedConcepts(queryText: string, queryVec: number[], limit?: number): Promise<VectorSearchResult[]>;
     graphExpand(nodeIds: string[], queryVec: number[], hops?: number): Promise<VectorSearchResult[]>;
     bumpAccessCounts(ids: string[]): Promise<void>;
-    upsertConcept(content: string, embedding: number[] | null, source?: string, provenance?: ConceptProvenance): Promise<string>;
-    createArtifact(path: string, type: string, description: string, embedding: number[] | null): Promise<string>;
-    createMemory(text: string, embedding: number[] | null, importance: number, category?: string, sessionId?: string): Promise<string>;
+    upsertConcept(content: string, embedding: number[] | null, source?: string, provenance?: ConceptProvenance, projectId?: string): Promise<string>;
+    createArtifact(path: string, type: string, description: string, embedding: number[] | null, projectId?: string): Promise<string>;
+    createMemory(text: string, embedding: number[] | null, importance: number, category?: string, sessionId?: string, projectId?: string): Promise<string>;
     createMonologue(sessionId: string, category: string, content: string, embedding: number[] | null): Promise<string>;
     getAllCoreMemory(tier?: number): Promise<CoreMemoryEntry[]>;
     createCoreMemory(text: string, category: string, priority: number, tier: number, sessionId?: string): Promise<string>;

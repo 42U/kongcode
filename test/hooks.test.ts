@@ -317,6 +317,7 @@ describe("createAfterToolCallHandler", () => {
       "/src/foo.ts", "ts",
       expect.stringContaining("File created"),
       expect.any(Array),
+      undefined,
     );
   });
 
@@ -337,6 +338,7 @@ describe("createAfterToolCallHandler", () => {
       "/src/bar.py", "py",
       expect.stringContaining("File edited"),
       expect.any(Array),
+      undefined,
     );
   });
 

@@ -45,8 +45,14 @@ export declare function shouldReflect(metrics: ReflectionMetrics): {
 export declare function generateReflection(sessionId: string, store: SurrealStore, embeddings: EmbeddingService, surrealSessionId?: string): Promise<void>;
 /**
  * Vector search on the reflection table.
+ *
+ * 0.7.26: optional projectId scopes reflections to those originating from
+ * sessions in the same project (or marked scope='global'). Reflections are
+ * session-keyed and sessions are project-keyed via task_part_of, so we filter
+ * by traversing reflection.session_id → session.project_id. Soft filter:
+ * reflections without a resolvable project still surface (back-compat).
  */
-export declare function retrieveReflections(queryVec: number[], limit?: number, store?: SurrealStore): Promise<Reflection[]>;
+export declare function retrieveReflections(queryVec: number[], limit?: number, store?: SurrealStore, projectId?: string): Promise<Reflection[]>;
 /**
  * Format reflections as a context block for the LLM.
  */
