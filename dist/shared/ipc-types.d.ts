@@ -128,6 +128,12 @@ export interface MetaHealthResponse {
          *  "I'm the only attached client" from "I'm the only attached client
          *  with identity, but there could be anonymous siblings". */
         clients?: ClientInfo[];
+        /** Reranker subsystem status (0.7.22+). True when bge-reranker-v2-m3
+         *  cross-encoder is loaded and recall pipeline runs the rerank stage.
+         *  False = recall falls back to WMR/ACAN-only scoring (model missing
+         *  or KONGCODE_RERANKER_DISABLED=1). Lets callers verify the 98.2% R@5
+         *  retrieve-then-rerank pipeline is actually live. */
+        rerankerActive?: boolean;
     };
 }
 export interface MetaRequestSupersedeRequest {

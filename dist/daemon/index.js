@@ -54,10 +54,10 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
-import { initReranker, disposeReranker } from "../engine/graph-context.js";
+import { initReranker, disposeReranker, isRerankerActive } from "../engine/graph-context.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.21";
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.21"). Returns negative/0/positive
+const DAEMON_VERSION = "0.7.22";
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.22"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a, b) {
@@ -331,9 +331,9 @@ async function main() {
     });
     // ── Meta handlers (always available, no bootstrap dependency) ──
     server.register("meta.handshake", async (params, ctx) => {
-        // Register caller identity if provided. Pre-0.7.21 clients send empty
+        // Register caller identity if provided. Pre-0.7.22 clients send empty
         // params and stay anonymous (still counted in activeClients but absent
-        // from the per-client registry). 0.7.21+ clients send {clientInfo}.
+        // from the per-client registry). 0.7.22+ clients send {clientInfo}.
         const p = params ?? {};
         if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
             ctx.registerIdentity(p.clientInfo);
@@ -348,9 +348,16 @@ async function main() {
         return resp;
     });
     server.register("meta.health", async () => {
+        // Decorate the base server stats with daemon-owned subsystem health
+        // (reranker, future: ACAN, embeddings) so callers can verify init
+        // succeeded without inferring from RSS or grepping logs.
+        const baseStats = server.getStats();
         const resp = {
             ok: true,
-            stats: server.getStats(),
+            stats: {
+                ...baseStats,
+                rerankerActive: isRerankerActive(),
+            },
         };
         return resp;
     });

@@ -49,7 +49,9 @@ export async function initReranker(modelPath: string): Promise<void> {
     });
     const model = await llama.loadModel({ modelPath });
     _rankingCtx = await model.createRankingContext();
-    log.info("[rerank] Cross-encoder reranker loaded.");
+    // Promoted to warn-level so it's visible at the default KONGCODE_LOG_LEVEL.
+    // Operationally important to confirm the cross-encoder is actually live.
+    log.warn("[rerank] Cross-encoder reranker loaded.");
   } catch (e) {
     swallow.warn("graph-context:initReranker failed — retrieval will work without reranking", e);
     _rankingCtx = null;
