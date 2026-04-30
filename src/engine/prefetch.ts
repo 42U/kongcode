@@ -13,6 +13,7 @@ import { findRelevantSkills, type Skill } from "./skills.js";
 import { retrieveReflections, type Reflection } from "./reflection.js";
 import type { IntentCategory } from "./intent.js";
 import { swallow } from "./errors.js";
+import { isRerankerActive } from "./graph-context.js";
 
 // --- Types ---
 
@@ -22,6 +23,10 @@ interface CacheEntry {
   skills: Skill[];
   reflections: Reflection[];
   timestamp: number;
+  /** v0.7.34: reranker state at time of cache write. Cache hits where the
+   *  reranker has since flipped (online ↔ offline) are rejected — the
+   *  rendered band tags wouldn't match what the current pipeline emits. */
+  rerankerWasActive: boolean;
 }
 
 // --- LRU Cache ---
@@ -149,6 +154,7 @@ export async function prefetchContext(
         skills,
         reflections,
         timestamp: Date.now(),
+        rerankerWasActive: isRerankerActive(),
       });
     } catch (e) {
       swallow("prefetch:query", e);
@@ -179,10 +185,16 @@ export interface CachedContext {
 export function getCachedContext(queryVec: number[]): CachedContext | null {
   evictStale();
 
+  // v0.7.34: cache hits where reranker state has flipped since write are
+  // rejected. A cached result from an offline-reranker turn won't have band
+  // tags; serving it now (when online) would mismatch the directive.
+  const currentRerankerActive = isRerankerActive();
+
   let bestMatch: CacheEntry | null = null;
   let bestSim = 0;
 
   for (const [, entry] of warmCache) {
+    if (entry.rerankerWasActive !== currentRerankerActive) continue;
     const sim = cosineSimilarity(queryVec, entry.queryVec);
     if (sim > bestSim) { bestSim = sim; bestMatch = entry; }
   }

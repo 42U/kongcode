@@ -8,9 +8,13 @@ const SILENT_LOG = {
   error: () => {},
 };
 
-/** Helper: pick an ephemeral TCP port to avoid conflicts in parallel tests. */
+/** Helper: pick an ephemeral TCP port to avoid conflicts in parallel tests.
+ *  v0.7.34: range tightened to 49152-65535 (IANA dynamic/private range).
+ *  Windows CI restricts permission on ports below 49152 — listen EACCES on
+ *  e.g. 30000-49152 in win32-x64 sandboxed runners. Using the canonical
+ *  ephemeral range is portable across linux/macOS/Windows. */
 function ephemeralPort(): number {
-  return 30000 + Math.floor(Math.random() * 30000);
+  return 49152 + Math.floor(Math.random() * (65535 - 49152));
 }
 
 /** Send a line-delimited JSON-RPC request and resolve when one response

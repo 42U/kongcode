@@ -9,6 +9,7 @@
 import { findRelevantSkills } from "./skills.js";
 import { retrieveReflections } from "./reflection.js";
 import { swallow } from "./errors.js";
+import { isRerankerActive } from "./graph-context.js";
 // --- LRU Cache ---
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const MAX_CACHE_SIZE = 10;
@@ -116,6 +117,7 @@ export async function prefetchContext(queries, sessionId, embeddings, store, pro
                 skills,
                 reflections,
                 timestamp: Date.now(),
+                rerankerWasActive: isRerankerActive(),
             });
         }
         catch (e) {
@@ -138,9 +140,15 @@ function cosineSimilarity(a, b) {
 }
 export function getCachedContext(queryVec) {
     evictStale();
+    // v0.7.34: cache hits where reranker state has flipped since write are
+    // rejected. A cached result from an offline-reranker turn won't have band
+    // tags; serving it now (when online) would mismatch the directive.
+    const currentRerankerActive = isRerankerActive();
     let bestMatch = null;
     let bestSim = 0;
     for (const [, entry] of warmCache) {
+        if (entry.rerankerWasActive !== currentRerankerActive)
+            continue;
         const sim = cosineSimilarity(queryVec, entry.queryVec);
         if (sim > bestSim) {
             bestSim = sim;

@@ -8,6 +8,29 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.34] — 2026-04-30
+
+### Fixed (release-process correction + 3 deferred items closed)
+
+The v0.7.33 release was reported as "shipped, pre-push tests passed" but the win32-x64 CI job failed on a flaky `daemon-server` test. **Process correction**: pre-push test pass is necessary but not sufficient — CI must also be green before declaring a release done. Saved this as a high-importance correction memory.
+
+#### CI fix — Windows ephemeral port range
+`test/daemon-server.test.ts:12` — `ephemeralPort()` was returning `30000-60000`. Windows CI runners restrict permission on TCP ports below 49152 (the IANA dynamic/private range start). Tightened to `49152-65535`. Verified stable across 3 consecutive local runs.
+
+#### Prefetch cache key includes reranker state (deferred from v0.7.28)
+`prefetch.ts` — `CacheEntry.rerankerWasActive` field added. `getCachedContext` rejects hits where reranker state has flipped since cache write. A cached entry from an offline-reranker turn would have no band tags; serving it when the reranker is online would mismatch the directive's contract.
+
+#### Set rebuild consolidation in graph expand (deferred from prior audit)
+`graph-context.ts:1383-1397` — collapsed 3 nested `new Set()` allocations (`existingIds`, `neighborIds`, `allExisting`) into a single accumulator that grows in-place. Behavior identical, fewer allocations on the hot path.
+
+### Out of scope (legitimately data-quality, not code)
+- WMR-distribution-derived bands when the reranker is offline — the reranker is currently online (`rerankerActive: true` confirmed), so this fallback is unused. Will revisit only if the reranker stops loading.
+- `~270` unbackfilled memories + `~40` reflections — orphan `session_id` strings that don't resolve via either record-ref OR `kc_session_id`. These reference sessions that were purged before any DB row was written. Not a code path; tagging them `scope='global'` would be opinionated and might hide rather than help.
+
+### Tests
+- 593/593 pass locally (vitest run).
+- Daemon-server test re-run 3× consecutively, stable.
+
 ## [0.7.33] — 2026-04-30
 
 ### Fixed (production-readiness sweep — 3 silent gaps)

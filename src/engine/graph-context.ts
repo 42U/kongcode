@@ -1380,20 +1380,33 @@ async function graphTransformInner(
     const graphHops = DEEP_INTENTS.has(currentIntent) ? 2 : 1;
 
     // Graph expand + causal traversal run in parallel (both depend only on topIds)
-    let neighborIds = new Set<string>();
+    // 0.7.34: collapsed 3 nested Set rebuilds (existingIds, neighborIds,
+    // allExisting) into a single accumulator that grows as results land.
+    // Each filter pass uses the same Set; new ids are added in-place via
+    // the for-of loops. Behavior identical, fewer allocations.
     let neighborResults: VectorSearchResult[] = [];
     let causalResults: VectorSearchResult[] = [];
+    const seen = new Set<string>(results.map((r) => r.id));
+    const neighborIds = new Set<string>();
     if (topIds.length > 0) {
-      const existingIds = new Set(results.map((r) => r.id));
       const [expandResult, causalResult] = await Promise.all([
         store.graphExpand(topIds, queryVec, graphHops).catch(e => { swallow.error("graph-context:graphExpand", e); return [] as VectorSearchResult[]; }),
         queryVec ? queryCausalContext(topIds, queryVec, 2, 0.4, store).catch(e => { swallow("graph-context:causal", e); return [] as VectorSearchResult[]; }) : Promise.resolve([] as VectorSearchResult[]),
       ]);
-      neighborResults = expandResult.filter((n) => !existingIds.has(n.id));
-      neighborIds = new Set(neighborResults.map((n) => n.id));
-      const allExisting = new Set([...existingIds, ...neighborResults.map((r) => r.id)]);
-      causalResults = causalResult.filter((c) => !allExisting.has(c.id));
-      for (const c of causalResults) { neighborIds.add(c.id); }
+      for (const n of expandResult) {
+        if (!seen.has(n.id)) {
+          neighborResults.push(n);
+          neighborIds.add(n.id);
+          seen.add(n.id);
+        }
+      }
+      for (const c of causalResult) {
+        if (!seen.has(c.id)) {
+          causalResults.push(c);
+          neighborIds.add(c.id);
+          seen.add(c.id);
+        }
+      }
     }
 
     // Combine, filter, score
