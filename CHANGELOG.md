@@ -8,6 +8,11 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.25] — 2026-04-30
+
+### Fixed
+- **Phantom failed MCP server entry in `/mcp`.** `.mcp.json` lived at the repo root, where Claude Code's project-level MCP auto-discovery picked it up *in addition to* the plugin loader. The project-context spawn failed because `${CLAUDE_PLUGIN_ROOT}` only resolves inside plugin context — node got the literal string and threw `ENOENT`. Plugin-context loading still worked (which is why MCP tool calls succeeded), but `/mcp` showed a phantom failed entry every session and Claude Code attempted a doomed second spawn. Moved `.mcp.json` → `.claude-plugin/mcp.json` so only the plugin manifest sees it. Updated `plugin.json` `mcpServers` ref accordingly. Removed redundant `.mcp.json` entry from `package.json` `files` list (the new path is included via the existing `.claude-plugin/` entry).
+
 ## [0.7.24] — 2026-04-30
 
 ### Added

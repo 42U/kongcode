@@ -1,9 +1,9 @@
 {
   "name": "kongcode",
-  "version": "0.7.24",
+  "version": "0.7.25",
   "description": "Graph-backed persistent memory engine with SurrealDB + BGE-M3 embeddings. Gives Claude Code permanent memory that learns across sessions.",
   "author": {
     "name": "VoidOrigin"
   },
-  "mcpServers": "./.mcp.json"
+  "mcpServers": "./.claude-plugin/mcp.json"
 }
