@@ -33,6 +33,11 @@ interface Manifest {
     url: string;
     sha256: string | null;
   };
+  rerankerModel?: {
+    name: string;
+    url: string;
+    sha256: string | null;
+  };
   nodeLlamaCpp?: {
     version: string;
     mainTarballUrl: string;
@@ -52,6 +57,7 @@ export interface BootstrapResult {
   surrealBinary: { path: string; provisioned: boolean; sizeBytes: number };
   surrealServer: { url: string; pid: number | null; managed: boolean };
   embeddingModel: { path: string; provisioned: boolean; sizeBytes: number };
+  rerankerModel: { path: string | null; provisioned: boolean; sizeBytes: number; skipped: boolean };
   nodeLlamaCpp: { mainPath: string | null; provisioned: boolean };
   ajv: { provisioned: boolean; nodeModulesDir: string | null };
   totalDurationMs: number;
@@ -62,6 +68,8 @@ export interface BootstrapInput {
   cacheDir: string;
   dataDir: string;
   modelPath: string;
+  rerankerModelPath?: string;
+  rerankerEnabled?: boolean;
   surrealBinPathOverride: string | null;
   surrealUrlOverride: string | undefined;
   surrealUser: string;
@@ -408,6 +416,38 @@ async function ensureEmbeddingModel(
   return { path: modelPath, provisioned: true, sizeBytes: dl.sizeBytes };
 }
 
+async function ensureRerankerModel(
+  modelPath: string,
+  manifest: Manifest,
+  enabled: boolean,
+): Promise<{ path: string | null; provisioned: boolean; sizeBytes: number; skipped: boolean }> {
+  if (!enabled) {
+    log.info("[bootstrap] reranker disabled (KONGCODE_RERANKER_DISABLED=1) — skipping download");
+    return { path: null, provisioned: false, sizeBytes: 0, skipped: true };
+  }
+  if (!manifest.rerankerModel) {
+    log.warn("[bootstrap] no reranker entry in manifest — skipping download");
+    return { path: null, provisioned: false, sizeBytes: 0, skipped: true };
+  }
+  if (existsSync(modelPath)) {
+    return { path: modelPath, provisioned: false, sizeBytes: statSync(modelPath).size, skipped: false };
+  }
+  log.info(
+    `[bootstrap] Downloading bge-reranker-v2-m3 (~606MB, one-time): ${manifest.rerankerModel.url}`,
+  );
+  try {
+    const dl = await downloadFile(
+      manifest.rerankerModel.url,
+      modelPath,
+      manifest.rerankerModel.sha256,
+    );
+    return { path: modelPath, provisioned: true, sizeBytes: dl.sizeBytes, skipped: false };
+  } catch (e) {
+    log.warn(`[bootstrap] reranker download failed (recall will fall back to WMR/ACAN): ${(e as Error).message}`);
+    return { path: null, provisioned: false, sizeBytes: 0, skipped: true };
+  }
+}
+
 const SURREAL_PID_FILENAME = "surreal.pid";
 
 /** Tables that are unique to kongcode's schema — used as a fingerprint to
@@ -642,6 +682,11 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
   const nodeLlamaCpp = await ensureNodeLlamaCpp(input.cacheDir, manifest, input.pluginDir);
   const ajv = await ensureAjv(input.cacheDir, manifest, input.pluginDir);
   const embeddingModel = await ensureEmbeddingModel(input.modelPath, manifest);
+  const rerankerModel = await ensureRerankerModel(
+    input.rerankerModelPath ?? "",
+    manifest,
+    input.rerankerEnabled !== false && !!input.rerankerModelPath,
+  );
 
   // External-SurrealDB path: user explicitly opted out via SURREAL_URL.
   if (input.surrealUrlOverride) {
@@ -657,6 +702,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
         managed: false,
       },
       embeddingModel,
+      rerankerModel,
       nodeLlamaCpp,
       ajv,
       totalDurationMs: Date.now() - start,
@@ -693,6 +739,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
       surrealBinary,
       surrealServer: { url: existing.url, pid: existing.pid, managed: existing.pid !== null },
       embeddingModel,
+      rerankerModel,
       nodeLlamaCpp,
       ajv,
       totalDurationMs: Date.now() - start,
@@ -716,6 +763,7 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
     surrealBinary,
     surrealServer: { url, pid: managedSurreal.pid ?? null, managed: true },
     embeddingModel,
+    rerankerModel,
     nodeLlamaCpp,
     ajv,
     totalDurationMs: Date.now() - start,

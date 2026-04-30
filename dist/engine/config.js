@@ -47,6 +47,15 @@ export function parsePluginConfig(raw) {
                     : join(cacheDir, "models", "bge-m3-Q4_K_M.gguf")),
             dimensions: typeof embedding.dimensions === "number" ? embedding.dimensions : 1024,
         },
+        reranker: (() => {
+            const reranker = (raw?.reranker ?? {});
+            const enabled = process.env.KONGCODE_RERANKER_DISABLED !== "1";
+            const modelPath = process.env.RERANKER_MODEL_PATH ??
+                (typeof reranker.modelPath === "string"
+                    ? reranker.modelPath
+                    : join(cacheDir, "models", "bge-reranker-v2-m3-Q8_0.gguf"));
+            return { enabled, modelPath };
+        })(),
         thresholds: {
             daemonTokenThreshold: typeof thresholds.daemonTokenThreshold === "number" ? thresholds.daemonTokenThreshold : 4000,
             midSessionCleanupThreshold: typeof thresholds.midSessionCleanupThreshold === "number" ? thresholds.midSessionCleanupThreshold : 25_000,

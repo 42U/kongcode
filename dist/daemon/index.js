@@ -54,9 +54,10 @@ import { handlePostCompact } from "../hook-handlers/post-compact.js";
 import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent.js";
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
+import { initReranker, disposeReranker } from "../engine/graph-context.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.19";
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.19"). Returns negative/0/positive
+const DAEMON_VERSION = "0.7.20";
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.20"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a, b) {
@@ -103,6 +104,8 @@ async function initializeStack() {
                 cacheDir: config.paths.cacheDir,
                 dataDir: config.paths.dataDir,
                 modelPath: config.embedding.modelPath,
+                rerankerModelPath: config.reranker.modelPath,
+                rerankerEnabled: config.reranker.enabled,
                 surrealBinPathOverride: config.paths.surrealBinPath,
                 surrealUrlOverride: process.env.SURREAL_URL,
                 surrealUser: config.surreal.user,
@@ -148,6 +151,25 @@ async function initializeStack() {
     }
     catch (err) {
         log.error("[daemon] Embedding model failed — vector search disabled:", err);
+    }
+    // Cross-encoder reranker (bge-reranker-v2-m3). Optional — if the model file
+    // doesn't exist OR KONGCODE_RERANKER_DISABLED=1, recall falls back to
+    // WMR/ACAN scoring without reranking. The model file (~606MB) is
+    // downloaded by bootstrap when enabled. Same configuration that hit
+    // 98.2% R@5 on LongMemEval in kongclaw.
+    if (config.reranker.enabled) {
+        try {
+            const { existsSync } = await import("node:fs");
+            if (existsSync(config.reranker.modelPath)) {
+                await initReranker(config.reranker.modelPath);
+            }
+            else {
+                log.warn(`[daemon] reranker model not found at ${config.reranker.modelPath} — recall will use WMR/ACAN only`);
+            }
+        }
+        catch (err) {
+            log.error("[daemon] reranker init failed — recall will use WMR/ACAN only:", err);
+        }
     }
     // Start auto-drain scheduler — restores the auto-extraction behavior that
     // lived in the in-process MemoryDaemon before commit 4f7b962 removed the
@@ -309,9 +331,9 @@ async function main() {
     });
     // ── Meta handlers (always available, no bootstrap dependency) ──
     server.register("meta.handshake", async (params, ctx) => {
-        // Register caller identity if provided. Pre-0.7.19 clients send empty
+        // Register caller identity if provided. Pre-0.7.20 clients send empty
         // params and stay anonymous (still counted in activeClients but absent
-        // from the per-client registry). 0.7.19+ clients send {clientInfo}.
+        // from the per-client registry). 0.7.20+ clients send {clientInfo}.
         const p = params ?? {};
         if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
             ctx.registerIdentity(p.clientInfo);
@@ -445,6 +467,12 @@ async function main() {
                 log.warn(`[daemon] globalState.shutdown: ${e.message}`);
             }
         }
+        // Free the reranker's GGUF model from RAM before exit. If never loaded,
+        // this is a no-op.
+        try {
+            await disposeReranker();
+        }
+        catch { /* ignore */ }
         // Per 0.6.3 architecture: the SurrealDB child is detached and outlives
         // the daemon. Don't kill it here — that's the whole point of Option A.
         shutdownManagedSurreal(); // No-op by default; only acts on explicit force.

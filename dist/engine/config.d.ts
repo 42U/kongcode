@@ -10,6 +10,16 @@ export interface EmbeddingConfig {
     modelPath: string;
     dimensions: number;
 }
+export interface RerankerConfig {
+    /** When false, recall skips the cross-encoder rerank stage entirely.
+     *  Disabled via KONGCODE_RERANKER_DISABLED=1 — the model file (~606MB) is
+     *  not downloaded, recall falls back to WMR/ACAN scoring. */
+    enabled: boolean;
+    /** Path to the bge-reranker-v2-m3 GGUF file. Default
+     *  <cacheDir>/models/bge-reranker-v2-m3-Q8_0.gguf, override via
+     *  RERANKER_MODEL_PATH env var. */
+    modelPath: string;
+}
 export interface ThresholdConfig {
     /** Tokens accumulated before daemon flushes extraction (default: 4000) */
     daemonTokenThreshold: number;
@@ -33,6 +43,7 @@ export interface PathsConfig {
 export interface KongCodeConfig {
     surreal: SurrealConfig;
     embedding: EmbeddingConfig;
+    reranker: RerankerConfig;
     thresholds: ThresholdConfig;
     paths: PathsConfig;
 }

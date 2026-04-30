@@ -18,6 +18,12 @@ export interface BootstrapResult {
         provisioned: boolean;
         sizeBytes: number;
     };
+    rerankerModel: {
+        path: string | null;
+        provisioned: boolean;
+        sizeBytes: number;
+        skipped: boolean;
+    };
     nodeLlamaCpp: {
         mainPath: string | null;
         provisioned: boolean;
@@ -33,6 +39,8 @@ export interface BootstrapInput {
     cacheDir: string;
     dataDir: string;
     modelPath: string;
+    rerankerModelPath?: string;
+    rerankerEnabled?: boolean;
     surrealBinPathOverride: string | null;
     surrealUrlOverride: string | undefined;
     surrealUser: string;

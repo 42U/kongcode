@@ -22,6 +22,81 @@ import { stageRetrieval, getHistoricalUtilityBatch } from "./retrieval-quality.j
 import { isACANActive, scoreWithACAN, type ACANCandidate } from "./acan.js";
 import { swallow } from "./errors.js";
 import { log } from "./log.js";
+import { getLlama, LlamaLogLevel, type LlamaRankingContext } from "node-llama-cpp";
+
+// ── Cross-encoder reranker (bge-reranker-v2-m3) ──────────────────────────────
+// Two-stage retrieve-then-rerank: BGE-M3 + WMR/ACAN produce top-N candidates,
+// then cross-encoder rescores with a full transformer forward pass per pair.
+// Ported verbatim from kongclaw/src/graph-context.ts (lines 59-78, 813-842) —
+// the configuration that hit 98.2% R@5 on LongMemEval.
+let _rankingCtx: LlamaRankingContext | null = null;
+const RERANK_TOP_N = 30;         // candidates to send to cross-encoder
+const RERANK_BLEND_VECTOR = 0.6; // WMR/ACAN weight in blend
+const RERANK_BLEND_CROSS = 0.4;  // cross-encoder weight in blend
+const RERANK_MAX_DOC_CHARS = 24000; // truncate long docs for reranker context window
+
+/** Initialize the cross-encoder reranker. Called once at daemon startup
+ *  (after EmbeddingService.initialize). Failures degrade gracefully —
+ *  retrieval still runs without reranking, just with WMR/ACAN scores. */
+export async function initReranker(modelPath: string): Promise<void> {
+  try {
+    const llama = await getLlama({
+      logLevel: LlamaLogLevel.error,
+      logger: (level, message) => {
+        if (message.includes("missing newline token")) return;
+        if (level === LlamaLogLevel.error) console.error(`[rerank] ${message}`);
+      },
+    });
+    const model = await llama.loadModel({ modelPath });
+    _rankingCtx = await model.createRankingContext();
+    log.info("[rerank] Cross-encoder reranker loaded.");
+  } catch (e) {
+    swallow.warn("graph-context:initReranker failed — retrieval will work without reranking", e);
+    _rankingCtx = null;
+  }
+}
+
+export async function disposeReranker(): Promise<void> {
+  if (_rankingCtx) {
+    try { await _rankingCtx.dispose(); } catch { /* ignore */ }
+    _rankingCtx = null;
+  }
+}
+
+export function isRerankerActive(): boolean { return _rankingCtx !== null; }
+
+/** Cross-encoder rerank stage. Takes the top-N candidates by WMR/ACAN score,
+ *  rescores each (query, doc) pair via a single batched call to the bge-reranker
+ *  model, blends the two signals 60/40 (WMR/cross), re-sorts the top-N, and
+ *  preserves the tail. Skipped when fewer than 5 candidates (cheap retrieval
+ *  doesn't need rerank) or when the reranker isn't loaded. */
+async function rerankResults<T extends { id: string; text?: string; finalScore: number }>(
+  deduped: T[],
+  queryText: string,
+): Promise<T[]> {
+  if (!_rankingCtx || deduped.length <= 5) return deduped;
+  try {
+    const topN = Math.min(RERANK_TOP_N, deduped.length);
+    const candidates = deduped.slice(0, topN);
+    const texts = candidates.map((r) => {
+      const text = r.text ?? "";
+      return text.length > RERANK_MAX_DOC_CHARS ? text.slice(0, RERANK_MAX_DOC_CHARS) : text;
+    });
+    const crossScores = await _rankingCtx.rankAll(queryText, texts);
+    for (let i = 0; i < candidates.length; i++) {
+      candidates[i].finalScore =
+        RERANK_BLEND_VECTOR * candidates[i].finalScore +
+        RERANK_BLEND_CROSS * crossScores[i];
+    }
+    candidates.sort((a, b) => b.finalScore - a.finalScore);
+    const rerankedSet = new Set(candidates.map((r) => r.id));
+    const tail = deduped.filter((r) => !rerankedSet.has(r.id));
+    return [...candidates, ...tail];
+  } catch (e) {
+    swallow.warn("graph-context:rerankResults failed — using WMR scores", e);
+    return deduped;
+  }
+}
 
 // ── Message type guards ────────────────────────────────────────────────────────
 
@@ -1156,7 +1231,8 @@ async function graphTransformInner(
       const filteredCached = cached.results.filter(r => !suppressed.has(r.id));
       const ranked = await scoreResults(filteredCached, new Set(), queryVec, store, currentIntent);
       const deduped = deduplicateResults(ranked);
-      let contextNodes = takeWithConstraints(deduped, tokenBudget, budgets.maxContextItems);
+      const reranked = await rerankResults(deduped, queryText);
+      let contextNodes = takeWithConstraints(reranked, tokenBudget, budgets.maxContextItems);
       contextNodes = await ensureRecentTurns(contextNodes, session.sessionId, store);
 
       if (contextNodes.length > 0) {
@@ -1234,7 +1310,8 @@ async function graphTransformInner(
 
     const ranked = await scoreResults(allResults, neighborIds, queryVec, store, currentIntent);
     const deduped = deduplicateResults(ranked);
-    let contextNodes = takeWithConstraints(deduped, tokenBudget, budgets.maxContextItems);
+    const reranked = await rerankResults(deduped, queryText);
+    let contextNodes = takeWithConstraints(reranked, tokenBudget, budgets.maxContextItems);
     contextNodes = await ensureRecentTurns(contextNodes, session.sessionId, store);
 
     if (contextNodes.length === 0) {
