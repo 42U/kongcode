@@ -8,6 +8,36 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.28] — 2026-04-30
+
+### Changed (reranker-calibrated salience bands — context-grounding plan phase 3)
+
+The pre-0.7.28 `(relevance: N%)` was the blended WMR/ACAN/cross score rendered as a percentage. Per GroGU (arxiv 2601.23129), raw retriever scores are weakly predictive of LLM grounding utility — and the percentage gave a false sense of precision. The cross-encoder (bge-reranker-v2-m3) is sigmoid-calibrated in [0,1], and >0.7 is a reliable threshold. Replacing the percentage with **three coarse bands** gives the model a stable anchor that survives embedder swaps and per-query distribution variance.
+
+**Bands (from cross-encoder score):**
+- `[load-bearing]` — score ≥ 0.7. Directive: must ground on these or explicitly note why not.
+- `[supporting]` — score 0.3–0.7. Directive: mention if directly applicable.
+- untagged (background) — score < 0.3. Directive: skip unless directly relevant; do not pad responses with these.
+- **dropped** — score < 0.15. Hard noise filter — the cross-encoder strongly disagreeing with the WMR upstream is signal that the item is irrelevant despite its embedding similarity.
+
+**Implementation:**
+- `graph-context.ts:rerankResults` — preserves raw `crossScore` and stamps `band` on each candidate (was: discarded after blend). Drops candidates below `BAND_DROP_BELOW`. Tail items (ranked 31+, never reached the cross-encoder) default to `band='background'`.
+- `graph-context.ts:bandFor` (new export) + `BAND_LOAD_BEARING_MIN`/`BAND_SUPPORTING_MIN`/`BAND_DROP_BELOW` constants.
+- `graph-context.ts:744-810` — TOP HITS and per-section listings render `[band]` tag instead of `(relevance: N%)` whenever the cross-encoder fired. Falls back to the percentage for legacy/no-rerank paths so the output stays self-explanatory if the reranker model is missing.
+- `user-prompt-submit.ts:38-50` — directive rewritten to explain bands and what action each warrants.
+
+**Why band > percentage:** the percentage is a blend that mixes WMR (vector + ACAN) with cross-encoder; calibration is opaque to the reader. The band reflects only the cross-encoder calibrated probability, which has stable semantics. The user (or future-Claude) reading "(relevance: 67%)" cannot tell whether 67% is high or low for this query; reading "[supporting]" carries the answer.
+
+### Tests
+- New `test/salience-bands.test.ts` — 4 cases pinning the band thresholds and constant coherence.
+- 570 tests pass (was 566 + 4).
+
+### Plan complete
+With phases 1 (project scope) + 2 (citation + grounding trace) + 3 (salience bands) shipped, the three context-grounding gaps the plan named on 2026-04-30 are all closed. Out of scope and tracked for follow-up:
+- Reflexion-style "last turn you ignored 3 high-salience items" inject (`getLastTurnGroundingTrace` is wired in 0.7.27; the cognitive-check directive emission path is the missing piece).
+- WMR-distribution-derived bands when the reranker isn't loaded (currently falls back to the percentage; could fall back to top-quartile/middle/bottom bands for consistent UX).
+- `citation_method='lexical'` for paraphrased items.
+
 ## [0.7.27] — 2026-04-30
 
 ### Added (citation pattern + grounding-trace observability — context-grounding plan phase 2)

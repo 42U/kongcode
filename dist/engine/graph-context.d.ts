@@ -15,6 +15,16 @@ import type { SessionState } from "./state.js";
 export declare function initReranker(modelPath: string): Promise<void>;
 export declare function disposeReranker(): Promise<void>;
 export declare function isRerankerActive(): boolean;
+/** 0.7.28: classify a cross-encoder sigmoid score [0,1] into a salience band.
+ *  Per GroGU (arxiv 2601.23129), raw scores are weakly predictive of LLM
+ *  grounding utility, but cross-encoder calibrated probabilities at >0.7
+ *  are reliable signal. Bands give the model a coarse anchor that survives
+ *  embedder swaps and per-query distribution variance. */
+export type SalienceBand = "load-bearing" | "supporting" | "background";
+export declare const BAND_LOAD_BEARING_MIN = 0.7;
+export declare const BAND_SUPPORTING_MIN = 0.3;
+export declare const BAND_DROP_BELOW = 0.15;
+export declare function bandFor(crossScore: number): SalienceBand;
 /** @internal Exported for testing. */
 export interface Budgets {
     conversation: number;

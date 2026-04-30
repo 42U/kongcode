@@ -67,12 +67,34 @@ export async function disposeReranker(): Promise<void> {
 
 export function isRerankerActive(): boolean { return _rankingCtx !== null; }
 
+/** 0.7.28: classify a cross-encoder sigmoid score [0,1] into a salience band.
+ *  Per GroGU (arxiv 2601.23129), raw scores are weakly predictive of LLM
+ *  grounding utility, but cross-encoder calibrated probabilities at >0.7
+ *  are reliable signal. Bands give the model a coarse anchor that survives
+ *  embedder swaps and per-query distribution variance. */
+export type SalienceBand = "load-bearing" | "supporting" | "background";
+export const BAND_LOAD_BEARING_MIN = 0.7;
+export const BAND_SUPPORTING_MIN = 0.3;
+export const BAND_DROP_BELOW = 0.15;
+
+export function bandFor(crossScore: number): SalienceBand {
+  if (crossScore >= BAND_LOAD_BEARING_MIN) return "load-bearing";
+  if (crossScore >= BAND_SUPPORTING_MIN) return "supporting";
+  return "background";
+}
+
 /** Cross-encoder rerank stage. Takes the top-N candidates by WMR/ACAN score,
  *  rescores each (query, doc) pair via a single batched call to the bge-reranker
  *  model, blends the two signals 60/40 (WMR/cross), re-sorts the top-N, and
  *  preserves the tail. Skipped when fewer than 5 candidates (cheap retrieval
- *  doesn't need rerank) or when the reranker isn't loaded. */
-async function rerankResults<T extends { id: string; text?: string; finalScore: number }>(
+ *  doesn't need rerank) or when the reranker isn't loaded.
+ *
+ *  0.7.28: also stamps `crossScore` and `band` on each reranked candidate so
+ *  the formatter can render salience tags ([load-bearing]/[supporting]/etc.)
+ *  instead of the noisy relevance percentage. Drops candidates below
+ *  BAND_DROP_BELOW (0.15) — the cross-encoder strongly disagreeing with WMR
+ *  is a hard noise filter. */
+async function rerankResults<T extends { id: string; text?: string; finalScore: number; crossScore?: number; band?: SalienceBand }>(
   deduped: T[],
   queryText: string,
 ): Promise<T[]> {
@@ -86,14 +108,23 @@ async function rerankResults<T extends { id: string; text?: string; finalScore: 
     });
     const crossScores = await _rankingCtx.rankAll(queryText, texts);
     for (let i = 0; i < candidates.length; i++) {
+      const cs = crossScores[i];
+      candidates[i].crossScore = cs;
+      candidates[i].band = bandFor(cs);
       candidates[i].finalScore =
         RERANK_BLEND_VECTOR * candidates[i].finalScore +
-        RERANK_BLEND_CROSS * crossScores[i];
+        RERANK_BLEND_CROSS * cs;
     }
-    candidates.sort((a, b) => b.finalScore - a.finalScore);
-    const rerankedSet = new Set(candidates.map((r) => r.id));
-    const tail = deduped.filter((r) => !rerankedSet.has(r.id));
-    return [...candidates, ...tail];
+    // Drop hard-noise (cross-encoder strongly disagrees) before re-sorting.
+    const survivors = candidates.filter((c) => (c.crossScore ?? 0) >= BAND_DROP_BELOW);
+    survivors.sort((a, b) => b.finalScore - a.finalScore);
+    const rerankedSet = new Set(survivors.map((r) => r.id));
+    const tail = deduped.filter((r) => !rerankedSet.has(r.id) && !candidates.some(c => c.id === r.id));
+    // Tail items never saw the cross-encoder — band them as 'background'.
+    for (const t of tail) {
+      if (t.band === undefined) t.band = "background";
+    }
+    return [...survivors, ...tail];
   } catch (e) {
     swallow.warn("graph-context:rerankResults failed — using WMR scores", e);
     return deduped;
@@ -766,13 +797,19 @@ async function formatContextMessage(
     const lines = topHits.map((n) => {
       const isCausal = n.source?.startsWith("causal_");
       const key = isCausal ? "causal" : n.table === "turn" ? "past_turns" : n.table;
-      const score = n.finalScore != null ? ` (relevance: ${(n.finalScore * 100).toFixed(0)}%)` : "";
+      // 0.7.28: prefer reranker-calibrated salience band over noisy
+      // relevance %. Only show band when cross-encoder fired (band set);
+      // fall back to relevance % for legacy/no-rerank paths.
+      const band = (n as any).band as string | undefined;
+      const scoreTag = band
+        ? ` [${band}]`
+        : (n.finalScore != null ? ` (relevance: ${(n.finalScore * 100).toFixed(0)}%)` : "");
       let text = n.text ?? "";
       if (text.length > MAX_ITEM_CHARS) text = text.slice(0, MAX_ITEM_CHARS) + "... [truncated]";
       const age = n.timestamp ? ` [${formatRelativeTime(n.timestamp)}]` : "";
       const idx = idToIndex.get(String(n.id));
       const idxTag = idx != null ? `[#${idx}] ` : "";
-      return `  - ${idxTag}[${key}]${score}${age} ${text}`;
+      return `  - ${idxTag}[${key}]${scoreTag}${age} ${text}`;
     });
     sections.push(
       `TOP HITS (highest relevance — read these first, ground your response on them before any tool call):\n${lines.join("\n")}`,
@@ -791,7 +828,11 @@ async function formatContextMessage(
     });
     const label = LABELS[key] ?? key;
     const formatted = items.map((n) => {
-      const score = n.finalScore != null ? ` (relevance: ${(n.finalScore * 100).toFixed(0)}%)` : "";
+      // 0.7.28: same band-vs-relevance logic as TOP HITS for consistency.
+      const band = (n as any).band as string | undefined;
+      const scoreTag = band
+        ? ` [${band}]`
+        : (n.finalScore != null ? ` (relevance: ${(n.finalScore * 100).toFixed(0)}%)` : "");
       const via = n.fromNeighbor ? " [via graph link]" : "";
       let text = n.text ?? "";
       // Truncate oversized items (claw-code: MAX_INSTRUCTION_FILE_CHARS pattern)
@@ -804,7 +845,7 @@ async function formatContextMessage(
       const age = n.timestamp ? ` [${formatRelativeTime(n.timestamp)}]` : "";
       const idx = idToIndex.get(String(n.id));
       const idxTag = idx != null ? `[#${idx}] ` : "";
-      return `  - ${idxTag}${text}${score}${via}${age}`;
+      return `  - ${idxTag}${text}${scoreTag}${via}${age}`;
     });
     sections.push(`${label}:\n${formatted.join("\n")}`);
   }
