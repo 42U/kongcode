@@ -111,6 +111,7 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
                 found: number;
                 fixed: number;
             };
+            globalsTagged: number;
         };
     } | {
         content: {

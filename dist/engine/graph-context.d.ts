@@ -25,6 +25,18 @@ export declare const BAND_LOAD_BEARING_MIN = 0.7;
 export declare const BAND_SUPPORTING_MIN = 0.3;
 export declare const BAND_DROP_BELOW = 0.15;
 export declare function bandFor(crossScore: number): SalienceBand;
+/** 0.7.35: distribution-derived bands when the cross-encoder is offline.
+ *  Computes quartiles within the current batch and assigns top quartile to
+ *  load-bearing, middle two to supporting, bottom quartile to background.
+ *  Only used when no item has a `band` set (rerank skipped or model
+ *  failed to load). The thresholds aren't calibrated, so the bands carry
+ *  weaker semantics than the cross-encoder version — but they're still
+ *  better than the noisy `(relevance: N%)` for giving the model a coarse
+ *  anchor. Mutates items in place. */
+export declare function applyDistributionBands<T extends {
+    finalScore?: number;
+    band?: SalienceBand;
+}>(items: T[]): void;
 /** @internal Exported for testing. */
 export interface Budgets {
     conversation: number;

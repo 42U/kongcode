@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bandFor, BAND_LOAD_BEARING_MIN, BAND_SUPPORTING_MIN, BAND_DROP_BELOW } from "../src/engine/graph-context.js";
+import { bandFor, BAND_LOAD_BEARING_MIN, BAND_SUPPORTING_MIN, BAND_DROP_BELOW, applyDistributionBands } from "../src/engine/graph-context.js";
 
 /** Regression for v0.7.28 reranker-calibrated salience bands.
  *
@@ -32,6 +32,44 @@ describe("bandFor — reranker score → salience band", () => {
     expect(bandFor(0.2)).toBe("background");
     expect(bandFor(BAND_DROP_BELOW)).toBe("background");
     expect(bandFor(0)).toBe("background");
+  });
+
+  it("0.7.35 applyDistributionBands: assigns bands by quartile when reranker is offline", () => {
+    // 8 items with known finalScores. Top 2 (>= q3) → load-bearing,
+    // middle 4 (>= q1) → supporting, bottom 2 → background.
+    const items = [
+      { finalScore: 0.95 }, { finalScore: 0.9 },
+      { finalScore: 0.7 }, { finalScore: 0.6 }, { finalScore: 0.5 }, { finalScore: 0.4 },
+      { finalScore: 0.2 }, { finalScore: 0.1 },
+    ] as Array<{ finalScore: number; band?: any }>;
+    applyDistributionBands(items);
+    // Top quartile (q3 cut at index 6 of sorted [0.1,0.2,0.4,0.5,0.6,0.7,0.9,0.95] = 0.9)
+    expect(items[0].band).toBe("load-bearing");
+    expect(items[1].band).toBe("load-bearing");
+    // Middle (q1 = 0.2 cut at index 2): 0.4, 0.5, 0.6, 0.7 → supporting
+    expect(items[2].band).toBe("supporting");
+    expect(items[3].band).toBe("supporting");
+    expect(items[4].band).toBe("supporting");
+    expect(items[5].band).toBe("supporting");
+    // Bottom: < q1
+    expect(items[6].band).toBe("background");
+    expect(items[7].band).toBe("background");
+  });
+
+  it("0.7.35 applyDistributionBands: no-op when rerank already stamped bands", () => {
+    const items = [
+      { finalScore: 0.5, band: "load-bearing" },
+      { finalScore: 0.1, band: "background" },
+    ] as Array<{ finalScore: number; band: any }>;
+    applyDistributionBands(items);
+    // Bands unchanged — function returns early when any band is set
+    expect(items[0].band).toBe("load-bearing");
+    expect(items[1].band).toBe("background");
+  });
+
+  it("0.7.35 applyDistributionBands: handles empty input", () => {
+    const items: Array<{ finalScore: number; band?: any }> = [];
+    expect(() => applyDistributionBands(items)).not.toThrow();
   });
 
   it("constants are coherent and match documented thresholds", () => {

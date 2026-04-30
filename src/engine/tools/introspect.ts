@@ -501,6 +501,29 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
      WHERE project_id IS NONE AND session_id IS NOT NONE`,
   );
 
+  // 7. 0.7.35: tag unrecoverable orphans as scope='global'. After all
+  //    traversal-based backfills above, any memory/reflection/skill row
+  //    still lacking project_id has a session_id that resolves to nothing
+  //    (purged session, malformed id). They already surface across projects
+  //    via the soft filter (project_id IS NONE) — tagging scope='global'
+  //    just makes the implicit-global behavior explicit and zeros out the
+  //    "unbackfilled" signal in the report. Retrieval behavior unchanged.
+  let globalsTagged = 0;
+  for (const table of ["memory", "reflection", "skill"]) {
+    try {
+      const rows = await store.queryFirst<{ id: string }>(
+        `SELECT id FROM type::table($t) WHERE project_id IS NONE AND (scope IS NONE OR scope != 'global')`,
+        { t: table },
+      );
+      for (const row of rows) {
+        try {
+          await store.queryExec(`UPDATE ${row.id} SET scope = 'global'`);
+          globalsTagged++;
+        } catch { /* skip */ }
+      }
+    } catch { /* skip table */ }
+  }
+
   const lines: string[] = [];
   lines.push("BACKFILL project_id");
   lines.push("═══════════════════════════════════");
@@ -510,6 +533,7 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
   lines.push(`Memory rows backfilled:      ${memories.fixed} / ${memories.found}`);
   lines.push(`Reflection rows backfilled:  ${reflections.fixed} / ${reflections.found}`);
   lines.push(`Skill rows backfilled:       ${skillsViaTask.fixed + skillsViaSession.fixed} / ${skillsViaTask.found + skillsViaSession.found}`);
+  lines.push(`Unrecoverable → scope=global: ${globalsTagged}`);
   lines.push("");
   lines.push("Re-runnable: only updates rows where project_id IS NONE.");
   return {
@@ -520,6 +544,7 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
         found: skillsViaTask.found + skillsViaSession.found,
         fixed: skillsViaTask.fixed + skillsViaSession.fixed,
       },
+      globalsTagged,
     },
   };
 }

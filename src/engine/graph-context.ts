@@ -83,6 +83,28 @@ export function bandFor(crossScore: number): SalienceBand {
   return "background";
 }
 
+/** 0.7.35: distribution-derived bands when the cross-encoder is offline.
+ *  Computes quartiles within the current batch and assigns top quartile to
+ *  load-bearing, middle two to supporting, bottom quartile to background.
+ *  Only used when no item has a `band` set (rerank skipped or model
+ *  failed to load). The thresholds aren't calibrated, so the bands carry
+ *  weaker semantics than the cross-encoder version — but they're still
+ *  better than the noisy `(relevance: N%)` for giving the model a coarse
+ *  anchor. Mutates items in place. */
+export function applyDistributionBands<T extends { finalScore?: number; band?: SalienceBand }>(items: T[]): void {
+  if (items.length === 0) return;
+  if (items.some(n => n.band !== undefined)) return; // rerank already ran
+  const scores = items.map(n => n.finalScore ?? 0).sort((a, b) => a - b);
+  const q1 = scores[Math.floor(scores.length * 0.25)];
+  const q3 = scores[Math.floor(scores.length * 0.75)];
+  for (const n of items) {
+    const s = n.finalScore ?? 0;
+    if (s >= q3) n.band = "load-bearing";
+    else if (s >= q1) n.band = "supporting";
+    else n.band = "background";
+  }
+}
+
 /** Cross-encoder rerank stage. Takes the top-N candidates by WMR/ACAN score,
  *  rescores each (query, doc) pair via a single batched call to the bge-reranker
  *  model, blends the two signals 60/40 (WMR/cross), re-sorts the top-N, and
@@ -1319,6 +1341,9 @@ async function graphTransformInner(
       const ranked = await scoreResults(filteredCached, new Set(), queryVec, store, currentIntent);
       const deduped = deduplicateResults(ranked);
       const reranked = await rerankResults(deduped, queryText);
+      // 0.7.35: distribution-derived bands when the cross-encoder didn't
+      // fire (offline/skipped). No-op when rerank already stamped bands.
+      applyDistributionBands(reranked);
       let contextNodes = takeWithConstraints(reranked, tokenBudget, budgets.maxContextItems);
       contextNodes = await ensureRecentTurns(contextNodes, session.sessionId, store);
 

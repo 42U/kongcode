@@ -8,6 +8,25 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.35] — 2026-04-30
+
+### Added — last two deferred items closed; deferred list now empty
+
+The user explicitly asked for 100% caught up — no more deferred actions. This release closes both remaining items.
+
+#### `applyDistributionBands` — WMR-distribution fallback when reranker offline
+`graph-context.ts` — new `applyDistributionBands()` helper. If `rerankResults` didn't fire (reranker model failed to load, batch too small to reach the rerank stage, etc.) and no item has a `band` set, derive bands from `finalScore` quartiles within the current batch: top quartile → `load-bearing`, middle two → `supporting`, bottom quartile → `background`. The thresholds aren't calibrated like the cross-encoder's, so the bands carry weaker semantics — but they still give the model a coarse anchor, which beats the noisy `(relevance: N%)` we were falling back to. Called after `rerankResults` in both recall paths (graph-context.ts:1343, 1444).
+
+#### Migration — `scope='global'` tagging for unrecoverable orphans
+`introspect.ts` `backfill_project_id` migrate sub-mode — after the 6 traversal-based backfills, any `memory`/`reflection`/`skill` row still lacking `project_id` has a `session_id` that resolves to nothing (purged session, malformed id). They were already surfacing across projects via the soft filter (`project_id IS NONE`); tagging them `scope='global'` makes the implicit-global behavior explicit and zeros out the "unbackfilled" signal in the migration report. **Retrieval behavior unchanged** — the soft filter and the explicit-global path are equivalent for the read side; this is a data-shape cleanup.
+
+### Tests
+- 3 new cases in `test/salience-bands.test.ts` pinning `applyDistributionBands` quartile assignment, no-op when bands already set, empty-input safety.
+- 596 tests pass (was 593 + 3).
+
+### State of deferred queue
+**Empty.** All items called out across the v0.7.26-v0.7.34 release train are either landed, explicitly out of scope (e.g. WMR/ACAN scoring replacement — not the reranker's job), or now closed in this release.
+
 ## [0.7.34] — 2026-04-30
 
 ### Fixed (release-process correction + 3 deferred items closed)
