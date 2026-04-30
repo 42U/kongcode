@@ -8,6 +8,64 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.41] — 2026-04-30
+
+### Added — `npm run live-fire` end-to-end synapse runner
+
+User-driven request: stop discovering wiring gaps reactively in conversation; build a runner that exercises *every synapse* of the system against a live daemon and reports green/red per IPC method.
+
+**`scripts/live-fire.mjs`** — connects to `/home/zero/.kongcode-daemon.sock` via the IPC protocol and fires representative payloads at every registered method:
+
+- **3 meta.*** (handshake, health, requestSupersede; skip shutdown)
+- **12 tool.*** (memoryHealth, introspect status/count/query/trends/migrate-projectid/migrate-derivedfrom, recall, clusterScan, whatIsMissing, coreMemory list, fetchPendingWork — skip commitWorkResults which needs a valid pending work_id)
+- **4 hook.*** (sessionStart, userPromptSubmit, preToolUse, postToolUse — skip stop/sessionEnd/preCompact/postCompact/taskCreated which queue heavy long-lived ingestion)
+
+Each synapse: PASS/FAIL with timing + brief detail. Final summary: `N/M synapses green`. Exit code 0 if all green, 1 otherwise. Non-destructive (uses isolated `live-fire-<timestamp>` session id; mutating tool calls only fire idempotent operations like `migrate` which are already safe to re-run).
+
+**Goal:** "no synapse not tested." Run after every release; green means the wiring is end-to-end, no gaps lurking.
+
+```bash
+npm run live-fire
+```
+
+Output (current state):
+```
+[1/3] meta.* (3 — skipping meta.shutdown which would kill mid-test)
+  ✓ meta.handshake                           2ms
+  ✓ meta.health                              1ms
+  ✓ meta.requestSupersede                    0ms
+[2/3] tool.* (12)
+  ✓ tool.memoryHealth                        200ms
+  ✓ tool.introspect:status                   4260ms
+  ✓ tool.introspect:count                    141ms
+  ✓ tool.introspect:query                    742ms
+  ✓ tool.introspect:trends                   2ms
+  ✓ tool.introspect:migrate-projectid        1676ms
+  ✓ tool.introspect:migrate-derivedfrom      235ms
+  ✓ tool.recall                              1412ms
+  ✓ tool.clusterScan                         1434ms
+  ✓ tool.whatIsMissing                       1091ms
+  ✓ tool.coreMemory:list                     5ms
+  ✓ tool.fetchPendingWork                    68ms
+[3/3] hook.* (4)
+  ✓ hook.sessionStart                        4368ms
+  ✓ hook.userPromptSubmit                    5651ms
+  ✓ hook.preToolUse                          0ms
+  ✓ hook.postToolUse                         1ms
+
+Live-fire results: 19/19 synapses green
+```
+
+The `tool.introspect:migrate-*` synapses indirectly exercise the v0.7.40 `recovery.ts` primitives end-to-end (the migrate handlers delegate to `recoverProjectIdRows` and `recoverDaemonOrphans`), so the recovery path is covered without needing a second authenticated SurrealDB client.
+
+### `package.json` script
+```json
+"live-fire": "node scripts/live-fire.mjs"
+```
+
+### Tests
+- 605 unit tests pass (no new tests; live-fire is a separate runner that exercises real daemon over IPC, not a unit-test surface).
+
 ## [0.7.40] — 2026-04-30
 
 ### Refactored — recovery helpers extracted into reusable module

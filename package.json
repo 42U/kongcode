@@ -1,6 +1,6 @@
 {
   "name": "kongcode",
-  "version": "0.7.40",
+  "version": "0.7.41",
   "description": "Graph-backed persistent memory engine for Claude Code. SurrealDB + BGE-M3 vector embeddings that learn across sessions.",
   "type": "module",
   "license": "MIT",
@@ -46,6 +46,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
+    "live-fire": "node scripts/live-fire.mjs",
     "typecheck": "tsc --noEmit",
     "start": "node dist/mcp-server.js"
   },
