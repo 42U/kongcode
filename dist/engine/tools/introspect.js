@@ -403,11 +403,19 @@ async function backfillProjectIdAction(state) {
        AND ->relevant_to->project[0] IS NOT NONE`);
     // 4. Memories: from the session row's project_id (works now that
     //    sessions have been backfilled in step 2).
-    const memories = await backfillTable("memory", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    const memories = await backfillTable("memory", 
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM memory
      WHERE project_id IS NONE AND session_id IS NOT NONE`);
     // 5. Reflections: same shape as memories (session_id-keyed).
-    const reflections = await backfillTable("reflection", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    const reflections = await backfillTable("reflection", 
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM reflection
      WHERE project_id IS NONE AND session_id IS NOT NONE`);
     // 6. Skills: traverse ->skill_from_task->task.project_id (after task
@@ -416,7 +424,11 @@ async function backfillProjectIdAction(state) {
      FROM skill
      WHERE project_id IS NONE
        AND ->skill_from_task->task[0] IS NOT NONE`);
-    const skillsViaSession = await backfillTable("skill", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    const skillsViaSession = await backfillTable("skill", 
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM skill
      WHERE project_id IS NONE AND session_id IS NOT NONE`);
     const lines = [];

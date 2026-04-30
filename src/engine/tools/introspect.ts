@@ -456,7 +456,10 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
   //    sessions have been backfilled in step 2).
   const memories = await backfillTable(
     "memory",
-    `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM memory
      WHERE project_id IS NONE AND session_id IS NOT NONE`,
   );
@@ -464,7 +467,10 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
   // 5. Reflections: same shape as memories (session_id-keyed).
   const reflections = await backfillTable(
     "reflection",
-    `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM reflection
      WHERE project_id IS NONE AND session_id IS NOT NONE`,
   );
@@ -480,7 +486,10 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
   );
   const skillsViaSession = await backfillTable(
     "skill",
-    `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
+    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
+    // shapes so legacy data with either populates correctly.
+    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM skill
      WHERE project_id IS NONE AND session_id IS NOT NONE`,
   );

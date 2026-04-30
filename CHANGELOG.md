@@ -8,6 +8,11 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.30] — 2026-04-30
+
+### Fixed
+- **`backfill_project_id` join key.** The migration's session-traversal subquery used `WHERE id = $parent.session_id` — but `memory.session_id`, `reflection.session_id`, and `skill.session_id` store the **kc_session_id** string (uuid-shaped, e.g. `0df34328-...`), not the surreal record ref (`session:abc123`). Result: the v0.7.29 backfill caught only 218/778 memories (28%) and 0/52 reflections (the kc-id pattern dominant) and had to rely on the small subset of rows that happened to store the surreal ref. Fixed to `WHERE kc_session_id = $parent.session_id OR id = $parent.session_id` — matches both shapes so legacy data with either populates correctly. Re-running on a v0.7.29-backfilled DB will now catch the remaining ~560 memories + 52 reflections.
+
 ## [0.7.29] — 2026-04-30
 
 ### Fixed (in-memory→DB-row write gap class — 0.7.28 follow-up)
