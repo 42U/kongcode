@@ -87,11 +87,27 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
             text: string;
         }[];
         details: {
+            tasks: {
+                found: number;
+                fixed: number;
+            };
+            sessions: {
+                found: number;
+                fixed: number;
+            };
             concepts: {
                 found: number;
                 fixed: number;
             };
             memories: {
+                found: number;
+                fixed: number;
+            };
+            reflections: {
+                found: number;
+                fixed: number;
+            };
+            skills: {
                 found: number;
                 fixed: number;
             };

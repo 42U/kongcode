@@ -362,54 +362,82 @@ async function backfillDerivedFromAction(state) {
         details: { orphans: orphans.length, fixed, missingArtifact, relateFailed },
     };
 }
-// 0.7.26: backfill `project_id` field on concepts and memories created before
-// project-scoped retrieval landed. Concepts: derive from existing
-// ->relevant_to->project edge. Memories: derive from session.project_id of
-// the originating session (memory.session_id → session.project_id).
-// Idempotent — only updates rows where project_id IS NONE.
+// 0.7.26 + 0.7.29: backfill `project_id` field on rows created before
+// project-scoped persistence landed. Order matters — fix sessions first
+// (via task→project), then tasks (via project edge), then reflections /
+// memories / skills which traverse session_id. Concepts have their own
+// edge (relevant_to). Idempotent — only updates rows where project_id
+// IS NONE.
 async function backfillProjectIdAction(state) {
     const { store } = state;
-    // Concepts: id, project_id from outgoing relevant_to edge
-    const conceptRows = await store.queryFirst(`SELECT id, ->relevant_to->project[0].id AS project_id
+    async function backfillTable(label, selectSql) {
+        const rows = await store.queryFirst(selectSql);
+        let fixed = 0;
+        for (const row of rows) {
+            if (!row.project_id)
+                continue;
+            try {
+                await store.queryExec(`UPDATE ${row.id} SET project_id = $pid`, { pid: row.project_id });
+                fixed++;
+            }
+            catch { /* skip */ }
+        }
+        return { found: rows.length, fixed };
+    }
+    // 1. Tasks: traverse ->task_part_of->project (the canonical edge)
+    const tasks = await backfillTable("task", `SELECT id, ->task_part_of->project[0].id AS project_id
+     FROM task
+     WHERE project_id IS NONE
+       AND ->task_part_of->project[0] IS NOT NONE`);
+    // 2. Sessions: traverse ->session_task->task->task_part_of->project
+    //    (must run AFTER tasks so the task.project_id field could be a
+    //    fallback path; here we use the edge chain directly).
+    const sessions = await backfillTable("session", `SELECT id, ->session_task->task->task_part_of->project[0].id AS project_id
+     FROM session
+     WHERE project_id IS NONE
+       AND ->session_task->task->task_part_of->project[0] IS NOT NONE`);
+    // 3. Concepts: outgoing relevant_to edge (already worked in 0.7.26).
+    const concepts = await backfillTable("concept", `SELECT id, ->relevant_to->project[0].id AS project_id
      FROM concept
      WHERE project_id IS NONE
        AND ->relevant_to->project[0] IS NOT NONE`);
-    let conceptsFixed = 0;
-    for (const row of conceptRows) {
-        if (!row.project_id)
-            continue;
-        try {
-            await store.queryExec(`UPDATE ${row.id} SET project_id = $pid`, { pid: row.project_id });
-            conceptsFixed++;
-        }
-        catch { /* skip */ }
-    }
-    // Memories: id, project_id from session.project_id
-    const memoryRows = await store.queryFirst(`SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+    // 4. Memories: from the session row's project_id (works now that
+    //    sessions have been backfilled in step 2).
+    const memories = await backfillTable("memory", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
      FROM memory
      WHERE project_id IS NONE AND session_id IS NOT NONE`);
-    let memoriesFixed = 0;
-    for (const row of memoryRows) {
-        if (!row.project_id)
-            continue;
-        try {
-            await store.queryExec(`UPDATE ${row.id} SET project_id = $pid`, { pid: row.project_id });
-            memoriesFixed++;
-        }
-        catch { /* skip */ }
-    }
+    // 5. Reflections: same shape as memories (session_id-keyed).
+    const reflections = await backfillTable("reflection", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+     FROM reflection
+     WHERE project_id IS NONE AND session_id IS NOT NONE`);
+    // 6. Skills: traverse ->skill_from_task->task.project_id (after task
+    //    backfill). Falls back to session_id-based when no task edge.
+    const skillsViaTask = await backfillTable("skill", `SELECT id, ->skill_from_task->task[0].project_id AS project_id
+     FROM skill
+     WHERE project_id IS NONE
+       AND ->skill_from_task->task[0] IS NOT NONE`);
+    const skillsViaSession = await backfillTable("skill", `SELECT id, (SELECT project_id FROM session WHERE id = $parent.session_id LIMIT 1)[0].project_id AS project_id
+     FROM skill
+     WHERE project_id IS NONE AND session_id IS NOT NONE`);
     const lines = [];
     lines.push("BACKFILL project_id");
     lines.push("═══════════════════════════════════");
-    lines.push(`Concept rows backfilled:  ${conceptsFixed} / ${conceptRows.length}`);
-    lines.push(`Memory rows backfilled:   ${memoriesFixed} / ${memoryRows.length}`);
+    lines.push(`Task rows backfilled:        ${tasks.fixed} / ${tasks.found}`);
+    lines.push(`Session rows backfilled:     ${sessions.fixed} / ${sessions.found}`);
+    lines.push(`Concept rows backfilled:     ${concepts.fixed} / ${concepts.found}`);
+    lines.push(`Memory rows backfilled:      ${memories.fixed} / ${memories.found}`);
+    lines.push(`Reflection rows backfilled:  ${reflections.fixed} / ${reflections.found}`);
+    lines.push(`Skill rows backfilled:       ${skillsViaTask.fixed + skillsViaSession.fixed} / ${skillsViaTask.found + skillsViaSession.found}`);
     lines.push("");
     lines.push("Re-runnable: only updates rows where project_id IS NONE.");
     return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-            concepts: { found: conceptRows.length, fixed: conceptsFixed },
-            memories: { found: memoryRows.length, fixed: memoriesFixed },
+            tasks, sessions, concepts, memories, reflections,
+            skills: {
+                found: skillsViaTask.found + skillsViaSession.found,
+                fixed: skillsViaTask.fixed + skillsViaSession.fixed,
+            },
         },
     };
 }

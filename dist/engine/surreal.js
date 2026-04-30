@@ -389,26 +389,34 @@ export class SurrealStore {
         const created = await this.queryFirst(`CREATE project CONTENT { name: $name } RETURN id`, { name });
         return String(created[0]?.id ?? "");
     }
-    async createTask(description) {
-        const rows = await this.queryFirst(`CREATE task CONTENT { description: $desc, status: "in_progress" } RETURN id`, { desc: description });
+    async createTask(description, projectId) {
+        const rows = await this.queryFirst(`CREATE task CONTENT { description: $desc, status: "in_progress", project_id: $pid } RETURN id`, { desc: description, pid: projectId ?? null });
         return String(rows[0]?.id ?? "");
     }
-    async createSession(agentId = "default", kcSessionId) {
-        const rows = await this.queryFirst(`CREATE session CONTENT { agent_id: $agent_id, kc_session_id: $kc_session_id } RETURN id`, { agent_id: agentId, kc_session_id: kcSessionId ?? null });
+    async createSession(agentId = "default", kcSessionId, projectId) {
+        const rows = await this.queryFirst(`CREATE session CONTENT { agent_id: $agent_id, kc_session_id: $kc_session_id, project_id: $pid } RETURN id`, { agent_id: agentId, kc_session_id: kcSessionId ?? null, pid: projectId ?? null });
         return String(rows[0]?.id ?? "");
     }
     /** Idempotent session-row resolver. If a session row already exists for the
      *  given Claude Code session id, returns it; otherwise creates one. Used by
      *  UserPromptSubmit to backfill resumed conversations that Claude Code's
      *  hook engine doesn't refire SessionStart for — without this, every
-     *  resumed session is a graph orphan (turns ingested but unattributable). */
-    async ensureSessionRow(kcSessionId, agentId = "default") {
+     *  resumed session is a graph orphan (turns ingested but unattributable).
+     *
+     *  0.7.29: also backfills the project_id field on existing rows that
+     *  predate project-scope persistence. Idempotent: only sets when NONE. */
+    async ensureSessionRow(kcSessionId, agentId = "default", projectId) {
         if (!kcSessionId)
-            return this.createSession(agentId);
+            return this.createSession(agentId, undefined, projectId);
         const existing = await this.queryFirst(`SELECT id FROM session WHERE kc_session_id = $kc LIMIT 1`, { kc: kcSessionId });
-        if (existing[0]?.id)
-            return String(existing[0].id);
-        return this.createSession(agentId, kcSessionId);
+        if (existing[0]?.id) {
+            const id = String(existing[0].id);
+            if (projectId) {
+                await this.queryExec(`UPDATE ${id} SET project_id = IF project_id IS NONE THEN $pid ELSE project_id END`, { pid: projectId }).catch(() => { });
+            }
+            return id;
+        }
+        return this.createSession(agentId, kcSessionId, projectId);
     }
     /** Increment turn_count by 1 and bump last_active. Called from
      *  UserPromptSubmit (0.7.12+) — the reliable hook that fires at turn

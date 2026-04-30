@@ -350,6 +350,7 @@ export async function writeExtractionResults(
                 trigger_context: String(s.trigger_context ?? "").slice(0, 200),
                 tags: ["auto-extracted"],
                 session_id: sessionId,
+                ...(projectId ? { project_id: projectId } : {}),
                 ...(emb ? { embedding: emb } : {}),
               },
             },

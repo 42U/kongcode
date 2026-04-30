@@ -75,6 +75,7 @@ export async function handleUserPromptSubmit(
       session.surrealSessionId = await state.store.ensureSessionRow(
         session.sessionId,
         session.agentId,
+        session.projectId || undefined,
       );
       log.info(`[user-prompt-submit] backfilled session row for ${sessionId} → ${session.surrealSessionId}`);
     } catch (e) {

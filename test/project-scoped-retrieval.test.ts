@@ -72,9 +72,14 @@ describe("introspect.action=migrate, filter=backfill_project_id", () => {
     const tool = createIntrospectToolDef(state as GlobalPluginState, session as SessionState);
     const result = await tool.execute("test", { action: "migrate", filter: "backfill_project_id" });
     expect(updateCalls).toHaveLength(0);
-    expect((result as any).details).toEqual({
+    // 0.7.29: details shape extended to all 6 backfill-eligible tables.
+    expect((result as any).details).toMatchObject({
+      tasks: { found: 0, fixed: 0 },
+      sessions: { found: 0, fixed: 0 },
       concepts: { found: 0, fixed: 0 },
       memories: { found: 0, fixed: 0 },
+      reflections: { found: 0, fixed: 0 },
+      skills: { found: 0, fixed: 0 },
     });
   });
 

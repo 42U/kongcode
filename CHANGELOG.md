@@ -8,6 +8,35 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.29] — 2026-04-30
+
+### Fixed (in-memory→DB-row write gap class — 0.7.28 follow-up)
+
+After 0.7.28 shipped, running `backfill_project_id` revealed memories backfilled 0/778 because the traversal `memory.session_id → session.project_id` returned NONE for every session — sessions persist `agent_id` and `kc_session_id` to the DB but **not** `project_id`. That's a `SessionState`-populated-but-not-written gap; the user prompted to audit the rest of the codebase for the same class. Found 5 more sites with the same shape. Fixed all 6 in one pass.
+
+**Row writers updated:**
+- `surreal.ts:createSession` — accepts `projectId`, writes `project_id` field.
+- `surreal.ts:ensureSessionRow` — accepts `projectId`, **also backfills the field on existing rows** where it's NONE (so resumed-conversation rows get the field on next UserPromptSubmit).
+- `surreal.ts:createTask` — accepts `projectId`, writes `project_id` field. The `task_part_of` edge stays as the canonical link; this is the denormalized field for fast filter.
+- `pending-work.ts:374` (reflection write) — adds `project_id` from `item.project_id`. Reflection writes are session-keyed and `pending_work` already carries `project_id` per row.
+- `pending-work.ts:678` (`createSkillRecord`) — adds `project_id`.
+- `pending-work.ts:445` (handoff_note memory) — adds **both** `session_id` and `project_id` (was: only the synthetic `source: "session:..."` string, unsearchable).
+- `memory-daemon.ts:343` (skill direct write) — adds `project_id`.
+
+**Hook callers threaded:**
+- `session-start.ts:47, 53` — passes `session.projectId` to createTask + createSession.
+- `user-prompt-submit.ts:75` — passes `session.projectId` to ensureSessionRow.
+
+**Migration extended:**
+`introspect.action=migrate, filter=backfill_project_id` now backfills 6 tables (was 2 in 0.7.26). Order matters: tasks → sessions (via task→project edge chain) → concepts (via relevant_to) → memories (via session.project_id) → reflections → skills (via skill_from_task→task or session_id fallback). Re-running on a 0.7.26-backfilled DB will catch the rows the original migration couldn't reach.
+
+### Why this matters
+The 0.7.26 read-side filter is soft (`project_id IS NONE` allowed), so this gap caused no runtime regression — pre-migration rows still surface across projects. But the *benefit* of project scoping was muted: only 1274/2534 concepts (~50%) got scoped, and 0/778 memories. After this release + a re-run of `backfill_project_id`, project scoping should approach 100% coverage on legacy data.
+
+### Tests
+- `test/project-scoped-retrieval.test.ts` updated: idempotency case now uses `toMatchObject` against the extended 6-table details shape.
+- 570 tests pass (no new tests — the surface is migration-shaped and covered by the existing project-scoped-retrieval cases plus the live backfill run).
+
 ## [0.7.28] — 2026-04-30
 
 ### Changed (reranker-calibrated salience bands — context-grounding plan phase 3)

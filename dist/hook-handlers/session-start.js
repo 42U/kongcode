@@ -31,12 +31,12 @@ export async function handleSessionStart(state, payload) {
             session.projectId = await store.ensureProject(projectName);
             await store.linkAgentToProject(session.agentId, session.projectId)
                 .catch(e => swallow("sessionStart:linkAgentToProject", e));
-            session.taskId = await store.createTask(`Session in ${projectName}`);
+            session.taskId = await store.createTask(`Session in ${projectName}`, session.projectId);
             await store.linkAgentToTask(session.agentId, session.taskId)
                 .catch(e => swallow("sessionStart:linkAgentToTask", e));
             await store.linkTaskToProject(session.taskId, session.projectId)
                 .catch(e => swallow("sessionStart:linkTaskToProject", e));
-            session.surrealSessionId = await store.createSession(session.agentId, session.sessionId);
+            session.surrealSessionId = await store.createSession(session.agentId, session.sessionId, session.projectId);
             await store.markSessionActive(session.surrealSessionId)
                 .catch(e => swallow("sessionStart:markActive", e));
             await store.linkSessionToTask(session.surrealSessionId, session.taskId)

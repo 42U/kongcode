@@ -64,7 +64,7 @@ export async function handleUserPromptSubmit(state, payload) {
             if (!session.agentId) {
                 session.agentId = await state.store.ensureAgent("kongcode", "claude");
             }
-            session.surrealSessionId = await state.store.ensureSessionRow(session.sessionId, session.agentId);
+            session.surrealSessionId = await state.store.ensureSessionRow(session.sessionId, session.agentId, session.projectId || undefined);
             log.info(`[user-prompt-submit] backfilled session row for ${sessionId} → ${session.surrealSessionId}`);
         }
         catch (e) {

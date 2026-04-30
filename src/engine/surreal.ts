@@ -530,18 +530,18 @@ export class SurrealStore {
     return String(created[0]?.id ?? "");
   }
 
-  async createTask(description: string): Promise<string> {
+  async createTask(description: string, projectId?: string): Promise<string> {
     const rows = await this.queryFirst<{ id: string }>(
-      `CREATE task CONTENT { description: $desc, status: "in_progress" } RETURN id`,
-      { desc: description },
+      `CREATE task CONTENT { description: $desc, status: "in_progress", project_id: $pid } RETURN id`,
+      { desc: description, pid: projectId ?? null },
     );
     return String(rows[0]?.id ?? "");
   }
 
-  async createSession(agentId = "default", kcSessionId?: string): Promise<string> {
+  async createSession(agentId = "default", kcSessionId?: string, projectId?: string): Promise<string> {
     const rows = await this.queryFirst<{ id: string }>(
-      `CREATE session CONTENT { agent_id: $agent_id, kc_session_id: $kc_session_id } RETURN id`,
-      { agent_id: agentId, kc_session_id: kcSessionId ?? null },
+      `CREATE session CONTENT { agent_id: $agent_id, kc_session_id: $kc_session_id, project_id: $pid } RETURN id`,
+      { agent_id: agentId, kc_session_id: kcSessionId ?? null, pid: projectId ?? null },
     );
     return String(rows[0]?.id ?? "");
   }
@@ -550,15 +550,27 @@ export class SurrealStore {
    *  given Claude Code session id, returns it; otherwise creates one. Used by
    *  UserPromptSubmit to backfill resumed conversations that Claude Code's
    *  hook engine doesn't refire SessionStart for — without this, every
-   *  resumed session is a graph orphan (turns ingested but unattributable). */
-  async ensureSessionRow(kcSessionId: string, agentId = "default"): Promise<string> {
-    if (!kcSessionId) return this.createSession(agentId);
+   *  resumed session is a graph orphan (turns ingested but unattributable).
+   *
+   *  0.7.29: also backfills the project_id field on existing rows that
+   *  predate project-scope persistence. Idempotent: only sets when NONE. */
+  async ensureSessionRow(kcSessionId: string, agentId = "default", projectId?: string): Promise<string> {
+    if (!kcSessionId) return this.createSession(agentId, undefined, projectId);
     const existing = await this.queryFirst<{ id: string }>(
       `SELECT id FROM session WHERE kc_session_id = $kc LIMIT 1`,
       { kc: kcSessionId },
     );
-    if (existing[0]?.id) return String(existing[0].id);
-    return this.createSession(agentId, kcSessionId);
+    if (existing[0]?.id) {
+      const id = String(existing[0].id);
+      if (projectId) {
+        await this.queryExec(
+          `UPDATE ${id} SET project_id = IF project_id IS NONE THEN $pid ELSE project_id END`,
+          { pid: projectId },
+        ).catch(() => { /* non-critical */ });
+      }
+      return id;
+    }
+    return this.createSession(agentId, kcSessionId, projectId);
   }
 
   /** Increment turn_count by 1 and bump last_active. Called from

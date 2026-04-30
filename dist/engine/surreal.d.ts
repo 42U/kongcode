@@ -118,14 +118,17 @@ export declare class SurrealStore {
     relate(fromId: string, edge: string, toId: string): Promise<void>;
     ensureAgent(name: string, model?: string): Promise<string>;
     ensureProject(name: string): Promise<string>;
-    createTask(description: string): Promise<string>;
-    createSession(agentId?: string, kcSessionId?: string): Promise<string>;
+    createTask(description: string, projectId?: string): Promise<string>;
+    createSession(agentId?: string, kcSessionId?: string, projectId?: string): Promise<string>;
     /** Idempotent session-row resolver. If a session row already exists for the
      *  given Claude Code session id, returns it; otherwise creates one. Used by
      *  UserPromptSubmit to backfill resumed conversations that Claude Code's
      *  hook engine doesn't refire SessionStart for — without this, every
-     *  resumed session is a graph orphan (turns ingested but unattributable). */
-    ensureSessionRow(kcSessionId: string, agentId?: string): Promise<string>;
+     *  resumed session is a graph orphan (turns ingested but unattributable).
+     *
+     *  0.7.29: also backfills the project_id field on existing rows that
+     *  predate project-scope persistence. Idempotent: only sets when NONE. */
+    ensureSessionRow(kcSessionId: string, agentId?: string, projectId?: string): Promise<string>;
     /** Increment turn_count by 1 and bump last_active. Called from
      *  UserPromptSubmit (0.7.12+) — the reliable hook that fires at turn
      *  start. Earlier versions did this from Stop, which is dropped/timed-out

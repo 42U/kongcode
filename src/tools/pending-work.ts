@@ -379,6 +379,8 @@ async function commitResults(
         importance: 7.0,
       };
       if (reflEmb?.length) record.embedding = reflEmb;
+      // 0.7.29: persist project_id on the row for fast project-scoped retrieval.
+      if (item.project_id) record.project_id = item.project_id;
       const rows = await store.queryFirst<{ id: string }>(`CREATE reflection CONTENT $record RETURN id`, { record });
       if (rows[0]?.id && item.surreal_session_id) {
         await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id)
@@ -447,7 +449,12 @@ async function commitResults(
         category: "handoff",
         importance: 8,
         source: `session:${item.session_id}`,
+        // 0.7.29: persist session_id and project_id (was: source string only,
+        // unsearchable). The handoff_note path was the last memory writer
+        // outside commitKnowledge that had the in-memory→DB-row gap.
+        session_id: item.session_id,
       };
+      if (item.project_id) record.project_id = item.project_id;
       if (noteEmb?.length) record.embedding = noteEmb;
       await store.queryFirst<{ id: string }>(`CREATE memory CONTENT $record RETURN id`, { record });
       return { stored: true };
@@ -675,6 +682,8 @@ async function createSkillRecord(
     active: true,
   };
   if (skillEmb?.length) record.embedding = skillEmb;
+  // 0.7.29: persist project_id on the row for fast project-scoped retrieval.
+  if (item.project_id) record.project_id = item.project_id;
   const rows = await store.queryFirst<{ id: string }>(`CREATE skill CONTENT $record RETURN id`, { record });
   const skillId = String(rows[0]?.id ?? "");
   if (skillId && item.task_id) {
