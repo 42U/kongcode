@@ -37,11 +37,20 @@ const QUERY_TEMPLATES = {
     },
     core_by_category: {
         sql: "SELECT category, count() AS count FROM core_memory WHERE active = true GROUP BY category",
-        description: "Core memory entries grouped by category",
+        description: "Core memory entries grouped by category (always queries core_memory table; ignores table param)",
     },
     memory_status: {
         sql: "SELECT status, count() AS count FROM memory GROUP BY status",
-        description: "Memory counts grouped by status",
+        description: "Memory counts grouped by status (always queries memory table; ignores table param)",
+    },
+    status_breakdown: {
+        sql: "SELECT status, count() AS count FROM type::table($t) GROUP BY status",
+        description: "Generic status breakdown for any status-bearing table — pass table=<name>",
+        needsTable: true,
+    },
+    pending_work_summary: {
+        sql: "SELECT work_type, status, count() AS count FROM pending_work GROUP BY work_type, status ORDER BY work_type, status",
+        description: "pending_work queue: row counts grouped by work_type AND status",
     },
     embedding_coverage: {
         sql: "",
@@ -351,7 +360,10 @@ async function queryAction(store, table, template) {
         }
         return { content: [{ type: "text", text: `Embedding coverage:\n${lines.join("\n")}` }], details: null };
     }
-    const rows = await store.queryFirst(spec.sql, table ? { t: table } : undefined);
+    // Only pass `t` to queries that actually use it (needsTable). Avoids
+    // misleading "(pending_work)" label when the SQL is hardcoded against a
+    // different table.
+    const rows = await store.queryFirst(spec.sql, spec.needsTable && table ? { t: table } : undefined);
     if (rows.length === 0) {
         return { content: [{ type: "text", text: `No results for "${tmpl}".` }], details: null };
     }
@@ -366,8 +378,10 @@ async function queryAction(store, table, template) {
             .join(", ");
         return `${i + 1}. ${fields}`;
     }).join("\n");
+    // Show "(table)" suffix only for templates that actually consume the table param.
+    const label = spec.needsTable && table ? `${tmpl} (${table})` : tmpl;
     return {
-        content: [{ type: "text", text: `${tmpl}${table ? ` (${table})` : ""}:\n${formatted}` }],
+        content: [{ type: "text", text: `${label}:\n${formatted}` }],
         details: { count: rows.length },
     };
 }
