@@ -95,6 +95,9 @@ export class DaemonServer {
         const ms = this.opts.idleTimeoutMs ?? 0;
         if (ms <= 0)
             return;
+        // Prune phantoms before checking — otherwise a stale Map entry blocks
+        // the timer from arming and the daemon stays alive indefinitely.
+        this.pruneDeadClients();
         if (this.clients.size > 0)
             return;
         this.idleSince = Date.now();
@@ -124,6 +127,33 @@ export class DaemonServer {
             this.idleSince = null;
         }
     }
+    /** Defensive: prune Map entries whose underlying socket is destroyed but
+     *  whose 'close'/'error' event never reached our handler. Empirically this
+     *  happens for short-lived probe connections (nc, debugging tools) and
+     *  some peer-SIGKILL paths — Node.js doesn't always fire 'close' for
+     *  unix-socket peers that disappear abruptly. The existing close+error
+     *  handlers DO maintain the Map correctly under normal disconnects; this
+     *  is a belt-and-suspenders pass for the edge cases.
+     *
+     *  Called from getStats() (so meta.health reports accurate counts) and
+     *  before checkSupersedeReady / armIdleTimer make lifecycle decisions.
+     *  No new timer needed — runs lazily on read paths. */
+    pruneDeadClients() {
+        let pruned = 0;
+        for (const [sock, info] of this.clients) {
+            if (sock.destroyed || !sock.writable) {
+                this.clients.delete(sock);
+                pruned++;
+                if (info) {
+                    this.opts.log.info(`[daemon] pruned phantom client: pid=${info.pid} v${info.version} session=${info.sessionId} (close event never fired)`);
+                }
+                else {
+                    this.opts.log.info(`[daemon] pruned phantom anonymous client (close event never fired)`);
+                }
+            }
+        }
+        return pruned;
+    }
     /** Drain in-flight requests, close listeners, close client sockets, exit.
      *  Caller (daemon main) is responsible for closing SurrealStore and
      *  saving any pending state before this is called. */
@@ -151,6 +181,9 @@ export class DaemonServer {
     }
     /** Stats surfaced via meta.health for ops visibility. */
     getStats() {
+        // Defensive prune so meta.health reports accurate activeClients even
+        // when a 'close' event was missed (see pruneDeadClients comment).
+        this.pruneDeadClients();
         const clients = [];
         for (const info of this.clients.values()) {
             if (info)
@@ -187,6 +220,9 @@ export class DaemonServer {
      *  callback is invoked exactly once per supersede cycle. */
     supersedeFired = false;
     checkSupersedeReady() {
+        // Prune phantoms before checking — otherwise stale Map entries block
+        // supersede from firing and the daemon wedges indefinitely.
+        this.pruneDeadClients();
         if (this.pendingSupersede &&
             !this.supersedeFired &&
             this.clients.size === 0 &&

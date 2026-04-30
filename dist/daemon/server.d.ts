@@ -93,6 +93,18 @@ export declare class DaemonServer {
     /** Cancel the idle timer (a client just connected, or daemon is shutting
      *  down). Safe to call repeatedly. */
     private disarmIdleTimer;
+    /** Defensive: prune Map entries whose underlying socket is destroyed but
+     *  whose 'close'/'error' event never reached our handler. Empirically this
+     *  happens for short-lived probe connections (nc, debugging tools) and
+     *  some peer-SIGKILL paths — Node.js doesn't always fire 'close' for
+     *  unix-socket peers that disappear abruptly. The existing close+error
+     *  handlers DO maintain the Map correctly under normal disconnects; this
+     *  is a belt-and-suspenders pass for the edge cases.
+     *
+     *  Called from getStats() (so meta.health reports accurate counts) and
+     *  before checkSupersedeReady / armIdleTimer make lifecycle decisions.
+     *  No new timer needed — runs lazily on read paths. */
+    private pruneDeadClients;
     /** Drain in-flight requests, close listeners, close client sockets, exit.
      *  Caller (daemon main) is responsible for closing SurrealStore and
      *  saving any pending state before this is called. */
