@@ -88,6 +88,29 @@ describe("evaluateRetrieval — [#N] citation parsing", () => {
     expect(created[0].retrieval_score).toBe(0.9);
   });
 
+  it("0.7.33: marks cited=true with citation_method='lexical' when response paraphrases item content (no [#N])", async () => {
+    const { store, created } = setup();
+    // Item text shares many key terms + trigrams with the response — high
+    // utilization signal. No [#N] in the response.
+    const items: RetrievedItem[] = [{
+      id: "concept:lexical_test",
+      table: "concept" as any,
+      text: "The release version-bump checklist requires updating package.json package-lock.json plugin.json and the README badge — all four version surfaces together to keep the marketplace cache in sync.",
+      finalScore: 0.9,
+    }];
+    const indexMap = new Map<number, string>([[1, "concept:lexical_test"]]);
+    stageRetrieval("session:s1", items, undefined, indexMap);
+
+    await evaluateRetrieval(
+      "turn:t1",
+      "When releasing a new version remember to bump package.json package-lock.json and plugin.json plus the README version badge — all four version surfaces — so the marketplace cache stays in sync with the new release.",
+      store,
+    );
+
+    expect(created[0].cited).toBe(true);
+    expect(created[0].citation_method).toBe("lexical");
+  });
+
   it("handles multiple citations of the same [#N]", async () => {
     const { store, created } = setup();
     const items = [makeItem("concept:a", 0.9)];

@@ -8,6 +8,30 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.33] — 2026-04-30
+
+### Fixed (production-readiness sweep — 3 silent gaps)
+
+A user-driven audit of "what's still unwired" surfaced 3 issues. All low-blast-radius, all single-spot fixes, all addressed in this release.
+
+#### `subagent.task` schema strictness — same shape as the v0.7.23 `mode` fix
+Hook handlers (pre-tool-use) create `subagent` rows before the task description is known, but `task` was strict `TYPE string` (schema.surql:337). Daemon log was flooding with `Couldn't coerce value for field 'task' of 'subagent:...': Expected 'string' but found 'NONE'` per spawn. Relaxed to `option<string>` via `DEFINE FIELD OVERWRITE`, matching the v0.7.23 mode-field treatment. Live DBs converge on next daemon restart.
+
+#### `citation_method='lexical'` fallback for paraphrased items
+The v0.7.27 audit signal only set `cited=true` on `[#N]` matches. Items the model genuinely used but paraphrased (rephrasing the content without an explicit citation) got `cited=false, citation_method='none'` — incorrect audit credit. Added a lexical fallback: when no `[#N]` matched but `signals.utilization >= 0.5` (heavy keyTerm + trigram overlap, the existing computeSignals path), set `cited=true, citation_method='lexical'`. Threshold picks up genuine paraphrase without rewarding incidental word reuse.
+
+#### `orphan_concepts` query false positives
+The v0.7.23 silent-failure detector was flagging hundreds of `ingest:turn`-source concepts as "orphans" per active session. These are per-turn extractions whose provenance is the source turn — already linked via the existing `mentions` edge (turn→concept), NOT via `derived_from`. The query now filters `WHERE source != 'ingest:turn'` so it fires only for actual missing-edge bugs in gem/causal extraction (the original v0.7.23 use case).
+
+### Tests
+- Existing 4 citation-grounding cases still pass.
+- New 5th case pins lexical-fallback behavior (paraphrase without `[#N]` → `cited=true, citation_method='lexical'`).
+- 593 tests pass (was 592 + 1).
+
+### Notes
+- The 4 stale-purged `pending_work` items the alert flagged are pre-X-close-pattern orphans (sessions that purged before `session-end` ran). Forward path is clean — auto-drain threshold was already lowered from `>= 5` to `>= 1` in an earlier release.
+- ~270 unbackfilled memories + ~40 reflections continue to reference orphan session_ids that don't resolve to any session row even via kc_session_id. Documented as data-quality residue, not a code gap.
+
 ## [0.7.32] — 2026-04-30
 
 ### Fixed (graduation-pipeline parser hardening + observability)

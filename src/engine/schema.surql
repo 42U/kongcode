@@ -334,7 +334,11 @@ DEFINE FIELD IF NOT EXISTS child_session_id ON subagent TYPE option<string>;
 -- 0.7.23: relaxed from required string. Hook handlers (pre-tool-use, subagent-stop)
 -- create rows before they know the mode; OVERWRITE converges live DBs.
 DEFINE FIELD OVERWRITE mode ON subagent TYPE option<string>; -- full | incognito | unset
-DEFINE FIELD IF NOT EXISTS task ON subagent TYPE string;
+-- 0.7.33: same treatment for `task` — pre-tool-use creates subagent rows
+-- before the task description is known. Daemon log was flooding with
+-- "Couldn't coerce value for field `task`: Expected `string` but found `NONE`"
+-- per subagent spawn. Same shape as the 0.7.23 mode fix.
+DEFINE FIELD OVERWRITE task ON subagent TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS status ON subagent TYPE string DEFAULT "running"; -- running | completed | error
 DEFINE FIELD IF NOT EXISTS incognito_id ON subagent TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS summary ON subagent TYPE option<string>;

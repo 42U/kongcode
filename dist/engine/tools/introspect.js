@@ -59,13 +59,20 @@ const QUERY_TEMPLATES = {
     orphan_concepts: {
         // Concepts older than 1h with no derived_from edge — flags provenance
         // gaps from the kind of silent edge-write failure that 0.7.23 fixed.
+        // 0.7.33: exclude `ingest:turn` source. Per-turn extractions don't write
+        // `derived_from` edges (the turn IS their provenance, traversable via
+        // the existing `mentions` edge from turn→concept). They were dominating
+        // the result set with hundreds of false-positive "orphans" per active
+        // session. The detector should fire only for missing-edge bugs in
+        // gem/causal extraction, where derived_from is the canonical link.
         sql: `SELECT id, content, created_at, source
           FROM concept
           WHERE created_at < time::now() - 1h
             AND array::len(->derived_from->?) = 0
+            AND (source IS NONE OR source != 'ingest:turn')
           ORDER BY created_at DESC
           LIMIT 25`,
-        description: "Concepts >1h old with no derived_from provenance edge (silent-failure detector)",
+        description: "Concepts >1h old with no derived_from provenance edge (excludes ingest:turn — those use the turn->concept mentions edge instead)",
     },
 };
 const introspectSchema = Type.Object({

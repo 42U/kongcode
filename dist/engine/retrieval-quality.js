@@ -93,11 +93,25 @@ export async function evaluateRetrieval(responseTurnId, responseText, store) {
             // 0.7.27: structural-citation signal. cited=true means the model
             // explicitly emitted [#N] referencing this item; cited=false means it
             // was offered but ignored. Distinct from the lexical utilization
-            // overlap. citation_method='index' for [#N], 'lexical' for content
-            // matches when no [#N] hit landed (future), 'none' otherwise.
+            // overlap. citation_method='index' for [#N], 'lexical' for paraphrase
+            // (utilization >= 0.5 — strong lexical match without explicit [#N]),
+            // 'none' otherwise.
+            // 0.7.33: lexical fallback added so paraphrased usage gets audit
+            // credit. The threshold 0.5 picks up genuine paraphrase (key terms +
+            // trigrams overlap heavily) without rewarding incidental word reuse.
             if (indexMap) {
-                record.cited = wasCited;
-                record.citation_method = wasCited ? "index" : "none";
+                if (wasCited) {
+                    record.cited = true;
+                    record.citation_method = "index";
+                }
+                else if (signals.utilization >= 0.5) {
+                    record.cited = true;
+                    record.citation_method = "lexical";
+                }
+                else {
+                    record.cited = false;
+                    record.citation_method = "none";
+                }
             }
             await store.queryExec(`CREATE retrieval_outcome CONTENT $data`, { data: record });
             store.updateUtilityCache(idStr, signals.utilization)
