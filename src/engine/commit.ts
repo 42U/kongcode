@@ -150,7 +150,7 @@ async function commitConcept(
       await store.relate(data.sourceId, data.edgeName, conceptId);
       edges++;
     } catch (e) {
-      swallow(`${logTag}:relate`, e);
+      swallow.warn(`${logTag}:relate`, e);
     }
   }
 

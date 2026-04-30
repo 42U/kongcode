@@ -132,6 +132,10 @@ export async function rollupDailyMetrics(
     const fast_path_rate = m.fast_n / Math.max(1, m.n);
     const tool_failure_rate = (r?.tool_total ?? 0) > 0 ? (r!.tool_fails / r!.tool_total) : 0;
 
+    // math::percentile() in surrealdb returns the input array (often all-NONE)
+    // when it can't compute a scalar — coerce to a real float before write.
+    const asFloat = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
     // UPSERT keyed on day
     await store.queryExec(
       `UPDATE orchestrator_metrics_daily SET
@@ -168,14 +172,14 @@ export async function rollupDailyMetrics(
       {
         day,
         turn_count,
-        mean_tc: m.mean_tc ?? 0,
-        mean_dur: m.mean_dur ?? 0,
-        mean_in: m.mean_in ?? 0,
-        mean_out: m.mean_out ?? 0,
-        p95_dur: m.p95_dur ?? 0,
-        p95_in: m.p95_in ?? 0,
+        mean_tc: asFloat(m.mean_tc),
+        mean_dur: asFloat(m.mean_dur),
+        mean_in: asFloat(m.mean_in),
+        mean_out: asFloat(m.mean_out),
+        p95_dur: asFloat(m.p95_dur),
+        p95_in: asFloat(m.p95_in),
         fast_path_rate,
-        mean_util: r?.mean_util ?? 0,
+        mean_util: asFloat(r?.mean_util),
         tool_failure_rate,
         rcount: r?.n ?? 0,
       },

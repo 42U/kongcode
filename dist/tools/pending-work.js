@@ -12,6 +12,7 @@
  */
 import { buildSystemPrompt, buildTranscript, writeExtractionResults } from "../engine/memory-daemon.js";
 import { createSoul, seedSoulAsCoreMemory, reviseSoul, getSoul, checkGraduation, getQualitySignals } from "../engine/soul.js";
+import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 import { commitKnowledge } from "../engine/commit.js";
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -313,7 +314,8 @@ async function commitResults(item, results, state) {
                 record.embedding = reflEmb;
             const rows = await store.queryFirst(`CREATE reflection CONTENT $record RETURN id`, { record });
             if (rows[0]?.id && item.surreal_session_id) {
-                await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id).catch(() => { });
+                await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id)
+                    .catch(e => swallow.warn("pending-work:reflects_on", e));
             }
             store.clearReflectionCache();
             return { reflection_id: rows[0]?.id };
@@ -598,7 +600,8 @@ async function createSkillRecord(parsed, item, state) {
     const rows = await store.queryFirst(`CREATE skill CONTENT $record RETURN id`, { record });
     const skillId = String(rows[0]?.id ?? "");
     if (skillId && item.task_id) {
-        await store.relate(skillId, "skill_from_task", item.task_id).catch(() => { });
+        await store.relate(skillId, "skill_from_task", item.task_id)
+            .catch(e => swallow.warn("pending-work:skill_from_task", e));
     }
     return { skill_id: skillId, name: parsed.name };
 }

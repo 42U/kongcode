@@ -8,6 +8,30 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.23] — 2026-04-30
+
+### Fixed
+- **`derived_from` schema mismatch.** Schema declared `IN concept OUT task`, but two real callers wrote `concept → artifact` (gem provenance from `create_knowledge_gems`) and `subagent → task` (parent linking from `pre-tool-use`). Every invocation flooded `daemon.log` with `Couldn't coerce value for field out` errors and dropped the provenance edge — concepts got created, but tracing them back to their source returned nothing. Widened to `IN concept|subagent OUT task|artifact` via `DEFINE TABLE OVERWRITE` so live DBs converge on next daemon start.
+- **Missing `spawned_from` edge.** `pre-tool-use` writes `subagent → spawned_from → session` for parent-session provenance, but the relation was never declared. Added `IN subagent OUT session`; added to `VALID_EDGES` whitelist in `surreal.ts`.
+- **`subagent.mode` rejected NONE.** Hook handlers create subagent rows before they know the mode (`full | incognito`), but the field was a strict `TYPE string`. Relaxed to `TYPE option<string>` via `OVERWRITE`.
+- **`orchestrator_metrics_daily.p95_tokens_in` array-of-NONE.** `math::percentile()` returned the input column instead of a scalar when input was all-NONE. Added a defensive `asFloat()` coercion before write.
+
+### Changed (silent-failures sweep)
+- Promoted high-severity `.catch(() => {})` and DEBUG-level `swallow()` calls to `swallow.warn` (always logged) on graph-integrity edges that, when they fail, leave concepts orphaned from their provenance:
+  - `pending-work.ts:384` — `reflects_on` (reflection → session)
+  - `pending-work.ts:680` — `skill_from_task` (skill → task)
+  - `concept-links.ts:89-98` — `narrower` / `broader`
+  - `concept-links.ts:119-122` — `related_to`
+  - `commit.ts:150-154` — source → concept
+
+### Added
+- **`schema-edge-integrity` regression test** (`test/schema-edge-integrity.test.ts`) — parses `schema.surql` for every `RELATION` definition and statically checks every `store.relate(<from>, "<edge>", <to>)` call site against the schema's allowed IN/OUT types. Catches future bugs of the 0.7.22 class at PR time.
+- **`orphan_concepts` introspect query** — concepts older than 1h with no outgoing `derived_from` edge. Runtime visibility into provenance gaps so the next regression of this class shows up in `kongcode-status` instead of being silently absorbed.
+
+### Notes
+- Test suite: 555 tests pass (was 548). New schema-edge-integrity contributes 3.
+- Existing daemons running pre-0.7.23 schema will converge on next restart — `OVERWRITE` runs every boot via `runSchema()` and is idempotent.
+
 ## [0.7.15] — 2026-04-29
 
 ### Fixed

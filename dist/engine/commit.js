@@ -57,7 +57,7 @@ async function commitConcept(deps, data) {
             edges++;
         }
         catch (e) {
-            swallow(`${logTag}:relate`, e);
+            swallow.warn(`${logTag}:relate`, e);
         }
     }
     // 4. Auto-seal: concept → other concepts (narrower/broader hierarchy).

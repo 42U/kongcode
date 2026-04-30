@@ -56,7 +56,7 @@ import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
 import { initReranker, disposeReranker, isRerankerActive } from "../engine/graph-context.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.22";
+const DAEMON_VERSION = "0.7.23";
 /** Lex-compare dotted versions ("0.7.5" vs "0.7.22"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */

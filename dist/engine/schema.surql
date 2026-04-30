@@ -147,7 +147,12 @@ DEFINE TABLE IF NOT EXISTS owns TYPE RELATION IN agent OUT project;
 DEFINE TABLE IF NOT EXISTS task_part_of TYPE RELATION IN task OUT project;
 DEFINE TABLE IF NOT EXISTS session_task TYPE RELATION IN session OUT task;
 DEFINE TABLE IF NOT EXISTS produced TYPE RELATION IN task OUT artifact;
-DEFINE TABLE IF NOT EXISTS derived_from TYPE RELATION IN concept OUT task;
+-- 0.7.23: widened to allow concept|subagent IN and task|artifact OUT.
+-- Original: IN concept OUT task. Real callers also need:
+--   - concept → artifact (provenance for create_knowledge_gems)
+--   - subagent → task    (parent-task linking from pre-tool-use)
+-- OVERWRITE so live DBs converge on next daemon start; IF NOT EXISTS would no-op.
+DEFINE TABLE OVERWRITE derived_from TYPE RELATION IN concept|subagent OUT task|artifact;
 DEFINE TABLE IF NOT EXISTS relevant_to TYPE RELATION IN concept OUT project;
 DEFINE TABLE IF NOT EXISTS used_in TYPE RELATION IN artifact OUT project;
 
@@ -326,7 +331,9 @@ DEFINE TABLE IF NOT EXISTS reflects_on TYPE RELATION IN reflection OUT session;
 DEFINE TABLE IF NOT EXISTS subagent SCHEMALESS;
 DEFINE FIELD IF NOT EXISTS parent_session_id ON subagent TYPE string;
 DEFINE FIELD IF NOT EXISTS child_session_id ON subagent TYPE option<string>;
-DEFINE FIELD IF NOT EXISTS mode ON subagent TYPE string; -- full | incognito
+-- 0.7.23: relaxed from required string. Hook handlers (pre-tool-use, subagent-stop)
+-- create rows before they know the mode; OVERWRITE converges live DBs.
+DEFINE FIELD OVERWRITE mode ON subagent TYPE option<string>; -- full | incognito | unset
 DEFINE FIELD IF NOT EXISTS task ON subagent TYPE string;
 DEFINE FIELD IF NOT EXISTS status ON subagent TYPE string DEFAULT "running"; -- running | completed | error
 DEFINE FIELD IF NOT EXISTS incognito_id ON subagent TYPE option<string>;
@@ -335,6 +342,8 @@ DEFINE FIELD IF NOT EXISTS created_at ON subagent TYPE datetime DEFAULT time::no
 DEFINE INDEX IF NOT EXISTS sub_parent_idx ON subagent FIELDS parent_session_id;
 
 DEFINE TABLE IF NOT EXISTS spawned TYPE RELATION IN session OUT subagent;
+-- 0.7.23: subagent → parent-session provenance, written from pre-tool-use.
+DEFINE TABLE IF NOT EXISTS spawned_from TYPE RELATION IN subagent OUT session;
 
 -- ============================================================
 -- CONSTITUTIVE MEMORY: Monologue Trace

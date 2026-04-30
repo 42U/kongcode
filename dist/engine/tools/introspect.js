@@ -56,6 +56,17 @@ const QUERY_TEMPLATES = {
         sql: "",
         description: "Per-table embedding vs total counts",
     },
+    orphan_concepts: {
+        // Concepts older than 1h with no derived_from edge — flags provenance
+        // gaps from the kind of silent edge-write failure that 0.7.23 fixed.
+        sql: `SELECT id, content, created_at, source
+          FROM concept
+          WHERE created_at < time::now() - 1h
+            AND array::len(->derived_from->?) = 0
+          ORDER BY created_at DESC
+          LIMIT 25`,
+        description: "Concepts >1h old with no derived_from provenance edge (silent-failure detector)",
+    },
 };
 const introspectSchema = Type.Object({
     action: Type.Union([

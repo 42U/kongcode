@@ -82,6 +82,8 @@ const VALID_EDGES = new Set([
   "supersedes",
   // Session edges
   "part_of",
+  // Subagent provenance
+  "spawned", "spawned_from",
 ]);
 
 function assertValidEdge(edge: string): void {

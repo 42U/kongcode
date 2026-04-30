@@ -87,15 +87,15 @@ export async function linkConceptHierarchy(
       if (lowerName.includes(otherLower) && lowerName !== otherLower) {
         // New concept is more specific (e.g. "React hooks" contains "React")
         await store.relate(conceptId, "narrower", otherId)
-          .catch(e => swallow(`${logTag}:narrower`, e));
+          .catch(e => swallow.warn(`${logTag}:narrower`, e));
         await store.relate(otherId, "broader", conceptId)
-          .catch(e => swallow(`${logTag}:broader`, e));
+          .catch(e => swallow.warn(`${logTag}:broader`, e));
       } else if (otherLower.includes(lowerName) && otherLower !== lowerName) {
         // New concept is more general (e.g. "React" contained in "React hooks")
         await store.relate(conceptId, "broader", otherId)
-          .catch(e => swallow(`${logTag}:broader`, e));
+          .catch(e => swallow.warn(`${logTag}:broader`, e));
         await store.relate(otherId, "narrower", conceptId)
-          .catch(e => swallow(`${logTag}:narrower`, e));
+          .catch(e => swallow.warn(`${logTag}:narrower`, e));
       }
     }
 
@@ -117,9 +117,9 @@ export async function linkConceptHierarchy(
             if (s.score < 0.75) break;
             const simId = String(s.id);
             await store.relate(conceptId, "related_to", simId)
-              .catch(e => swallow(`${logTag}:related_to`, e));
+              .catch(e => swallow.warn(`${logTag}:related_to`, e));
             await store.relate(simId, "related_to", conceptId)
-              .catch(e => swallow(`${logTag}:related_to`, e));
+              .catch(e => swallow.warn(`${logTag}:related_to`, e));
           }
         }
       } catch (e) {

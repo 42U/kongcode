@@ -381,7 +381,8 @@ async function commitResults(
       if (reflEmb?.length) record.embedding = reflEmb;
       const rows = await store.queryFirst<{ id: string }>(`CREATE reflection CONTENT $record RETURN id`, { record });
       if (rows[0]?.id && item.surreal_session_id) {
-        await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id).catch(() => {});
+        await store.relate(String(rows[0].id), "reflects_on", item.surreal_session_id)
+          .catch(e => swallow.warn("pending-work:reflects_on", e));
       }
       store.clearReflectionCache();
       return { reflection_id: rows[0]?.id };
@@ -677,7 +678,8 @@ async function createSkillRecord(
   const rows = await store.queryFirst<{ id: string }>(`CREATE skill CONTENT $record RETURN id`, { record });
   const skillId = String(rows[0]?.id ?? "");
   if (skillId && item.task_id) {
-    await store.relate(skillId, "skill_from_task", item.task_id).catch(() => {});
+    await store.relate(skillId, "skill_from_task", item.task_id)
+      .catch(e => swallow.warn("pending-work:skill_from_task", e));
   }
   return { skill_id: skillId, name: parsed.name };
 }
