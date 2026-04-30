@@ -8,6 +8,41 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.42] — 2026-04-30
+
+### Added — gap-audit Category 1: live-fire coverage extended to 25/26 synapses
+
+Per the systematic gap-audit plan (Category 1: IPC synapses skipped by live-fire), `scripts/live-fire.mjs` extended to fire 6 previously-skipped hook handlers using clearly-tagged `[live-fire]` test payloads:
+
+- `hook.stop` (transcript_path=/dev/null so transcript reader returns empty)
+- `hook.preCompact` / `hook.postCompact`
+- `hook.taskCreated`
+- `hook.subagentStop`
+- `hook.sessionEnd`
+
+These are additive operations (write turn rows, queue pending_work, create task rows, etc.), not destructive, so they fire safely against the production daemon — the test data is identifiable by the `[live-fire]` content prefix and the `live-fire-<timestamp>` session id.
+
+**`tool.commitWorkResults` skip retained** — would need a valid pending `work_id` from a real `fetchPendingWork` response; firing it with a fake id would either silently no-op or error, neither of which is useful signal. Live-fire's `tool.fetchPendingWork` synapse already exercises the queue read path; the commit path has unit-test coverage in `test/pending-work-parser.test.ts`.
+
+**`meta.shutdown` skip retained** — truly destructive (kills the running daemon). Unit tests in `test/daemon-server.test.ts` exercise the shutdown handler with isolated daemon instances; firing it via `live-fire` would break the runner mid-test.
+
+**Result: 25/26 IPC synapses fire green against the running daemon.**
+
+```
+[1/3] meta.* (3 — skipping meta.shutdown)        3 ✓
+[2/3] tool.* (12 — skipping commitWorkResults)   12 ✓
+[3/3] hook.* (10 — every registered hook)        10 ✓
+
+Live-fire results: 25/25 synapses green
+```
+
+### Tests
+- 605 unit tests still pass.
+- 25/25 live-fire green.
+
+### Plan: gap-audit Category 1 acceptance met
+The acceptance bar — "every documented IPC/hook surface exercised live" — is now met to within 2 documented exemptions (`meta.shutdown`, `tool.commitWorkResults`) which have unit-test coverage. Next: Category 2 (test coverage report → identify <70% files → add tests).
+
 ## [0.7.41] — 2026-04-30
 
 ### Added — `npm run live-fire` end-to-end synapse runner

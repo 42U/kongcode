@@ -97,15 +97,26 @@ await fire("tool.whatIsMissing",    () => rpc("tool.whatIsMissing", { sessionId:
 await fire("tool.coreMemory:list",  () => rpc("tool.coreMemory", { sessionId: SESSION_ID, args: { action: "list" } }));
 await fire("tool.fetchPendingWork", () => rpc("tool.fetchPendingWork", { sessionId: SESSION_ID, args: {} }));
 
-console.log("\n[3/3] hook.* (read-only / idempotent payloads only)");
-const fakePayload = { session_id: SESSION_ID, prompt: "live-fire smoke test", cwd: "/home/zero/voidorigin/kongcode" };
+console.log("\n[3/3] hook.* (10 — every registered hook handler)");
+const fakePayload = { session_id: SESSION_ID, prompt: "[live-fire] smoke test", cwd: "/home/zero/voidorigin/kongcode" };
 await fire("hook.sessionStart",     () => rpc("hook.sessionStart", fakePayload));
 await fire("hook.userPromptSubmit", () => rpc("hook.userPromptSubmit", fakePayload));
 await fire("hook.preToolUse",       () => rpc("hook.preToolUse", { ...fakePayload, tool_name: "Bash", tool_input: { command: "echo test" } }));
 await fire("hook.postToolUse",      () => rpc("hook.postToolUse", { ...fakePayload, tool_name: "Bash", tool_input: { command: "echo test" }, tool_response: "test" }));
-// hook.stop / hook.sessionEnd / hook.preCompact / hook.postCompact / hook.taskCreated skipped:
-// they trigger full ingestion / postflight / extraction queueing pipelines which would create
-// long-lived test artifacts. Their handlers are exercised in unit/integration tests separately.
+// 0.7.42 C1 — fire the previously-skipped hooks with clearly-tagged
+// [live-fire] payloads. These ARE additive (write turn rows, queue
+// pending_work, etc.), but the tag makes the test data identifiable
+// for cleanup. transcript_path is set to /dev/null so the transcript
+// reader returns empty rather than mining a real conversation.
+await fire("hook.stop",             () => rpc("hook.stop", { ...fakePayload, transcript_path: "/dev/null" }));
+await fire("hook.preCompact",       () => rpc("hook.preCompact", { ...fakePayload, transcript_path: "/dev/null" }));
+await fire("hook.postCompact",      () => rpc("hook.postCompact", { ...fakePayload, summary: "[live-fire] synthetic compaction summary" }));
+await fire("hook.taskCreated",      () => rpc("hook.taskCreated", { task_description: "[live-fire] synthetic task" }));
+await fire("hook.subagentStop",     () => rpc("hook.subagentStop", { ...fakePayload, agent_type: "live-fire", parent_session_id: SESSION_ID }));
+await fire("hook.sessionEnd",       () => rpc("hook.sessionEnd", fakePayload));
+// meta.shutdown remains intentionally skipped — only synapse that's truly
+// destructive (kills the running daemon). Tested in unit suites; firing
+// here would terminate the daemon and break subsequent runs of this script.
 
 // recovery.* primitives are exercised live via tool.introspect:migrate-*
 // above (which calls recoverProjectIdRows + recoverDaemonOrphans through
