@@ -515,8 +515,37 @@ export class SurrealStore {
      * Returns concepts that pure vector search might miss due to embedding mismatch.
      */
     async tagBoostedConcepts(queryText, queryVec, limit = 10) {
-        // Extract candidate tags from query — lowercase, deduplicate
-        const stopwords = new Set(["the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about", "between", "through", "during", "it", "its", "this", "that", "these", "those", "i", "you", "we", "they", "my", "your", "our", "their", "what", "which", "who", "how", "when", "where", "why", "not", "no", "and", "or", "but", "if", "so", "any", "all", "some", "more", "just", "also", "than", "very", "too", "much", "many"]);
+        // Extract candidate tags from query — lowercase, deduplicate. Same
+        // expanded stopword set as the rationale-display path in context-assembler.ts
+        // (kept in sync to prevent the tag-boost from triggering on conversational
+        // noise like "completely", "incorrect", "search", "context" — words that
+        // would otherwise pull unrelated concepts via tag match).
+        const stopwords = new Set([
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+            "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about", "between",
+            "through", "during", "it", "its", "this", "that", "these", "those", "i", "you", "we", "they",
+            "my", "your", "our", "their", "what", "which", "who", "how", "when", "where", "why", "not",
+            "no", "and", "or", "but", "if", "so", "any", "all", "some", "more", "just", "also", "than",
+            "very", "too", "much", "many",
+            "completely", "incorrect", "correct", "wrong", "right", "broken", "working", "missing",
+            "really", "actually", "probably", "maybe", "perhaps", "clearly", "obviously", "exactly",
+            "again", "still", "even", "well", "good", "bad", "great", "fine", "okay", "yeah", "yes",
+            "basically", "mostly", "kind", "sort", "like", "want", "need", "make", "made",
+            "take", "took", "give", "gave", "tell", "told", "show", "shown", "said", "says", "know",
+            "knew", "think", "thought", "going", "doing", "done", "got", "get", "getting", "find",
+            "found", "look", "looks", "looking", "seem", "seems", "mean", "means", "meant",
+            "thing", "things", "stuff", "way", "ways", "time", "times", "place", "places", "part",
+            "parts", "point", "points", "case", "issue", "issues", "problem", "problems", "fix",
+            "fixes", "bug", "bugs", "error", "errors", "change", "changes", "update", "updates",
+            "version", "versions", "question", "questions", "answer", "answers", "reason", "reasons",
+            "context", "search", "report", "reports", "check", "checks", "status", "state", "states",
+            "running", "runs", "ran", "start", "started", "stop", "stopped", "keep", "kept",
+            "work", "works", "worked", "help", "helps", "helped", "needs", "needed",
+            "wanted", "wants", "tried", "trying", "using", "used", "uses",
+            "such", "then", "over", "under", "both", "each", "every",
+            "before", "after", "above", "below", "while", "other", "others", "same", "different", "new", "old",
+        ]);
         const words = queryText.toLowerCase().replace(/[^a-z0-9\s-]/g, "").split(/\s+/)
             .filter(w => w.length > 2 && !stopwords.has(w));
         if (words.length === 0)

@@ -55,8 +55,8 @@ import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
-const DAEMON_VERSION = "0.7.18";
-/** Lex-compare dotted versions ("0.7.5" vs "0.7.18"). Returns negative/0/positive
+const DAEMON_VERSION = "0.7.19";
+/** Lex-compare dotted versions ("0.7.5" vs "0.7.19"). Returns negative/0/positive
  *  the way Array.sort expects. Skips a full semver dep — kongcode's versions
  *  are always plain MAJOR.MINOR.PATCH, no prereleases on the daemon channel. */
 function compareSemver(a, b) {
@@ -309,9 +309,9 @@ async function main() {
     });
     // ── Meta handlers (always available, no bootstrap dependency) ──
     server.register("meta.handshake", async (params, ctx) => {
-        // Register caller identity if provided. Pre-0.7.18 clients send empty
+        // Register caller identity if provided. Pre-0.7.19 clients send empty
         // params and stay anonymous (still counted in activeClients but absent
-        // from the per-client registry). 0.7.18+ clients send {clientInfo}.
+        // from the per-client registry). 0.7.19+ clients send {clientInfo}.
         const p = params ?? {};
         if (p.clientInfo && typeof p.clientInfo.pid === "number" && p.clientInfo.version && p.clientInfo.sessionId) {
             ctx.registerIdentity(p.clientInfo);

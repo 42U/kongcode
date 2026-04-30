@@ -111,13 +111,78 @@ export async function assembleContextString(state, session, userPrompt) {
         // this context was retrieved, not just WHAT was retrieved. Keywords echoed
         // from the prompt make relevance explicit rather than implicit, moving
         // grounding from inference to reading.
-        const STOP = new Set(["this", "that", "with", "from", "have", "been", "what", "when", "where", "your", "their", "about", "which", "would", "could", "should", "will", "the", "and", "for", "are", "was", "were"]);
-        const keywords = userPrompt
+        //
+        // The keyword extraction strategy has two passes:
+        //   1. PRIORITY: pull "technical-looking" tokens — camelCase, hyphenated,
+        //      contains digit/dot/slash/underscore. These are far more likely to
+        //      be meaningful identifiers (file paths, function names, IDs) than
+        //      plain English words.
+        //   2. FALLBACK: plain words >= 4 chars that aren't in the stopword set.
+        //      The stopword set is much larger than the original 19-word list to
+        //      filter out common conversational noise like "completely",
+        //      "incorrect", "search", "context", which produced misleading
+        //      retrieval rationales like "based on prompt keywords: context,
+        //      search, completely, incorrect".
+        const STOP = new Set([
+            // Articles, pronouns, basic verbs
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+            "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+            "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about", "between",
+            "through", "during", "it", "its", "this", "that", "these", "those", "i", "you", "we", "they",
+            "my", "your", "our", "their", "what", "which", "who", "how", "when", "where", "why", "not",
+            "no", "and", "or", "but", "if", "so", "any", "all", "some", "more", "just", "also", "than",
+            "very", "too", "much", "many",
+            // Common conversational filler / adjectives / adverbs
+            "completely", "incorrect", "correct", "wrong", "right", "broken", "working", "missing",
+            "really", "actually", "probably", "maybe", "perhaps", "clearly", "obviously", "exactly",
+            "again", "still", "even", "well", "good", "bad", "great", "fine", "okay", "yeah", "yes",
+            "actually", "basically", "mostly", "kind", "sort", "like", "want", "need", "make", "made",
+            "take", "took", "give", "gave", "tell", "told", "show", "shown", "said", "says", "know",
+            "knew", "think", "thought", "going", "doing", "done", "got", "get", "getting", "find",
+            "found", "look", "looks", "looking", "seem", "seems", "mean", "means", "meant",
+            // Common nouns
+            "thing", "things", "stuff", "way", "ways", "time", "times", "place", "places", "part",
+            "parts", "point", "points", "case", "issue", "issues", "problem", "problems", "fix",
+            "fixes", "bug", "bugs", "error", "errors", "change", "changes", "update", "updates",
+            "version", "versions", "question", "questions", "answer", "answers", "reason", "reasons",
+            "context", "search", "report", "reports", "check", "checks", "status", "state", "states",
+            // Common verbs (4+ chars)
+            "make", "made", "running", "runs", "ran", "start", "started", "stop", "stopped", "keep",
+            "kept", "work", "works", "worked", "help", "helps", "helped", "need", "needs", "needed",
+            "want", "wanted", "wants", "seem", "seems", "tried", "trying", "done", "using", "used",
+            "uses", "used",
+            // Modal-ish
+            "well", "just", "such", "then", "than", "also", "over", "under", "both", "each", "every",
+            "before", "after", "above", "below", "while", "again", "both", "other", "others", "same",
+            "different", "new", "old",
+        ]);
+        const allWords = userPrompt
             .toLowerCase()
-            .replace(/[^a-z0-9\s]/g, " ")
             .split(/\s+/)
-            .filter(w => w.length >= 4 && !STOP.has(w))
-            .slice(0, 6);
+            .filter(w => w.length >= 3);
+        // Pass 1: technical-looking tokens (preserve case for display).
+        // Match in original text to keep camelCase visible.
+        const original = userPrompt.split(/\s+/).filter(w => w.length >= 3);
+        const technicalRe = /[a-z][A-Z]|[A-Z][a-z]|[a-z0-9]-[a-z0-9]|[a-z0-9]\.[a-z0-9]|[a-z0-9]\/[a-z0-9]|[a-z0-9]_[a-z0-9]|[0-9]/;
+        const technicalTokens = original
+            .map(w => w.replace(/[^a-zA-Z0-9_./-]/g, ""))
+            .filter(w => w.length >= 3 && technicalRe.test(w));
+        // Pass 2: fallback to plain English words if we didn't get enough technical tokens
+        const plain = allWords
+            .map(w => w.replace(/[^a-z0-9]/g, ""))
+            .filter(w => w.length >= 4 && !STOP.has(w));
+        // Dedup while preserving order
+        const seen = new Set();
+        const keywords = [];
+        for (const w of [...technicalTokens, ...plain]) {
+            const lower = w.toLowerCase();
+            if (seen.has(lower))
+                continue;
+            seen.add(lower);
+            keywords.push(w);
+            if (keywords.length >= 6)
+                break;
+        }
         const rationale = "=== RETRIEVAL RATIONALE ===\n" +
             `Retrieved ${result.stats.graphNodes} graph nodes + ${result.stats.neighborNodes} neighbors ` +
             `based on prompt keywords: ${keywords.length > 0 ? keywords.join(", ") : "(general)"}.` +
