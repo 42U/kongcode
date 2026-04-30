@@ -159,6 +159,15 @@ export async function writeExtractionResults(
           if (taskId) {
             await store.relate(conceptId, "derived_from", taskId)
               .catch(e => swallow("daemon:concept:derived_from", e));
+          } else {
+            // 0.7.38: surface the silent gap. Without taskId the concept
+            // gets no derived_from edge and shows up as a daemon-source
+            // orphan in introspect. Pre-fix sessions had this firing
+            // invisibly; logging it makes the next occurrence actionable.
+            swallow.warn(
+              "daemon:concept:derived_from_skipped",
+              new Error(`taskId empty when extracting concept "${c.name}" — concept will lack derived_from edge`),
+            );
           }
           if (projectId) {
             await store.relate(conceptId, "relevant_to", projectId)

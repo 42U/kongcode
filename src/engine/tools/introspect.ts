@@ -345,15 +345,19 @@ async function migrateAction(state: GlobalPluginState, filter?: string) {
   };
 }
 
-// Repairs concepts orphaned by the pre-0.7.23 derived_from schema mismatch.
-// The old schema declared IN concept OUT task while create_knowledge_gems
-// writes concept→artifact, so RELATE failed silently and concepts stayed as
-// islands. We re-RELATE by matching concept.source = "gem:<X>" to
-// artifact.path = "<X>" — the contract create_knowledge_gems uses at write
-// time. Idempotent: skips concepts that already have a derived_from edge.
+// Repairs concepts orphaned by silent edge-write failures. Two classes:
+// 1. Pre-0.7.23 gem-source orphans: schema mismatch dropped concept→artifact.
+//    Repair via concept.source = "gem:<X>" → artifact.path = "<X>".
+// 2. v0.7.38 daemon-source orphans: when a session's taskId was empty at
+//    extraction time, daemon-extracted concepts got no derived_from edge.
+//    Repair via concept.source = "daemon:<sessionId>" → session.kc_session_id
+//    matches → traverse ->session_task->task to find the task.
+// Idempotent: skips concepts that already have a derived_from edge.
 async function backfillDerivedFromAction(state: GlobalPluginState) {
   const { store } = state;
-  const orphans = await store.queryFirst<{ id: string; source: string }>(
+
+  // ── Path 1: gem-source orphans (pre-0.7.23) ──
+  const gemOrphans = await store.queryFirst<{ id: string; source: string }>(
     `SELECT id, source FROM concept
      WHERE source IS NOT NONE
        AND string::starts_with(source, 'gem:')
@@ -365,7 +369,7 @@ async function backfillDerivedFromAction(state: GlobalPluginState) {
   let relateFailed = 0;
   const unmatched: string[] = [];
 
-  for (const o of orphans) {
+  for (const o of gemOrphans) {
     const path = String(o.source).slice(4); // strip "gem:"
     const artifacts = await store.queryFirst<{ id: string }>(
       `SELECT id FROM artifact WHERE path = $path LIMIT 1`,
@@ -384,21 +388,61 @@ async function backfillDerivedFromAction(state: GlobalPluginState) {
     }
   }
 
+  // ── Path 2: daemon-source orphans (v0.7.38) ──
+  // Session-extracted concepts whose taskId was empty at extraction time.
+  // Resolve via session.kc_session_id → session_task → task.
+  const daemonOrphans = await store.queryFirst<{ id: string; source: string }>(
+    `SELECT id, source FROM concept
+     WHERE source IS NOT NONE
+       AND string::starts_with(source, 'daemon:')
+       AND array::len(->derived_from->?) = 0`,
+  );
+
+  let daemonFixed = 0;
+  let missingTask = 0;
+  for (const o of daemonOrphans) {
+    const sid = String(o.source).slice(7); // strip "daemon:"
+    // Look up session row by kc_session_id; if found, traverse to task.
+    const taskRows = await store.queryFirst<{ task_id: string }>(
+      `SELECT (->session_task->task[0].id) AS task_id
+       FROM session
+       WHERE kc_session_id = $sid LIMIT 1`,
+      { sid },
+    );
+    const taskId = taskRows[0]?.task_id;
+    if (!taskId) {
+      missingTask++;
+      continue;
+    }
+    try {
+      await store.relate(String(o.id), "derived_from", String(taskId));
+      daemonFixed++;
+    } catch {
+      relateFailed++;
+    }
+  }
+
   const lines: string[] = [];
   lines.push("BACKFILL derived_from");
   lines.push("═══════════════════════════════════");
-  lines.push(`Orphan concepts found:    ${orphans.length}`);
-  lines.push(`Edges created:            ${fixed}`);
-  lines.push(`Missing source artifact:  ${missingArtifact}`);
-  lines.push(`RELATE failed:            ${relateFailed}`);
+  lines.push(`Gem orphans found:         ${gemOrphans.length}`);
+  lines.push(`Gem edges created:         ${fixed}`);
+  lines.push(`Missing source artifact:   ${missingArtifact}`);
+  lines.push(`Daemon orphans found:      ${daemonOrphans.length}`);
+  lines.push(`Daemon edges created:      ${daemonFixed}`);
+  lines.push(`Missing source task:       ${missingTask}`);
+  lines.push(`RELATE failed (total):     ${relateFailed}`);
   if (unmatched.length > 0) {
     lines.push("");
-    lines.push("Sample unmatched source paths:");
+    lines.push("Sample unmatched source paths (gem):");
     for (const p of unmatched) lines.push(`  - ${p}`);
   }
   return {
     content: [{ type: "text" as const, text: lines.join("\n") }],
-    details: { orphans: orphans.length, fixed, missingArtifact, relateFailed },
+    details: {
+      orphans: gemOrphans.length, fixed, missingArtifact, relateFailed,
+      daemonOrphans: daemonOrphans.length, daemonFixed, missingTask,
+    },
   };
 }
 

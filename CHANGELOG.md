@@ -8,6 +8,35 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.38] — 2026-04-30
+
+### Fixed — daemon-extracted concept orphans (forward + retroactive)
+
+User-driven follow-up after the v0.7.37 spin surfaced 25 concepts in the `orphan_concepts` query with `source: "daemon:<sessionid>"` and no `derived_from` edge. Trace through `session-end.ts:43 → pending-work.ts:351 → memory-daemon.ts:159` showed the chain IS wired — but `if (taskId)` silently skips the relate when `taskId` is empty string (the `SessionState.taskId` default before bootstrap completes). The result: every concept extracted from a session that bootstrapped without a task ended up provenance-less.
+
+**Forward fix (memory-daemon.ts:159-167):** the `if (taskId)` skip path now emits a `swallow.warn` flagging "taskId empty when extracting concept X — concept will lack derived_from edge". Future occurrences become visible in daemon.log instead of being silent.
+
+**Retroactive fix (introspect.ts backfill_derived_from, extended):** the migration now repairs both gem-source and daemon-source orphans:
+
+1. **Gem orphans** (pre-0.7.23): unchanged — strip `gem:` prefix, look up `artifact.path`, RELATE.
+2. **Daemon orphans** (NEW v0.7.38): strip `daemon:` prefix to get `kc_session_id`, look up `session WHERE kc_session_id = $sid`, traverse `->session_task->task[0]`, RELATE concept→derived_from→task.
+
+Idempotent — both paths skip concepts that already have a derived_from edge. Re-runs after live extractions are safe.
+
+**Report extended:** the migration now shows separate counts for gem vs daemon paths:
+```
+Gem orphans found:         N
+Gem edges created:         N
+Missing source artifact:   N
+Daemon orphans found:      N
+Daemon edges created:      N
+Missing source task:       N
+RELATE failed (total):     N
+```
+
+### Tests
+- 596 pass (no new tests — the daemon path is a structural addition that mirrors the existing gem path; live verification via running the migration on this DB is the integration test).
+
 ## [0.7.37] — 2026-04-30
 
 ### Changed — `pending_work_purged` post-mortem alert → `pending_work_aging` pre-purge warning

@@ -80,6 +80,9 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
             fixed: number;
             missingArtifact: number;
             relateFailed: number;
+            daemonOrphans: number;
+            daemonFixed: number;
+            missingTask: number;
         };
     } | {
         content: {
