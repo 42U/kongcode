@@ -619,36 +619,130 @@ interface ExtractedSkill {
   postconditions?: string;
 }
 
+/** 0.7.32: trace why a parser drop happened. Truncates payload preview to
+ *  300 chars and tags with the specific reason so a daemon-log scan can
+ *  retroactively answer "why did skills_created return 0?". */
+function tracedrop(reason: string, payload: unknown): void {
+  let preview: string;
+  try {
+    preview = typeof payload === "string"
+      ? payload.slice(0, 300)
+      : JSON.stringify(payload).slice(0, 300);
+  } catch {
+    preview = "<unserializable>";
+  }
+  log.warn(`[graduation-parser] drop reason=${reason} payload=${preview}`);
+}
+
+/** 0.7.32: shared name + steps coercion logic, used by both single-skill
+ *  and causal-graduate paths. Subagents emit varied shapes — accept any
+ *  reasonable name alias and coerce string-array steps to {tool,
+ *  description} objects rather than dropping the row entirely. */
+function coerceSkill(parsed: any, traceTag: string): ExtractedSkill | null {
+  if (!parsed || typeof parsed !== "object") {
+    tracedrop(`${traceTag}:not-an-object`, parsed);
+    return null;
+  }
+  // Name aliases — try name → title → skill_name → id.
+  const name = parsed.name ?? parsed.title ?? parsed.skill_name ?? parsed.id;
+  if (!name || typeof name !== "string") {
+    tracedrop(`${traceTag}:missing-name`, parsed);
+    return null;
+  }
+  if (!Array.isArray(parsed.steps)) {
+    tracedrop(`${traceTag}:steps-not-array`, parsed);
+    return null;
+  }
+  if (parsed.steps.length === 0) {
+    tracedrop(`${traceTag}:steps-empty`, parsed);
+    return null;
+  }
+  // Coerce string-array steps into {tool, description} objects so we can
+  // land the row instead of dropping it. Future maintenance can re-extract
+  // the tool tag from description; an unwritten skill is unrecoverable.
+  const steps = parsed.steps.map((s: any) => {
+    if (typeof s === "string") return { tool: "unknown", description: s };
+    if (s && typeof s === "object") {
+      return {
+        tool: String(s.tool ?? s.name ?? "unknown"),
+        description: String(s.description ?? s.text ?? s.desc ?? ""),
+      };
+    }
+    return { tool: "unknown", description: String(s) };
+  });
+  return {
+    name: String(name),
+    description: String(parsed.description ?? ""),
+    preconditions: parsed.preconditions ? String(parsed.preconditions) : undefined,
+    steps,
+    postconditions: parsed.postconditions ? String(parsed.postconditions) : undefined,
+  };
+}
+
 function parseSkillResult(results: unknown): ExtractedSkill | null {
-  let parsed: ExtractedSkill;
+  let parsed: any;
   if (typeof results === "string") {
     if (results.trim() === "null" || results.trim() === "None") return null;
     try { parsed = JSON.parse(results); } catch {
       const match = results.match(/\{[\s\S]*\}/);
-      if (!match) return null;
-      try { parsed = JSON.parse(match[0]); } catch { return null; }
+      if (!match) {
+        tracedrop("skill:json-parse-failed", results);
+        return null;
+      }
+      try { parsed = JSON.parse(match[0]); } catch {
+        tracedrop("skill:json-parse-failed", match[0]);
+        return null;
+      }
     }
   } else {
-    parsed = results as ExtractedSkill;
+    parsed = results;
   }
-  if (!parsed?.name || !Array.isArray(parsed?.steps) || parsed.steps.length === 0) return null;
-  return parsed;
+  return coerceSkill(parsed, "skill");
 }
 
 function parseCausalGraduationResult(results: unknown): ExtractedSkill[] {
+  // 0.7.32: tolerant unwrap. Subagents may emit a top-level array (canonical),
+  // a wrapped object {skills: [...]} or {result: [...]}, or a single skill
+  // object instead of a batch. Accept all shapes; only return [] when
+  // truly nothing skill-shaped is present, with a trace line each time.
   let arr: unknown[];
-  if (typeof results === "string") {
-    try { arr = JSON.parse(results); } catch {
-      const match = results.match(/\[[\s\S]*\]/);
-      if (!match) return [];
-      try { arr = JSON.parse(match[0]); } catch { return []; }
+  let parsed: unknown = results;
+
+  if (typeof parsed === "string") {
+    try { parsed = JSON.parse(parsed); } catch {
+      const match = (parsed as string).match(/\[[\s\S]*\]/);
+      if (!match) {
+        tracedrop("causal_graduate:json-parse-failed", parsed);
+        return [];
+      }
+      try { parsed = JSON.parse(match[0]); } catch {
+        tracedrop("causal_graduate:json-parse-failed", match[0]);
+        return [];
+      }
     }
-  } else if (Array.isArray(results)) {
-    arr = results;
+  }
+
+  if (Array.isArray(parsed)) {
+    arr = parsed;
+  } else if (parsed && typeof parsed === "object") {
+    // Try common wrapper keys before falling through.
+    const obj = parsed as Record<string, unknown>;
+    const wrapped = obj.skills ?? obj.result ?? obj.extracted ?? obj.items ?? obj.data;
+    if (Array.isArray(wrapped)) {
+      arr = wrapped;
+    } else if (obj.name && Array.isArray(obj.steps)) {
+      // Single-skill object (subagent submitted one instead of a batch).
+      arr = [obj];
+    } else {
+      tracedrop("causal_graduate:not-an-array", obj);
+      return [];
+    }
   } else {
+    tracedrop("causal_graduate:not-an-object", parsed);
     return [];
   }
-  return arr.map(item => parseSkillResult(item)).filter((s): s is ExtractedSkill => s !== null);
+
+  return arr.map(item => coerceSkill(item, "causal_graduate")).filter((s): s is ExtractedSkill => s !== null);
 }
 
 function parseSoulResult(results: unknown): Record<string, any> | null {
@@ -692,3 +786,13 @@ async function createSkillRecord(
   }
   return { skill_id: skillId, name: parsed.name };
 }
+
+// 0.7.32: file-internal parser exposure for the test harness only. Do not
+// import from production code — the canonical entry points are
+// `commit_work_results` and the work-type case dispatchers above. The
+// parsers are tested directly because they're pure helpers and the full
+// dispatch path requires a SurrealStore + EmbeddingService.
+export const __test__ = {
+  parseSkillResult,
+  parseCausalGraduationResult,
+};

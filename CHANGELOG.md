@@ -8,6 +8,36 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.32] — 2026-04-30
+
+### Fixed (graduation-pipeline parser hardening + observability)
+
+A v0.7.31 memory-extractor subagent run today submitted a `causal_graduate` work item with 6 skill candidates. The handler returned `skills_created: 0` and only 1 skill landed in the recent timeline (and that 1 came through a different code path — the per-session `memory-daemon.ts:343` extractor — not the subagent's explicit submission). 5 of 6 high-quality skill candidates were silently dropped.
+
+Phase-1 root-cause analysis confirmed the parser contract was well-aligned with the documented instructions, but `parseCausalGraduationResult` (pending-work.ts:638) had **3 silent-failure paths** that returned `[]` without any log line:
+1. Wrapped object shape (`{skills: [...]}`, `{result: [...]}`, etc.) → "not-an-array" path
+2. Single skill object instead of a batch → "not-an-array" path
+3. JSON parse failure on a string → "json-parse-failed" path
+
+And `parseSkillResult` had additional drop paths: missing `name`, `steps` not an array, `steps` empty.
+
+**Two-part fix:**
+
+**Part 1 — drop-reason telemetry (`tracedrop`).** Every silent-failure return now emits a `log.warn`-level line tagged `[graduation-parser]` with the specific reason and a 300-char preview of the offending payload. So the next time a batch silently drops, the daemon log carries actionable evidence — not just `skills_created: 0`.
+
+**Part 2 — tolerant parsing (`coerceSkill`).** New shared helper that accepts:
+- **Name aliases**: `name` → `title` → `skill_name` → `id`. Subagents emit varied shapes; rejecting on an alias mismatch is over-strict.
+- **String-array `steps` coercion**: each string becomes `{tool: "unknown", description: str}`. Better to land the row with an imperfect step shape than drop it entirely — the downstream skill-render path already handles the canonical shape and an unwritten skill is unrecoverable.
+- **Step-field aliases**: each step can have `{name|tool, text|description|desc}`.
+
+`parseCausalGraduationResult` now also unwraps top-level wrapper keys (`skills`, `result`, `extracted`, `items`, `data`) and treats a single `{name, steps}` object as a single-element array.
+
+The downstream `ExtractedSkill` interface and `createSkillRecord` are unchanged — the contract on the *output side* is still strict; the parser becomes more forgiving on the *input side*.
+
+### Tests
+- New `test/pending-work-parser.test.ts` — 13 cases pinning canonical shape (regression), 5 wrapper unwraps, single-object handling, name-alias acceptance, step-coercion, step-field-alias coercion, and 4 truly-invalid drops.
+- 592 tests pass (was 579 + 13).
+
 ## [0.7.31] — 2026-04-30
 
 ### Added (Reflexion-style grounding nudge — context-grounding plan phase 4)

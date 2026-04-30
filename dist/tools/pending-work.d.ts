@@ -29,3 +29,20 @@ export declare function handleCreateKnowledgeGems(state: GlobalPluginState, sess
         text: string;
     }>;
 }>;
+interface ExtractedSkill {
+    name: string;
+    description: string;
+    preconditions?: string;
+    steps: {
+        tool: string;
+        description: string;
+    }[];
+    postconditions?: string;
+}
+declare function parseSkillResult(results: unknown): ExtractedSkill | null;
+declare function parseCausalGraduationResult(results: unknown): ExtractedSkill[];
+export declare const __test__: {
+    parseSkillResult: typeof parseSkillResult;
+    parseCausalGraduationResult: typeof parseCausalGraduationResult;
+};
+export {};
