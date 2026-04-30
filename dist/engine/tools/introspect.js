@@ -7,6 +7,7 @@ import { assertRecordId } from "../surreal.js";
 import { migrateWorkspace } from "../workspace-migrate.js";
 import { checkGraduation, formatGraduationReport, hasSoul } from "../soul.js";
 import { computeTrends } from "../observability.js";
+import { recoverProjectIdRows, recoverDaemonOrphans } from "../recovery.js";
 const ALLOWED_TABLES = new Set([
     "agent", "project", "task", "artifact", "concept",
     "turn", "identity_chunk", "session", "memory",
@@ -327,323 +328,51 @@ async function migrateAction(state, filter) {
 //    matches → traverse ->session_task->task to find the task.
 // Idempotent: skips concepts that already have a derived_from edge.
 async function backfillDerivedFromAction(state) {
-    const { store } = state;
-    // ── Path 1: gem-source orphans (pre-0.7.23) ──
-    const gemOrphans = await store.queryFirst(`SELECT id, source FROM concept
-     WHERE source IS NOT NONE
-       AND string::starts_with(source, 'gem:')
-       AND array::len(->derived_from->?) = 0`);
-    let fixed = 0;
-    let missingArtifact = 0;
-    let relateFailed = 0;
-    const unmatched = [];
-    for (const o of gemOrphans) {
-        const path = String(o.source).slice(4); // strip "gem:"
-        const artifacts = await store.queryFirst(`SELECT id FROM artifact WHERE path = $path LIMIT 1`, { path });
-        if (artifacts.length === 0) {
-            missingArtifact++;
-            if (unmatched.length < 5)
-                unmatched.push(path);
-            continue;
-        }
-        try {
-            await store.relate(String(o.id), "derived_from", String(artifacts[0].id));
-            fixed++;
-        }
-        catch {
-            relateFailed++;
-        }
-    }
-    // ── Path 2: daemon-source orphans (v0.7.38) ──
-    // Session-extracted concepts whose taskId was empty at extraction time.
-    // Resolve via session.kc_session_id → session_task → task.
-    const daemonOrphans = await store.queryFirst(`SELECT id, source FROM concept
-     WHERE source IS NOT NONE
-       AND string::starts_with(source, 'daemon:')
-       AND array::len(->derived_from->?) = 0`);
-    let daemonFixed = 0;
-    let missingTask = 0;
-    // 0.7.39: synthesize placeholder tasks per unique session_id whose
-    // session row doesn't exist (pre-kongcode-substrate import residue).
-    // One task per session, reused across all orphan concepts from that
-    // session. Cached via the session→task map so re-runs find the
-    // existing placeholder rather than creating duplicates.
-    const placeholderTasks = new Map(); // sid → taskId
-    let synthesizedTasks = 0;
-    let synthesizedEdges = 0;
-    for (const o of daemonOrphans) {
-        const sid = String(o.source).slice(7); // strip "daemon:"
-        // Look up session row by kc_session_id; if found, traverse to task.
-        const taskRows = await store.queryFirst(`SELECT (->session_task->task[0].id) AS task_id
-       FROM session
-       WHERE kc_session_id = $sid LIMIT 1`, { sid });
-        let taskId = taskRows[0]?.task_id;
-        if (!taskId) {
-            // Path 3: session row doesn't exist — synthesize a placeholder
-            // task for this session_id (cached so all orphans from the same
-            // session reuse it). Idempotent: look up first by description
-            // pattern, only create if missing.
-            const cached = placeholderTasks.get(sid);
-            if (cached) {
-                taskId = cached;
-            }
-            else {
-                const placeholderDesc = `[pre-substrate import] session ${sid}`;
-                const existing = await store.queryFirst(`SELECT id FROM task WHERE description = $desc LIMIT 1`, { desc: placeholderDesc });
-                if (existing.length > 0) {
-                    taskId = String(existing[0].id);
-                    placeholderTasks.set(sid, taskId);
-                }
-                else {
-                    try {
-                        taskId = await store.createTask(placeholderDesc);
-                        placeholderTasks.set(sid, taskId);
-                        synthesizedTasks++;
-                    }
-                    catch {
-                        missingTask++;
-                        continue;
-                    }
-                }
-            }
-            try {
-                await store.relate(String(o.id), "derived_from", String(taskId));
-                synthesizedEdges++;
-            }
-            catch {
-                relateFailed++;
-            }
-        }
-        else {
-            try {
-                await store.relate(String(o.id), "derived_from", String(taskId));
-                daemonFixed++;
-            }
-            catch {
-                relateFailed++;
-            }
-        }
-    }
+    // 0.7.40: delegates to engine/recovery.ts:recoverDaemonOrphans. The
+    // migrate handler is now a thin reporting wrapper; helpers are
+    // independently callable for maintenance / post-import / cron use.
+    const r = await recoverDaemonOrphans(state.store);
     const lines = [];
     lines.push("BACKFILL derived_from");
     lines.push("═══════════════════════════════════");
-    lines.push(`Gem orphans found:         ${gemOrphans.length}`);
-    lines.push(`Gem edges created:         ${fixed}`);
-    lines.push(`Missing source artifact:   ${missingArtifact}`);
-    lines.push(`Daemon orphans found:      ${daemonOrphans.length}`);
-    lines.push(`Daemon edges (resolved):   ${daemonFixed}`);
-    lines.push(`Daemon edges (synth task): ${synthesizedEdges}`);
-    lines.push(`Synthesized placeholders:  ${synthesizedTasks}`);
-    lines.push(`Missing source task:       ${missingTask}`);
-    lines.push(`RELATE failed (total):     ${relateFailed}`);
-    if (unmatched.length > 0) {
-        lines.push("");
-        lines.push("Sample unmatched source paths (gem):");
-        for (const p of unmatched)
-            lines.push(`  - ${p}`);
-    }
+    lines.push(`Gem orphans found:         ${r.gemOrphans}`);
+    lines.push(`Gem edges created:         ${r.gemEdgesCreated}`);
+    lines.push(`Missing source artifact:   ${r.missingArtifact}`);
+    lines.push(`Daemon orphans found:      ${r.daemonOrphans}`);
+    lines.push(`Daemon edges (resolved):   ${r.daemonEdgesResolved}`);
+    lines.push(`Daemon edges (synth task): ${r.daemonEdgesSynthesized}`);
+    lines.push(`Synthesized placeholders:  ${r.synthesizedPlaceholders}`);
+    lines.push(`Missing source task:       ${r.missingTask}`);
+    lines.push(`RELATE failed (total):     ${r.relateFailed}`);
     return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: {
-            orphans: gemOrphans.length, fixed, missingArtifact, relateFailed,
-            daemonOrphans: daemonOrphans.length, daemonFixed, missingTask,
-            synthesizedTasks, synthesizedEdges,
-        },
+        details: r,
     };
 }
-// 0.7.26 + 0.7.29: backfill `project_id` field on rows created before
-// project-scoped persistence landed. Order matters — fix sessions first
-// (via task→project), then tasks (via project edge), then reflections /
-// memories / skills which traverse session_id. Concepts have their own
-// edge (relevant_to). Idempotent — only updates rows where project_id
-// IS NONE.
+// 0.7.40: this handler now delegates to engine/recovery.ts for the actual
+// work. The migrate-tool reporting layer just unwraps the result struct
+// and formats the lines. Keeps the introspect API stable while the
+// helpers are reusable from other call sites (maintenance, periodic
+// auto-run, post-import).
 async function backfillProjectIdAction(state) {
     const { store } = state;
-    async function backfillTable(label, selectSql) {
-        const rows = await store.queryFirst(selectSql);
-        let fixed = 0;
-        for (const row of rows) {
-            if (!row.project_id)
-                continue;
-            try {
-                await store.queryExec(`UPDATE ${row.id} SET project_id = $pid`, { pid: row.project_id });
-                fixed++;
-            }
-            catch { /* skip */ }
-        }
-        return { found: rows.length, fixed };
-    }
-    // 1. Tasks: traverse ->task_part_of->project (the canonical edge)
-    const tasks = await backfillTable("task", `SELECT id, ->task_part_of->project[0].id AS project_id
-     FROM task
-     WHERE project_id IS NONE
-       AND ->task_part_of->project[0] IS NOT NONE`);
-    // 2. Sessions: traverse ->session_task->task->task_part_of->project
-    //    (must run AFTER tasks so the task.project_id field could be a
-    //    fallback path; here we use the edge chain directly).
-    const sessions = await backfillTable("session", `SELECT id, ->session_task->task->task_part_of->project[0].id AS project_id
-     FROM session
-     WHERE project_id IS NONE
-       AND ->session_task->task->task_part_of->project[0] IS NOT NONE`);
-    // 3. Concepts: outgoing relevant_to edge (already worked in 0.7.26).
-    const concepts = await backfillTable("concept", `SELECT id, ->relevant_to->project[0].id AS project_id
-     FROM concept
-     WHERE project_id IS NONE
-       AND ->relevant_to->project[0] IS NOT NONE`);
-    // 4. Memories: from the session row's project_id (works now that
-    //    sessions have been backfilled in step 2).
-    const memories = await backfillTable("memory", 
-    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
-    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
-    // shapes so legacy data with either populates correctly.
-    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
-     FROM memory
-     WHERE project_id IS NONE AND session_id IS NOT NONE`);
-    // 5. Reflections: same shape as memories (session_id-keyed).
-    const reflections = await backfillTable("reflection", 
-    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
-    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
-    // shapes so legacy data with either populates correctly.
-    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
-     FROM reflection
-     WHERE project_id IS NONE AND session_id IS NOT NONE`);
-    // 6. Skills: traverse ->skill_from_task->task.project_id (after task
-    //    backfill). Falls back to session_id-based when no task edge.
-    const skillsViaTask = await backfillTable("skill", `SELECT id, ->skill_from_task->task[0].project_id AS project_id
-     FROM skill
-     WHERE project_id IS NONE
-       AND ->skill_from_task->task[0] IS NOT NONE`);
-    const skillsViaSession = await backfillTable("skill", 
-    // 0.7.30: session_id on memory/reflection/skill rows is the kc_session_id
-    // string (e.g. "0df34328-..."), NOT the surreal record ref. Match both
-    // shapes so legacy data with either populates correctly.
-    `SELECT id, (SELECT project_id FROM session WHERE kc_session_id = $parent.session_id OR id = $parent.session_id LIMIT 1)[0].project_id AS project_id
-     FROM skill
-     WHERE project_id IS NONE AND session_id IS NOT NONE`);
-    // 7. 0.7.36: centroid-based project assignment. For orphans whose session
-    //    can't be resolved (X-close orphans, purged sessions), check if their
-    //    embedding is semantically close to any existing project's concept
-    //    centroid. Threshold 0.5 (cosine) requires meaningful semantic
-    //    overlap — picks up "this memory is about kongcode internals" when the
-    //    project has hundreds of kongcode concepts, but skips truly cross-
-    //    project lessons (release process, user prefs) which fall through
-    //    to the scope='global' tag in step 8.
-    //
-    //    This is the lazy-resolve-but-materialized pattern: instead of
-    //    deferring resolution to retrieval time, we resolve once at backfill
-    //    time and write the result. Deterministic, observable, idempotent.
-    const CENTROID_THRESHOLD = 0.5;
-    const projectCentroids = new Map();
-    let centroidAssigned = 0;
-    let centroidScanned = 0;
-    try {
-        const projects = await store.queryFirst(`SELECT id FROM project`);
-        for (const proj of projects) {
-            const concepts = await store.queryFirst(`SELECT embedding FROM concept
-         WHERE project_id = $pid
-           AND embedding IS NOT NONE
-           AND array::len(embedding) > 0
-         LIMIT 100`, { pid: proj.id });
-            if (concepts.length === 0)
-                continue;
-            const dim = concepts[0].embedding.length;
-            const centroid = new Array(dim).fill(0);
-            for (const c of concepts) {
-                for (let i = 0; i < dim; i++)
-                    centroid[i] += c.embedding[i];
-            }
-            for (let i = 0; i < dim; i++)
-                centroid[i] /= concepts.length;
-            projectCentroids.set(String(proj.id), centroid);
-        }
-        function cosineSim(a, b) {
-            if (a.length !== b.length || a.length === 0)
-                return 0;
-            let dot = 0, na = 0, nb = 0;
-            for (let i = 0; i < a.length; i++) {
-                dot += a[i] * b[i];
-                na += a[i] * a[i];
-                nb += b[i] * b[i];
-            }
-            return na > 0 && nb > 0 ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
-        }
-        if (projectCentroids.size > 0) {
-            for (const table of ["memory", "reflection", "skill"]) {
-                const orphans = await store.queryFirst(`SELECT id, embedding FROM type::table($t)
-           WHERE project_id IS NONE
-             AND embedding IS NOT NONE
-             AND array::len(embedding) > 0`, { t: table });
-                centroidScanned += orphans.length;
-                for (const row of orphans) {
-                    let bestPid = "";
-                    let bestSim = 0;
-                    for (const [pid, centroid] of projectCentroids) {
-                        const sim = cosineSim(row.embedding, centroid);
-                        if (sim > bestSim) {
-                            bestSim = sim;
-                            bestPid = pid;
-                        }
-                    }
-                    if (bestSim >= CENTROID_THRESHOLD && bestPid) {
-                        try {
-                            // Assign project_id and clear any stale scope='global' tag
-                            // (a previous run may have tagged this row before centroid
-                            // assignment was implemented).
-                            await store.queryExec(`UPDATE ${row.id} SET project_id = $pid, scope = NONE`, { pid: bestPid });
-                            centroidAssigned++;
-                        }
-                        catch { /* skip */ }
-                    }
-                }
-            }
-        }
-    }
-    catch { /* centroid pass is best-effort; fall through to global tag */ }
-    // 8. 0.7.35: tag truly-unrecoverable orphans as scope='global'. After
-    //    traversal AND centroid assignment, anything still lacking
-    //    project_id is genuinely cross-project (release process, daemon
-    //    debug findings, user prefs that span projects). They already
-    //    surface across projects via the soft filter (project_id IS NONE) —
-    //    the tag just makes the global classification explicit.
-    let globalsTagged = 0;
-    for (const table of ["memory", "reflection", "skill"]) {
-        try {
-            const rows = await store.queryFirst(`SELECT id FROM type::table($t) WHERE project_id IS NONE AND (scope IS NONE OR scope != 'global')`, { t: table });
-            for (const row of rows) {
-                try {
-                    await store.queryExec(`UPDATE ${row.id} SET scope = 'global'`);
-                    globalsTagged++;
-                }
-                catch { /* skip */ }
-            }
-        }
-        catch { /* skip table */ }
-    }
+    const r = await recoverProjectIdRows(store);
     const lines = [];
     lines.push("BACKFILL project_id");
     lines.push("═══════════════════════════════════");
-    lines.push(`Task rows backfilled:        ${tasks.fixed} / ${tasks.found}`);
-    lines.push(`Session rows backfilled:     ${sessions.fixed} / ${sessions.found}`);
-    lines.push(`Concept rows backfilled:     ${concepts.fixed} / ${concepts.found}`);
-    lines.push(`Memory rows backfilled:      ${memories.fixed} / ${memories.found}`);
-    lines.push(`Reflection rows backfilled:  ${reflections.fixed} / ${reflections.found}`);
-    lines.push(`Skill rows backfilled:       ${skillsViaTask.fixed + skillsViaSession.fixed} / ${skillsViaTask.found + skillsViaSession.found}`);
-    lines.push(`Centroid-assigned:           ${centroidAssigned} / ${centroidScanned} (threshold ${CENTROID_THRESHOLD})`);
-    lines.push(`Unrecoverable → scope=global: ${globalsTagged}`);
+    lines.push(`Task rows backfilled:        ${r.tasks.fixed} / ${r.tasks.found}`);
+    lines.push(`Session rows backfilled:     ${r.sessions.fixed} / ${r.sessions.found}`);
+    lines.push(`Concept rows backfilled:     ${r.concepts.fixed} / ${r.concepts.found}`);
+    lines.push(`Memory rows backfilled:      ${r.memories.fixed} / ${r.memories.found}`);
+    lines.push(`Reflection rows backfilled:  ${r.reflections.fixed} / ${r.reflections.found}`);
+    lines.push(`Skill rows backfilled:       ${r.skills.fixed} / ${r.skills.found}`);
+    lines.push(`Centroid-assigned:           ${r.centroidAssigned} / ${r.centroidScanned} (threshold 0.5)`);
+    lines.push(`Unrecoverable → scope=global: ${r.globalsTagged}`);
     lines.push("");
     lines.push("Re-runnable: only updates rows where project_id IS NONE.");
     return {
         content: [{ type: "text", text: lines.join("\n") }],
-        details: {
-            tasks, sessions, concepts, memories, reflections,
-            skills: {
-                found: skillsViaTask.found + skillsViaSession.found,
-                fixed: skillsViaTask.fixed + skillsViaSession.fixed,
-            },
-            centroidAssigned,
-            centroidScanned,
-            globalsTagged,
-        },
+        details: r,
     };
 }
 async function trendsAction(state) {

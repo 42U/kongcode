@@ -75,51 +75,13 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
             type: "text";
             text: string;
         }[];
-        details: {
-            orphans: number;
-            fixed: number;
-            missingArtifact: number;
-            relateFailed: number;
-            daemonOrphans: number;
-            daemonFixed: number;
-            missingTask: number;
-            synthesizedTasks: number;
-            synthesizedEdges: number;
-        };
+        details: import("../recovery.js").DerivedFromRecoveryResult;
     } | {
         content: {
             type: "text";
             text: string;
         }[];
-        details: {
-            tasks: {
-                found: number;
-                fixed: number;
-            };
-            sessions: {
-                found: number;
-                fixed: number;
-            };
-            concepts: {
-                found: number;
-                fixed: number;
-            };
-            memories: {
-                found: number;
-                fixed: number;
-            };
-            reflections: {
-                found: number;
-                fixed: number;
-            };
-            skills: {
-                found: number;
-                fixed: number;
-            };
-            centroidAssigned: number;
-            centroidScanned: number;
-            globalsTagged: number;
-        };
+        details: import("../recovery.js").ProjectIdRecoveryResult;
     } | {
         content: {
             type: "text";

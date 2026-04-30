@@ -60,7 +60,10 @@ describe("introspect.action=migrate, filter=backfill_derived_from", () => {
     expect(relateCalls[0]).toEqual({ from: "concept:abc", edge: "derived_from", to: "artifact:sec1" });
     expect(relateCalls[1]).toEqual({ from: "concept:def", edge: "derived_from", to: "artifact:sec1" });
     expect(relateCalls[2]).toEqual({ from: "concept:ghi", edge: "derived_from", to: "artifact:doc1" });
-    expect((result as any).details).toMatchObject({ orphans: 3, fixed: 3, missingArtifact: 0 });
+    // 0.7.40: details shape migrated to the recovery.ts contract.
+    // gemOrphans/gemEdgesCreated/missingArtifact replace the old
+    // orphans/fixed/missingArtifact keys.
+    expect((result as any).details).toMatchObject({ gemOrphans: 3, gemEdgesCreated: 3, missingArtifact: 0 });
   });
 
   it("counts orphans whose source artifact is missing instead of failing", async () => {
@@ -74,7 +77,7 @@ describe("introspect.action=migrate, filter=backfill_derived_from", () => {
     const tool = createIntrospectToolDef(state as GlobalPluginState, session as SessionState);
     const result = await tool.execute("test", { action: "migrate", filter: "backfill_derived_from" });
     expect(relateCalls).toHaveLength(1);
-    expect((result as any).details).toMatchObject({ orphans: 2, fixed: 1, missingArtifact: 1 });
+    expect((result as any).details).toMatchObject({ gemOrphans: 2, gemEdgesCreated: 1, missingArtifact: 1 });
   });
 
   it("is idempotent — orphan query already filters concepts that have a derived_from edge", async () => {
@@ -85,6 +88,6 @@ describe("introspect.action=migrate, filter=backfill_derived_from", () => {
     const tool = createIntrospectToolDef(state as GlobalPluginState, session as SessionState);
     const result = await tool.execute("test", { action: "migrate", filter: "backfill_derived_from" });
     expect(relateCalls).toHaveLength(0);
-    expect((result as any).details).toMatchObject({ orphans: 0, fixed: 0 });
+    expect((result as any).details).toMatchObject({ gemOrphans: 0, gemEdgesCreated: 0 });
   });
 });

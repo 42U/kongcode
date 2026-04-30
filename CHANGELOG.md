@@ -8,6 +8,29 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.40] — 2026-04-30
+
+### Refactored — recovery helpers extracted into reusable module
+
+User-driven request after the v0.7.36-39 cleanup train: expose the recovery primitives as helper functions so they can be called from maintenance, post-import flows, or cron jobs — not only via the introspect migrate handler.
+
+**New module: `src/engine/recovery.ts`** — extracted ~400 lines from introspect.ts handlers into a public API:
+
+- `computeProjectCentroids(store)` → `Map<string, number[]>` — per-project centroid embeddings
+- `findBestProjectMatch(embedding, centroids, threshold?)` → `{projectId, similarity} | null` — pure cosine-similarity classifier
+- `synthesizePlaceholderTask(store, kcSessionId)` → `string | null` — idempotent placeholder task lookup-or-create
+- `recoverProjectIdRows(store)` → `ProjectIdRecoveryResult` — full project_id backfill cascade (traversal → centroid → scope='global')
+- `recoverDaemonOrphans(store)` → `DerivedFromRecoveryResult` — gem + daemon + synthesis derived_from recovery
+- `runFullRecovery(store)` → `FullRecoveryResult` — orchestrator combining both passes
+
+**Refactored:** `introspect.ts` `backfillProjectIdAction` and `backfillDerivedFromAction` are now thin reporting wrappers over the helpers (~225 lines of inline implementation removed). The user-facing migrate API is unchanged.
+
+**Why it matters:** the recovery logic was previously trapped inside the introspect tool's migrate handler — only callable via `mcp__kongcode__introspect action=migrate`. Now any code path (a maintenance hook, an importer, a startup-time data quality check) can `import { runFullRecovery } from "engine/recovery"` and call it directly.
+
+### Tests
+- New `test/recovery.test.ts` — 9 cases pinning helper contracts: centroid match, placeholder synthesis (existing-task path, new-task path, error path), return-shape contracts for both individual recovery functions + the orchestrator.
+- 605 tests pass (was 596 + 9).
+
 ## [0.7.39] — 2026-04-30
 
 ### Added — placeholder-task synthesis for pre-substrate import orphans
