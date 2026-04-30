@@ -75,6 +75,17 @@ export declare function createIntrospectToolDef(state: GlobalPluginState, sessio
             type: "text";
             text: string;
         }[];
+        details: {
+            orphans: number;
+            fixed: number;
+            missingArtifact: number;
+            relateFailed: number;
+        };
+    } | {
+        content: {
+            type: "text";
+            text: string;
+        }[];
         details: import("../workspace-migrate.js").MigrationResult;
     } | {
         content: {

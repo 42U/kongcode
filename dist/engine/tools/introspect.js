@@ -76,9 +76,9 @@ const introspectSchema = Type.Object({
         Type.Literal("query"),
         Type.Literal("migrate"),
         Type.Literal("trends"),
-    ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (ingest workspace .md files into DB — ask user first), trends (daily rolling means + anomaly flags from orchestrator_metrics_daily)." }),
+    ], { description: "Action: status (health overview), count (row counts), verify (confirm record), query (predefined reports), migrate (default: ingest workspace .md files; filter=backfill_derived_from to repair pre-0.7.23 orphan provenance edges — ask user first), trends (daily rolling means + anomaly flags from orchestrator_metrics_daily)." }),
     table: Type.Optional(Type.String({ description: "Table name for count/query actions." })),
-    filter: Type.Optional(Type.String({ description: "For count: active, inactive, recent_24h, with_embedding, unresolved. For query: template name." })),
+    filter: Type.Optional(Type.String({ description: "For count: active, inactive, recent_24h, with_embedding, unresolved. For query: template name. For migrate: backfill_derived_from to repair concept→artifact provenance edges that the pre-0.7.23 schema rejected." })),
     record_id: Type.Optional(Type.String({ description: "Record ID for verify action (e.g. memory:abc123)." })),
 });
 export function createIntrospectToolDef(state, session) {
@@ -98,7 +98,7 @@ export function createIntrospectToolDef(state, session) {
                     case "count": return await countAction(store, params.table, params.filter);
                     case "verify": return await verifyAction(store, params.record_id);
                     case "query": return await queryAction(store, params.table, params.filter);
-                    case "migrate": return await migrateAction(state);
+                    case "migrate": return await migrateAction(state, params.filter);
                     case "trends": return await trendsAction(state);
                 }
             }
@@ -274,7 +274,10 @@ async function verifyAction(store, recordId) {
         details: { exists: true, id: recordId, record: cleaned },
     };
 }
-async function migrateAction(state) {
+async function migrateAction(state, filter) {
+    if (filter === "backfill_derived_from") {
+        return await backfillDerivedFromAction(state);
+    }
     const { store, embeddings, workspaceDir } = state;
     if (!workspaceDir) {
         return {
@@ -303,6 +306,57 @@ async function migrateAction(state) {
     return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: result,
+    };
+}
+// Repairs concepts orphaned by the pre-0.7.23 derived_from schema mismatch.
+// The old schema declared IN concept OUT task while create_knowledge_gems
+// writes concept→artifact, so RELATE failed silently and concepts stayed as
+// islands. We re-RELATE by matching concept.source = "gem:<X>" to
+// artifact.path = "<X>" — the contract create_knowledge_gems uses at write
+// time. Idempotent: skips concepts that already have a derived_from edge.
+async function backfillDerivedFromAction(state) {
+    const { store } = state;
+    const orphans = await store.queryFirst(`SELECT id, source FROM concept
+     WHERE source IS NOT NONE
+       AND string::starts_with(source, 'gem:')
+       AND array::len(->derived_from->?) = 0`);
+    let fixed = 0;
+    let missingArtifact = 0;
+    let relateFailed = 0;
+    const unmatched = [];
+    for (const o of orphans) {
+        const path = String(o.source).slice(4); // strip "gem:"
+        const artifacts = await store.queryFirst(`SELECT id FROM artifact WHERE path = $path LIMIT 1`, { path });
+        if (artifacts.length === 0) {
+            missingArtifact++;
+            if (unmatched.length < 5)
+                unmatched.push(path);
+            continue;
+        }
+        try {
+            await store.relate(String(o.id), "derived_from", String(artifacts[0].id));
+            fixed++;
+        }
+        catch {
+            relateFailed++;
+        }
+    }
+    const lines = [];
+    lines.push("BACKFILL derived_from");
+    lines.push("═══════════════════════════════════");
+    lines.push(`Orphan concepts found:    ${orphans.length}`);
+    lines.push(`Edges created:            ${fixed}`);
+    lines.push(`Missing source artifact:  ${missingArtifact}`);
+    lines.push(`RELATE failed:            ${relateFailed}`);
+    if (unmatched.length > 0) {
+        lines.push("");
+        lines.push("Sample unmatched source paths:");
+        for (const p of unmatched)
+            lines.push(`  - ${p}`);
+    }
+    return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { orphans: orphans.length, fixed, missingArtifact, relateFailed },
     };
 }
 async function trendsAction(state) {

@@ -8,6 +8,14 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.24] — 2026-04-30
+
+### Added
+- **`backfill_derived_from` migrate sub-mode.** Repairs concepts orphaned by the pre-0.7.23 `derived_from` schema mismatch. Selects concepts where `string::starts_with(source, 'gem:')` AND `array::len(->derived_from->?) = 0`, strips the `gem:` prefix to derive the artifact path, and re-RELATEs `concept→derived_from→artifact`. Idempotent — the orphan filter excludes already-linked concepts. Invoke via `introspect.action=migrate, filter=backfill_derived_from`. Verified live: 63 orphans repaired on the maintainer's DB, 0 missing artifacts, 0 RELATE failures.
+
+### Fixed
+- **`orphan_concepts` query template — two SurrealQL bugs surfaced during backfill testing.** SQL `LIKE` is not a SurrealQL keyword (replaced with `string::starts_with()`), and `string::starts_with()` errors on `NONE` values (added `source IS NOT NONE` guard). Both fixed in the same path the backfill uses.
+
 ## [0.7.23] — 2026-04-30
 
 ### Fixed
