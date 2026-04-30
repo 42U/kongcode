@@ -8,6 +8,34 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.36] — 2026-04-30
+
+### Added — centroid-based project assignment for orphan rows (proper recovery, not relabeling)
+
+User correction during v0.7.35 review: tagging unrecoverable orphans `scope='global'` was lazy — the rows already surfaced cross-project via the soft filter, so the tag was cosmetic. The genuine fix is to recover the missing metadata, not relabel its absence.
+
+After sampling actual content, the orphan rows turned out to be high-signal engineering memories: release decisions ("don't ship node_modules"), user preferences ("user deploys fixes themselves"), debug findings (gateway crash patterns), README fixes. Real value worth proper provenance, not data to delete.
+
+**The fix:** between the existing traversal-based backfill (steps 1-6) and the global-tag fallback (step 8), v0.7.36 adds a centroid-based assignment step:
+
+1. For each `project`, compute the centroid embedding from the project's `concept` rows (up to 100 most-relevant).
+2. For each orphan row (memory / reflection / skill) with `project_id=NONE` AND a populated embedding, compute cosine similarity to every project centroid.
+3. Assign `project_id` to the project with highest similarity, **iff** that similarity exceeds `CENTROID_THRESHOLD = 0.5`.
+4. Clear stale `scope='global'` tag from rows that just got a project (they have a real home now).
+5. Truly cross-project content (release/process/preference lessons that don't semantically anchor to any one project) falls through to step 8 and stays `scope='global'` — that's the genuine global signal.
+
+**Why this is real recovery, not relabeling:** the orphan rows now have a queryable, deterministic project_id derived from their semantic content. A future query for project-scoped memories will pull them via the canonical `project_id = $pid` clause, not via the catch-all `project_id IS NONE` fallback. The substrate now treats them as first-class citizens of their home project.
+
+**Idempotent + reusable:** the migration only touches rows with `project_id=NONE`, so re-runs are safe. Anyone (any user) hitting the X-close orphan pattern (sessions purged before DB write) can run `introspect.action=migrate, filter=backfill_project_id` and benefit identically — the centroid pass needs only a populated `project` table and `concept`s with `relevant_to` edges, both of which any active kongcode workspace has.
+
+**Threshold tuning:** 0.5 cosine on bge-m3 embeddings is a meaningful-overlap threshold (per the v0.7.27 lexical-fallback at the same value). Below that, the row genuinely doesn't belong to any project the user has ever worked on, so global is the honest tag.
+
+### Tests
+- 596 pass (no new tests; the centroid path is best-effort and exercises live data via the migration runner — pinning behavior in unit tests would require mocking project + concept rows extensively, deferred).
+
+### Out of scope
+- Synthesizing missing `session` rows for orphan `kc_session_ids` — the centroid pass already establishes `project_id` directly on the row, which is what retrieval cares about. Session synthesis would only add cosmetic completeness to the graph; deferred unless a real query path needs it.
+
 ## [0.7.35] — 2026-04-30
 
 ### Added — last two deferred items closed; deferred list now empty

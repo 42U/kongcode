@@ -501,13 +501,94 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
      WHERE project_id IS NONE AND session_id IS NOT NONE`,
   );
 
-  // 7. 0.7.35: tag unrecoverable orphans as scope='global'. After all
-  //    traversal-based backfills above, any memory/reflection/skill row
-  //    still lacking project_id has a session_id that resolves to nothing
-  //    (purged session, malformed id). They already surface across projects
-  //    via the soft filter (project_id IS NONE) — tagging scope='global'
-  //    just makes the implicit-global behavior explicit and zeros out the
-  //    "unbackfilled" signal in the report. Retrieval behavior unchanged.
+  // 7. 0.7.36: centroid-based project assignment. For orphans whose session
+  //    can't be resolved (X-close orphans, purged sessions), check if their
+  //    embedding is semantically close to any existing project's concept
+  //    centroid. Threshold 0.5 (cosine) requires meaningful semantic
+  //    overlap — picks up "this memory is about kongcode internals" when the
+  //    project has hundreds of kongcode concepts, but skips truly cross-
+  //    project lessons (release process, user prefs) which fall through
+  //    to the scope='global' tag in step 8.
+  //
+  //    This is the lazy-resolve-but-materialized pattern: instead of
+  //    deferring resolution to retrieval time, we resolve once at backfill
+  //    time and write the result. Deterministic, observable, idempotent.
+  const CENTROID_THRESHOLD = 0.5;
+  const projectCentroids = new Map<string, number[]>();
+  let centroidAssigned = 0;
+  let centroidScanned = 0;
+  try {
+    const projects = await store.queryFirst<{ id: string }>(`SELECT id FROM project`);
+    for (const proj of projects) {
+      const concepts = await store.queryFirst<{ embedding: number[] }>(
+        `SELECT embedding FROM concept
+         WHERE project_id = $pid
+           AND embedding IS NOT NONE
+           AND array::len(embedding) > 0
+         LIMIT 100`,
+        { pid: proj.id },
+      );
+      if (concepts.length === 0) continue;
+      const dim = concepts[0].embedding.length;
+      const centroid = new Array(dim).fill(0);
+      for (const c of concepts) {
+        for (let i = 0; i < dim; i++) centroid[i] += c.embedding[i];
+      }
+      for (let i = 0; i < dim; i++) centroid[i] /= concepts.length;
+      projectCentroids.set(String(proj.id), centroid);
+    }
+
+    function cosineSim(a: number[], b: number[]): number {
+      if (a.length !== b.length || a.length === 0) return 0;
+      let dot = 0, na = 0, nb = 0;
+      for (let i = 0; i < a.length; i++) {
+        dot += a[i] * b[i];
+        na += a[i] * a[i];
+        nb += b[i] * b[i];
+      }
+      return na > 0 && nb > 0 ? dot / (Math.sqrt(na) * Math.sqrt(nb)) : 0;
+    }
+
+    if (projectCentroids.size > 0) {
+      for (const table of ["memory", "reflection", "skill"]) {
+        const orphans = await store.queryFirst<{ id: string; embedding: number[] }>(
+          `SELECT id, embedding FROM type::table($t)
+           WHERE project_id IS NONE
+             AND embedding IS NOT NONE
+             AND array::len(embedding) > 0`,
+          { t: table },
+        );
+        centroidScanned += orphans.length;
+        for (const row of orphans) {
+          let bestPid = "";
+          let bestSim = 0;
+          for (const [pid, centroid] of projectCentroids) {
+            const sim = cosineSim(row.embedding, centroid);
+            if (sim > bestSim) { bestSim = sim; bestPid = pid; }
+          }
+          if (bestSim >= CENTROID_THRESHOLD && bestPid) {
+            try {
+              // Assign project_id and clear any stale scope='global' tag
+              // (a previous run may have tagged this row before centroid
+              // assignment was implemented).
+              await store.queryExec(
+                `UPDATE ${row.id} SET project_id = $pid, scope = NONE`,
+                { pid: bestPid },
+              );
+              centroidAssigned++;
+            } catch { /* skip */ }
+          }
+        }
+      }
+    }
+  } catch { /* centroid pass is best-effort; fall through to global tag */ }
+
+  // 8. 0.7.35: tag truly-unrecoverable orphans as scope='global'. After
+  //    traversal AND centroid assignment, anything still lacking
+  //    project_id is genuinely cross-project (release process, daemon
+  //    debug findings, user prefs that span projects). They already
+  //    surface across projects via the soft filter (project_id IS NONE) —
+  //    the tag just makes the global classification explicit.
   let globalsTagged = 0;
   for (const table of ["memory", "reflection", "skill"]) {
     try {
@@ -533,6 +614,7 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
   lines.push(`Memory rows backfilled:      ${memories.fixed} / ${memories.found}`);
   lines.push(`Reflection rows backfilled:  ${reflections.fixed} / ${reflections.found}`);
   lines.push(`Skill rows backfilled:       ${skillsViaTask.fixed + skillsViaSession.fixed} / ${skillsViaTask.found + skillsViaSession.found}`);
+  lines.push(`Centroid-assigned:           ${centroidAssigned} / ${centroidScanned} (threshold ${CENTROID_THRESHOLD})`);
   lines.push(`Unrecoverable → scope=global: ${globalsTagged}`);
   lines.push("");
   lines.push("Re-runnable: only updates rows where project_id IS NONE.");
@@ -544,6 +626,8 @@ async function backfillProjectIdAction(state: GlobalPluginState) {
         found: skillsViaTask.found + skillsViaSession.found,
         fixed: skillsViaTask.fixed + skillsViaSession.fixed,
       },
+      centroidAssigned,
+      centroidScanned,
       globalsTagged,
     },
   };
