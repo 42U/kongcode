@@ -190,7 +190,7 @@ export async function detectAnomalies(store, cooldown) {
     for (const detector of [
         detectEmbeddingGap,
         detectPendingWorkBuildup,
-        detectPendingWorkPurged,
+        detectPendingWorkAging,
         detectGraduationReady,
         detectGraduationClose,
     ]) {
@@ -248,27 +248,30 @@ async function detectPendingWorkBuildup(store) {
         suggestion: "Spawn a memory-extractor subagent to drain the queue (background, opus model)",
     };
 }
-async function detectPendingWorkPurged(store) {
-    // Detects silent data loss reported in issue #5: purgeStalePendingWork
-    // drops items older than 7d and only writes a maintenance_runs row +
-    // a swallowed log. If items were dropped recently (last 24h), surface
-    // it via the alert channel so the user knows learning was missed.
-    const rows = await store.queryFirst(`SELECT math::sum(rows_affected) AS total_purged
-     FROM maintenance_runs
-     WHERE job = "purgeStalePendingWork"
-       AND ran_at > time::now() - 24h
-       AND rows_affected > 0
+async function detectPendingWorkAging(store) {
+    // 0.7.37: replaced post-mortem `pending_work_purged` (which fired AFTER
+    // items were already deleted — useless tombstone) with a pre-purge
+    // warning. Purge runs at age > 7 days; this alert fires at 5+ days,
+    // giving ~2 days of actionable runway to drain the queue before data
+    // loss. Threshold was chosen to be loud enough to motivate action but
+    // not so chatty it nags during normal multi-day idle periods.
+    const rows = await store.queryFirst(`SELECT count() AS n, math::min(created_at) AS oldest
+     FROM pending_work
+     WHERE status = "pending"
+       AND created_at < time::now() - 5d
      GROUP ALL`);
     const r = rows[0];
-    const purged = Number(r?.total_purged ?? 0);
-    if (purged === 0)
+    if (!r || r.n === 0)
         return null;
+    const oldestMs = r.oldest ? new Date(r.oldest).getTime() : Date.now();
+    const ageDays = ((Date.now() - oldestMs) / 86_400_000).toFixed(1);
+    const daysToPurge = Math.max(0, 7 - parseFloat(ageDays)).toFixed(1);
     return {
-        code: "substrate.pending_work_purged",
+        code: "substrate.pending_work_aging",
         severity: "warn",
-        message: `${purged} pending_work item${purged === 1 ? "" : "s"} were purged in the last 24h without being processed (>7 days old)`,
-        evidence: `total_purged=${purged} (sum of rows_affected for purgeStalePendingWork in last 24h)`,
-        suggestion: "These represent missed learning. Drain the queue more often — the SessionStart and UserPromptSubmit hooks both surface backlogs; spawn the memory-extractor subagent when you see them.",
+        message: `${r.n} pending_work item${r.n === 1 ? "" : "s"} aging — oldest is ${ageDays}d, will purge in ${daysToPurge}d if not processed`,
+        evidence: `count=${r.n}, oldest=${r.oldest}`,
+        suggestion: "Drain the queue NOW before the 7-day purge runs. Spawn a memory-extractor subagent (background, opus model) — call fetch_pending_work in a loop and commit_work_results until empty.",
     };
 }
 async function detectGraduationReady(store) {

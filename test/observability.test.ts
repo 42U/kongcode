@@ -26,6 +26,7 @@ function mockStore(handlers: {
   artifactGap?: { total: number; embedded: number };
   pendingWork?: { n: number; oldest: string };
   pendingWorkPurged?: { total_purged: number };
+  pendingWorkAging?: { n: number; oldest: string | null };
   trends?: DailyRollup[];
   graduation?: { ready: boolean; qualityScore: number; volumeScore: number; stage: string; diagnostics: { suggestion?: string }[] };
 }) {
@@ -45,6 +46,11 @@ function mockStore(handlers: {
       }
       if (sql.includes("FROM artifact") && sql.includes("count(embedding != NONE)")) {
         return handlers.artifactGap ? [handlers.artifactGap] : [];
+      }
+      if (sql.includes("FROM pending_work") && sql.includes("status = \"pending\"") && sql.includes("created_at < time::now() - 5d")) {
+        const a = handlers.pendingWorkAging;
+        if (!a || a.n === 0) return [];
+        return [{ n: a.n, oldest: a.oldest }];
       }
       if (sql.includes("FROM pending_work") && sql.includes("status = \"pending\"")) {
         return handlers.pendingWork ? [handlers.pendingWork] : [];
@@ -161,20 +167,26 @@ describe("detectAnomalies", () => {
     expect(flags).toEqual([]);
   });
 
-  it("fires substrate.pending_work_purged when 24h purge total > 0 (issue #5)", async () => {
-    const store = mockStore({ pendingWorkPurged: { total_purged: 12 } });
+  // 0.7.37: replaced post-mortem `pending_work_purged` with pre-purge
+  // `pending_work_aging`. The old detector fired AFTER data was deleted,
+  // which gave the user no actionable runway. The new detector fires
+  // when items are 5+ days old, ~2 days before the 7d purge runs.
+  it("fires substrate.pending_work_aging when items older than 5d exist", async () => {
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString();
+    const store = mockStore({ pendingWorkAging: { n: 8, oldest: sixDaysAgo } });
     const flags = await detectAnomalies(store as any, cooldown);
-    const purged = flags.find(f => f.code === "substrate.pending_work_purged");
-    expect(purged).toBeDefined();
-    expect(purged!.severity).toBe("warn");
-    expect(purged!.message).toContain("12 pending_work");
-    expect(purged!.evidence).toContain("total_purged=12");
+    const aging = flags.find(f => f.code === "substrate.pending_work_aging");
+    expect(aging).toBeDefined();
+    expect(aging!.severity).toBe("warn");
+    expect(aging!.message).toContain("8 pending_work");
+    expect(aging!.message).toMatch(/will purge in [\d.]+d/);
+    expect(aging!.evidence).toContain("count=8");
   });
 
-  it("does NOT fire pending_work_purged when no recent purges", async () => {
-    const store = mockStore({ pendingWorkPurged: { total_purged: 0 } });
+  it("does NOT fire pending_work_aging when no items older than 5d", async () => {
+    const store = mockStore({ pendingWorkAging: { n: 0, oldest: null } });
     const flags = await detectAnomalies(store as any, cooldown);
-    expect(flags.find(f => f.code === "substrate.pending_work_purged")).toBeUndefined();
+    expect(flags.find(f => f.code === "substrate.pending_work_aging")).toBeUndefined();
   });
 });
 

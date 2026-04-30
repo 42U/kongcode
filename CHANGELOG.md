@@ -8,6 +8,22 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.37] — 2026-04-30
+
+### Changed — `pending_work_purged` post-mortem alert → `pending_work_aging` pre-purge warning
+
+User correction: the existing `substrate.pending_work_purged` alert fired AFTER pending_work items were already deleted (>7d old). By the time the alert surfaced in `<kongcode-alert>`, there was nothing to do — the data was gone. A tombstone reminder, not an actionable warning.
+
+**The fix:** `observability.ts` — replaced the post-mortem detector with `detectPendingWorkAging`. Fires when pending_work items exist that are 5+ days old (the purge threshold is 7 days), giving ~2 days of actionable runway to drain the queue before data loss. Message includes a countdown: *"will purge in 1.4d if not processed"*.
+
+The `code` changed from `substrate.pending_work_purged` → `substrate.pending_work_aging`. Cooldown applies independently per code, so the new alert won't inherit the old one's mute window.
+
+The volume-based `pending_work_buildup` detector (fires at >50 items + oldest >24h) is unchanged — covers a different failure mode (queue-grew-fast, regardless of age).
+
+### Tests
+- Updated `test/observability.test.ts` — 2 cases swapped from purged-detector to aging-detector. Pinned: fires when items older than 5d exist (with countdown phrasing), does NOT fire when none.
+- 596 tests pass.
+
 ## [0.7.36] — 2026-04-30
 
 ### Added — centroid-based project assignment for orphan rows (proper recovery, not relabeling)
