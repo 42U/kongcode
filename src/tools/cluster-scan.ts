@@ -39,26 +39,48 @@ async function fetchNeighborConcepts(
   const neighborMap = new Map<string, string[]>();
   if (resultIds.length === 0) return neighborMap;
 
-  // Fetch concept contents adjacent to any result via mentions/about_concept/
-  // artifact_mentions. We collapse all three edge types since for clustering
-  // purposes "what concepts does this node touch" is the interesting signal.
-  try {
-    for (const rid of resultIds) {
-      const rows = await state.store.queryFirst<{ id: string; content: string }>(
-        `SELECT VALUE ->mentions->concept AS out FROM ${rid}
-         UNION SELECT VALUE ->about_concept->concept AS out FROM ${rid}
-         UNION SELECT VALUE ->artifact_mentions->concept AS out FROM ${rid}`,
+  // Fetch concept ids adjacent to each result via any of three edge types
+  // (turn→mentions→concept, memory→about_concept→concept, artifact→
+  // artifact_mentions→concept). One row per source id, neighbors as a flat
+  // deduped array. Pre-0.7.46 this used `SELECT VALUE …->concept AS out`
+  // — but `SELECT VALUE` unwraps to bare values so the `AS out` alias
+  // never landed, the per-row parser found nothing, every item got an
+  // empty neighbor list, and clusterByOverlap dropped everything into a
+  // single singleton bucket. The clustering layer was effectively dead.
+  // For each result, gather the concepts it's adjacent to via any direction
+  // and any of the relevant edge types. Result types:
+  //   turn      → ->mentions->concept (outgoing)
+  //   memory    → ->about_concept->concept (outgoing)
+  //   artifact  → ->artifact_mentions->concept (outgoing)
+  //   concept   → ->{broader|narrower|related_to}->concept (outgoing) AND
+  //               <-{about_concept|mentions|artifact_mentions}<-* (incoming;
+  //               we then re-project to that node's concept neighbors via
+  //               the same edges) — but since incoming nodes are turns/
+  //               memories/artifacts and we want CONCEPTS as neighbors, the
+  //               simplest stable signal is just outgoing hierarchy edges.
+  // Pre-0.7.46 the query used `SELECT VALUE …->concept AS out` — VALUE
+  // unwraps to bare values so AS-aliasing never landed and every neighbor
+  // list was empty. Concepts had no neighbors at all because the query
+  // only looked outward via edges that don't originate from concepts.
+  for (const rid of resultIds) {
+    try {
+      const rows = await state.store.queryFirst<{ neighbors: string[] }>(
+        `SELECT array::distinct(array::flatten([
+           ->mentions->concept,
+           ->about_concept->concept,
+           ->artifact_mentions->concept,
+           ->broader->concept,
+           ->narrower->concept,
+           ->related_to->concept
+         ])) AS neighbors FROM ${rid}`,
       ).catch(() => []);
-      // Different traversal shape — just grab concept ids from any returned rows
-      const contents: string[] = [];
-      for (const r of rows) {
-        const id = (r as any).out ?? (r as any).id;
-        if (id) contents.push(String(id));
-      }
-      if (contents.length > 0) neighborMap.set(rid, contents);
+      const nbrs = Array.isArray(rows[0]?.neighbors)
+        ? rows[0].neighbors.map(String).filter(Boolean)
+        : [];
+      if (nbrs.length > 0) neighborMap.set(rid, nbrs);
+    } catch (e) {
+      swallow("clusterScan:neighbors", e);
     }
-  } catch (e) {
-    swallow("clusterScan:neighbors", e);
   }
 
   return neighborMap;
