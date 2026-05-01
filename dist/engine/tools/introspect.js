@@ -26,6 +26,16 @@ const COUNT_FILTERS = {
     with_embedding: "WHERE embedding != NONE AND array::len(embedding) > 0",
     unresolved: "WHERE status != 'resolved' OR status IS NONE",
 };
+// Per-table overrides where the generic filter has the wrong semantics for
+// that table's status vocabulary. Without this, `count filter=unresolved`
+// against pending_work used memory-table semantics ('!= resolved') and
+// reported every row as unresolved — including completed/failed/skipped.
+// Now it reports only the truly-claimable backlog (status='pending').
+const TABLE_FILTER_OVERRIDES = {
+    pending_work: {
+        unresolved: "WHERE status = 'pending'",
+    },
+};
 const QUERY_TEMPLATES = {
     recent: {
         sql: "SELECT id, text, content, description, created_at FROM type::table($t) ORDER BY created_at DESC LIMIT 5",
@@ -240,7 +250,8 @@ async function countAction(store, table, filter) {
                 details: null,
             };
         }
-        whereClause = " " + COUNT_FILTERS[filter];
+        const tableOverride = TABLE_FILTER_OVERRIDES[table]?.[filter];
+        whereClause = " " + (tableOverride ?? COUNT_FILTERS[filter]);
     }
     const rows = await store.queryFirst(`SELECT count() AS count FROM type::table($t)${whereClause} GROUP ALL`, { t: table });
     const count = rows[0]?.count ?? 0;
