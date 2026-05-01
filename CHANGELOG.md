@@ -8,6 +8,18 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.44] — 2026-05-01
+
+### Changed — Anthropic-aligned wrapper wording + bypass sigil
+
+Stage 2 of the v0.7.43–45 injection rework. Two changes to `src/hook-handlers/user-prompt-submit.ts`:
+
+**Wrapper legend rewritten.** The system-reminder body that wraps every kongcode injection used third-person system-speak ("KONGCODE CONTEXT — authoritative for this turn", "Items tagged [load-bearing] must be grounded on") that violates Anthropic's documented prompt-engineering guidance for Claude 4.5+ — specifically, `MUST` / `CRITICAL` / `authoritative` framings overtrigger and reduce instruction-following accuracy. Replaced with motivation-first softer wording: "The following is supplementary context for this turn. Use items when they're relevant; ignore items that don't match the question." Salience-tag explanation reframed as guidance ("[load-bearing] items are most likely to be relevant — when answering, reference them by id") rather than command. Explicit grounding self-check added at the bottom: "check that factual claims about prior work are either grounded in items below or explicitly framed as inference."
+
+**Bypass sigil.** Prefix the prompt with `* ` (asterisk + space) or `/raw ` to skip kongcode's injection for that turn. Useful when the user wants a clean shot at the model without substrate competing for attention. Turn ingestion still fires — only the retrieval + injection pipeline is skipped. The sigil is matched at the start of the prompt; an asterisk used mid-prompt for emphasis (e.g., `*important*`) is not affected.
+
+Stage 3+ (XML semantic tags, intent-gated directives, per-source char cap, Skill deferral) remain queued.
+
 ## [0.7.43] — 2026-05-01
 
 ### Fixed — reranker tail-leakage: drops irrelevant graph neighbors from injection
