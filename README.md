@@ -74,6 +74,49 @@ On first run, the kongcode daemon provisions everything it needs (one-time, ~2-3
 
 Subsequent sessions skip bootstrap and start in seconds — they warm-attach to the long-lived daemon.
 
+### 3. Launch Claude with the kongcode prompt (recommended)
+
+Claude Code ships with its own file-based "auto memory" system that writes to `~/.claude/projects/<project>/memory/*.md`. Without redirection, you end up with two parallel memory stores (kongcode's graph and Claude Code's files) that fragment your knowledge.
+
+We ship a kongcode-branded system prompt at [`templates/kongcode.txt`](templates/kongcode.txt) that turns Claude into an autonomous, memory-aware agent:
+
+- Explains kongcode's per-turn context injection (`<active_directives>`, `<recalled_memory>`, retrieval rationale, etc.) so Claude knows how to read and ground in it
+- Standards for every action: be factually correct, slow down on non-trivial work, verify before claiming done, apply user-set rules every turn
+- A four-phase turn loop (READ / REASON / RECALL / SAVE) with explicit save and recall triggers
+- Self-healing rules so Claude diagnoses retrieval problems with `introspect` rather than asking you to run commands
+
+Install it once:
+
+```bash
+cp /path/to/kongcode/templates/kongcode.txt ~/.kongcode-prompt.txt
+```
+
+Then launch Claude with it via `--append-system-prompt-file`. The simplest UX is a shell alias so you do not have to remember the flag:
+
+```bash
+# bash / zsh
+echo 'alias claude="claude --append-system-prompt-file ~/.kongcode-prompt.txt"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Or use it directly:
+
+```bash
+claude --append-system-prompt-file ~/.kongcode-prompt.txt
+```
+
+**Why `--append-system-prompt-file` and not `~/.claude/CLAUDE.md`?** Both work, but `--append-system-prompt-file` injects the prompt at system-prompt level, which is more authoritative than the auto-discovered `CLAUDE.md` block. CLAUDE.md is fine as a lighter alternative if you do not want a shell alias.
+
+**Per-project CLAUDE.md** (optional). Drop a short file at your repo root for project-specific notes:
+
+```markdown
+# <project name>
+
+The kongcode daemon may be running locally and injecting context every turn. See the kongcode prompt for the full agent guide. Query the kongcode MCP tools (`recall`, `record_finding`, `core_memory`, `introspect`) for historical decisions, architecture, and user preferences before guessing.
+```
+
+**Migrating an existing memory directory.** If `~/.claude/projects/<project>/memory/` already has `.md` files, ask Claude in a session for that project to ingest them into kongcode (`create_knowledge_gems` with the file contents, or `record_finding` per file), then delete the originals and replace `MEMORY.md` with a pointer that says "deprecated, see kongcode."
+
 ### Updating
 
 ```
