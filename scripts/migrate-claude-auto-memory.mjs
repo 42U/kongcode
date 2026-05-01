@@ -19,13 +19,17 @@
  *               ~/.claude/projects/* /memory
  *
  * Options:
- *   --dry-run       print what would happen, do not write or delete
- *   --keep          ingest into kongcode but do NOT delete originals
+ *   --dry-run       print what would happen, do not write or move
+ *   --keep          ingest into kongcode but leave originals untouched
+ *                   (no archive, no MEMORY.md rewrite)
+ *   --delete        DESTRUCTIVE: delete originals after ingest (opt-in).
+ *                   Default behavior archives originals to
+ *                   <dir>/.kongcode-archive/<timestamp>/ instead.
  *   --batch <N>     gems per create_knowledge_gems call (default: 10;
  *                   30s daemon RPC timeout caps practical batch sizes)
  *
  * Examples:
- *   # migrate the current project's auto-memory
+ *   # migrate the current project's auto-memory (archives originals)
  *   node scripts/migrate-claude-auto-memory.mjs
  *
  *   # migrate every project's auto-memory in one go
@@ -34,10 +38,13 @@
  *   # see what would happen without writing
  *   node scripts/migrate-claude-auto-memory.mjs --dry-run
  *
+ *   # destructive (only after verifying kongcode ingest worked)
+ *   node scripts/migrate-claude-auto-memory.mjs --delete
+ *
  * Requires: kongcode daemon running on ~/.kongcode-daemon.sock
  */
 
-import { readFile, readdir, stat, writeFile, unlink } from "node:fs/promises";
+import { readFile, readdir, stat, writeFile, unlink, mkdir, rename } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { connect } from "node:net";
 import { join, basename } from "node:path";
@@ -52,6 +59,7 @@ const PROJECTS_ROOT = join(HOME, ".claude", "projects");
 const argv = process.argv.slice(2);
 const DRY_RUN = argv.includes("--dry-run");
 const KEEP = argv.includes("--keep");
+const DELETE = argv.includes("--delete");
 const BATCH_FLAG = argv.indexOf("--batch");
 const BATCH_SIZE = BATCH_FLAG >= 0 ? Number(argv[BATCH_FLAG + 1]) || 10 : 10;
 const TARGET = argv.find(a => !a.startsWith("--") && a !== String(BATCH_SIZE));
@@ -189,14 +197,26 @@ async function migrateDirectory(dir) {
     } catch { /* count by batch length as fallback */ totalIngested += batch.length; }
   }
 
-  // Delete originals (unless --keep) and replace MEMORY.md with a pointer.
-  let deleted = 0;
+  // Default: archive originals to <dir>/.kongcode-archive/<timestamp>/.
+  // --keep: leave them in place. --delete: destroy them (opt-in).
+  let movedCount = 0;
+  let deletedCount = 0;
+  let archiveDir = null;
   if (!KEEP) {
-    for (const file of mdFiles) {
-      try {
-        await unlink(join(dir, file));
-        deleted++;
-      } catch { /* skip */ }
+    if (DELETE) {
+      for (const file of mdFiles) {
+        try { await unlink(join(dir, file)); deletedCount++; } catch { /* skip */ }
+      }
+    } else {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+      archiveDir = join(dir, ".kongcode-archive", ts);
+      try { await mkdir(archiveDir, { recursive: true }); } catch { /* skip */ }
+      for (const file of mdFiles) {
+        try {
+          await rename(join(dir, file), join(archiveDir, file));
+          movedCount++;
+        } catch { /* skip */ }
+      }
     }
   }
 
@@ -206,7 +226,7 @@ async function migrateDirectory(dir) {
 Migrated to kongcode graph on ${new Date().toISOString().slice(0, 10)} via scripts/migrate-claude-auto-memory.mjs.
 
 ${totalIngested} memories ingested as concepts. Source tag: \`${source}\`.
-
+${archiveDir ? `\nOriginals archived to: \`${archiveDir.replace(HOME, "~")}\` (reversible).\n` : ""}
 Use the kongcode MCP tools (\`recall\`, \`record_finding\`, \`core_memory\`, \`introspect\`) for memory operations. Do not write new files here.
 `;
   if (!KEEP) {
@@ -219,7 +239,9 @@ Use the kongcode MCP tools (\`recall\`, \`record_finding\`, \`core_memory\`, \`i
     dir,
     status: "migrated",
     gems_ingested: totalIngested,
-    files_deleted: deleted,
+    files_archived: movedCount,
+    files_deleted: deletedCount,
+    archive_dir: archiveDir,
     concept_ids_sample: conceptIds.slice(0, 3),
   };
 }
@@ -248,7 +270,8 @@ async function resolveTargets() {
 }
 
 const targets = await resolveTargets();
-console.log(`migrate-claude-auto-memory: ${targets.length} target dir(s), dry_run=${DRY_RUN}, keep=${KEEP}`);
+const mode = DRY_RUN ? "dry-run" : KEEP ? "keep" : DELETE ? "delete" : "archive";
+console.log(`migrate-claude-auto-memory: ${targets.length} target dir(s), mode=${mode}`);
 
 const results = [];
 for (const dir of targets) {
@@ -256,7 +279,8 @@ for (const dir of targets) {
   try {
     const r = await migrateDirectory(dir);
     results.push(r);
-    console.log(`  ${r.status}${r.gems_ingested ? ` — ingested ${r.gems_ingested}, deleted ${r.files_deleted}` : ""}`);
+    const tail = r.gems_ingested ? ` — ingested ${r.gems_ingested}${r.files_archived ? `, archived ${r.files_archived}` : ""}${r.files_deleted ? `, deleted ${r.files_deleted}` : ""}` : "";
+    console.log(`  ${r.status}${tail}`);
     if (r.would_ingest) console.log(`  would ingest: ${r.gem_names.join(", ")}`);
   } catch (e) {
     console.error(`  error: ${e.message}`);
