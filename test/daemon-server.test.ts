@@ -8,14 +8,17 @@ const SILENT_LOG = {
   error: () => {},
 };
 
-/** Helper: pick an ephemeral TCP port to avoid conflicts in parallel tests.
- *  v0.7.34: range tightened to 49152-65535 (IANA dynamic/private range).
- *  Windows CI restricts permission on ports below 49152 — listen EACCES on
- *  e.g. 30000-49152 in win32-x64 sandboxed runners. Using the canonical
- *  ephemeral range is portable across linux/macOS/Windows. */
-function ephemeralPort(): number {
+/** v0.7.45: tests now pass `tcpPort: 0` to let the OS pick an actually-
+ *  available ephemeral port and read it back via `server.getTcpPort()`
+ *  after listen() resolves. The previous random-port-from-IANA-range
+ *  approach (v0.7.34) was still flaking on win32 CI runners that randomly
+ *  restrict permissions on individual ports inside 49152-65535 (saw
+ *  EACCES on port 49686 in v0.7.43). OS-assigned dodges this entirely.
+ *  Kept for any test that needs a *fixed* port — none currently. */
+function _ephemeralPort(): number {
   return 49152 + Math.floor(Math.random() * (65535 - 49152));
 }
+void _ephemeralPort; // suppress "declared but never used"
 
 /** Send a line-delimited JSON-RPC request and resolve when one response
  *  arrives. Closes the socket after. */
@@ -49,7 +52,7 @@ describe("DaemonServer: basic lifecycle", () => {
   let port: number;
 
   beforeEach(async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     server = new DaemonServer({
       socketPath: null,
       tcpPort: port,
@@ -58,6 +61,7 @@ describe("DaemonServer: basic lifecycle", () => {
     server.register("meta.handshake", async () => ({ daemonVersion: "test", protocolVersion: 1 }));
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
   });
 
   afterEach(async () => {
@@ -110,7 +114,7 @@ describe("DaemonServer: supersede flag", () => {
   let onSupersedeReady: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     onSupersedeReady = vi.fn();
     server = new DaemonServer({
       socketPath: null,
@@ -120,6 +124,7 @@ describe("DaemonServer: supersede flag", () => {
     });
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
   });
 
   afterEach(async () => {
@@ -192,7 +197,7 @@ describe("DaemonServer: idle reaper", () => {
   });
 
   it("does not arm timer when idleTimeoutMs is 0", async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     onIdleReap = vi.fn();
     server = new DaemonServer({
       socketPath: null,
@@ -203,13 +208,14 @@ describe("DaemonServer: idle reaper", () => {
     });
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
 
     await new Promise(r => setTimeout(r, 100));
     expect(onIdleReap).not.toHaveBeenCalled();
   });
 
   it("arms timer on listen and fires onIdleReap after timeout with no clients", async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     onIdleReap = vi.fn();
     server = new DaemonServer({
       socketPath: null,
@@ -220,13 +226,14 @@ describe("DaemonServer: idle reaper", () => {
     });
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
 
     await new Promise(r => setTimeout(r, 200));
     expect(onIdleReap).toHaveBeenCalledTimes(1);
   });
 
   it("cancels timer on client connect, re-arms on last disconnect", async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     onIdleReap = vi.fn();
     server = new DaemonServer({
       socketPath: null,
@@ -237,6 +244,7 @@ describe("DaemonServer: idle reaper", () => {
     });
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
 
     // Connect well before the 150ms timer would fire
     await new Promise(r => setTimeout(r, 50));
@@ -258,7 +266,7 @@ describe("DaemonServer: client identity registry", () => {
   let port: number;
 
   beforeEach(async () => {
-    port = ephemeralPort();
+    port = 0; // OS-assigned; read back via server.getTcpPort() after listen
     server = new DaemonServer({
       socketPath: null,
       tcpPort: port,
@@ -271,6 +279,7 @@ describe("DaemonServer: client identity registry", () => {
     });
     server.register("meta.health", async () => ({ ok: true, stats: server.getStats() }));
     await server.listen();
+    port = server.getTcpPort()!; // OS-assigned port now known
   });
 
   afterEach(async () => {

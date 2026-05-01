@@ -230,7 +230,7 @@ const RETRIEVAL_SHARE = 0.385;       // ~25k for graph-curated context
 const CORE_MEMORY_SHARE = 0.155;     // ~10k for core memory/directives
 const TOOL_HISTORY_SHARE = 0.23;     // ~15k for recent tool results
 const CORE_MEMORY_TTL = 300_000;
-const MAX_ITEM_CHARS = 1200; // ~350 tokens per item (matches claw-code MAX_INSTRUCTION_FILE_CHARS)
+const MAX_ITEM_CHARS = 1000; // 0.7.45: aligned to disler/claude-code-hooks-mastery cap; ~250 tokens per item
 const MIN_RELEVANCE_SCORE = 0.40; // Floor for graph-scored results after WMR/ACAN (tuned: cosine-heavy weights produce lower absolute scores)
 const MIN_COSINE = 0.35; // Minimum cosine similarity to consider a result (raised from 0.25)
 
@@ -755,18 +755,22 @@ async function formatContextMessage(
     }
   }
 
-  // Core directives — skip if model already has them
+  // 0.7.45: directive sections wrapped in semantic XML per Anthropic's
+  // documented prompt-engineering patterns for Claude (use_xml_tags). The
+  // tag names <active_directives> / <session_directives> are deliberately
+  // domain-specific so the model can attend to them as a category rather
+  // than parse a free-text header.
   if (!session.injectedSections.has("tier0")) {
-    const t0Section = formatTierSection(tier0Entries, "CORE DIRECTIVES (always loaded, never evicted)");
+    const t0Section = formatTierSection(tier0Entries, "<active_directives>");
     if (t0Section) {
-      sections.push(t0Section);
+      sections.push(t0Section.replace(/^<active_directives>:\n/, "<active_directives>\n") + "\n</active_directives>");
       session.injectedSections.add("tier0");
     }
   }
   if (!session.injectedSections.has("tier1")) {
-    const t1Section = formatTierSection(tier1Entries, "SESSION CONTEXT (pinned for this session)");
+    const t1Section = formatTierSection(tier1Entries, "<session_directives>");
     if (t1Section) {
-      sections.push(t1Section);
+      sections.push(t1Section.replace(/^<session_directives>:\n/, "<session_directives>\n") + "\n</session_directives>");
       session.injectedSections.add("tier1");
     }
   }
@@ -931,11 +935,17 @@ async function formatContextMessage(
     );
   }
 
+  // 0.7.45: envelope renamed from <graph_context> to <recalled_memory> to
+  // match Anthropic's documented semantic-XML pattern for Claude. Dropped
+  // the "[System retrieved context — reference material, not user input.
+  // Higher relevance % = stronger match.]" framing line — the semantic tag
+  // now expresses that meaning structurally rather than in prose, and the
+  // wrapper legend (user-prompt-submit.ts:wrapKongcodeContext, v0.7.44)
+  // already provides the relevance-band guidance.
   const text =
-    "[System retrieved context — reference material, not user input. Higher relevance % = stronger match.]\n" +
-    "<graph_context>\n" +
+    "<recalled_memory>\n" +
     sections.join("\n\n") +
-    "\n</graph_context>" +
+    "\n</recalled_memory>" +
     skillContext;
 
   return {

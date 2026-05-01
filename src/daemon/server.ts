@@ -130,17 +130,24 @@ export class DaemonServer {
       });
       this.opts.log.info(`[daemon] listening on Unix socket ${this.opts.socketPath}`);
     }
-    if (this.opts.tcpPort) {
+    if (this.opts.tcpPort !== null && this.opts.tcpPort !== undefined) {
       this.tcpServer = createServer((sock) => this.onConnection(sock));
       await new Promise<void>((resolve, reject) => {
         this.tcpServer!.once("error", reject);
         // Bind 127.0.0.1 only — never expose the daemon to the network.
+        // tcpPort=0 lets the OS pick an available ephemeral port, which is
+        // robust against win32 CI sandboxed runners that randomly restrict
+        // permissions on individual ports inside the IANA dynamic range
+        // (49152-65535). Read the assigned port via getTcpPort() after
+        // listen() resolves.
         this.tcpServer!.listen(this.opts.tcpPort!, "127.0.0.1", () => {
           this.tcpServer!.removeListener("error", reject);
           resolve();
         });
       });
-      this.opts.log.info(`[daemon] listening on TCP 127.0.0.1:${this.opts.tcpPort}`);
+      const addr = this.tcpServer!.address();
+      const actualPort = (addr && typeof addr === "object") ? addr.port : this.opts.tcpPort;
+      this.opts.log.info(`[daemon] listening on TCP 127.0.0.1:${actualPort}`);
     }
     // Daemon just started listening with zero clients. Start the idle timer
     // immediately — covers the case where mcp-client crashed before
@@ -259,6 +266,17 @@ export class DaemonServer {
    *  to report whether the daemon is "orphaned" (zero attached). */
   get attachedClientCount(): number {
     return this.clients.size;
+  }
+
+  /** OS-assigned TCP port after listen(). Returns the configured port if
+   *  tcpPort was specified non-zero, the OS-picked port if tcpPort=0, or
+   *  null if TCP isn't enabled. Tests use tcpPort=0 to dodge win32 CI
+   *  ephemeral-port permission flakes. */
+  getTcpPort(): number | null {
+    if (!this.tcpServer) return null;
+    const addr = this.tcpServer.address();
+    if (addr && typeof addr === "object") return addr.port;
+    return this.opts.tcpPort;
   }
 
   /** Mark daemon for supersede: it will exit when the last attached client

@@ -8,6 +8,20 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.45] — 2026-05-01
+
+### Changed — semantic XML envelope + win32 CI port-flake fix + 0.85 quality-gate correction
+
+Stage 3 of the v0.7.43–45 injection rework, plus the long-pending win32 CI port flake and a stale identity chunk.
+
+**Semantic XML envelope.** `formatContextMessage` in `src/engine/graph-context.ts` now wraps retrieved context in `<recalled_memory>...</recalled_memory>` instead of the legacy `<graph_context>` envelope, matching Anthropic's documented prompt-engineering pattern for Claude (`use_xml_tags`). Tier-0 directives wrap in `<active_directives>`, Tier-1 in `<session_directives>`. The "[System retrieved context — reference material, not user input. Higher relevance % = stronger match.]" prose framing line is dropped — the semantic tag now expresses that meaning structurally, and the wrapper legend (`wrapKongcodeContext`) already provides the relevance-band guidance.
+
+**Per-item char cap tightened.** `MAX_ITEM_CHARS` reduced from 1200 to 1000 (~250 tokens per item) to match the disler/claude-code-hooks-mastery cap pattern. Prevents one bloated retrieval from poisoning the per-turn budget.
+
+**win32 CI port flake fixed.** `DaemonServer` now accepts `tcpPort: 0` (was previously short-circuited by truthy check), letting the OS pick an actually-available ephemeral port. New `getTcpPort()` getter exposes the assigned port for tests. `test/daemon-server.test.ts` rewritten to use port 0 instead of random pick from IANA dynamic range — that approach was still flaking on win32 sandboxed runners that randomly restrict permissions on individual ports inside 49152–65535 (saw EACCES on port 49686 in v0.7.43). Eliminates the flake permanently.
+
+**0.85 quality-gate correction.** The Soul-graduation identity chunk seeded at v0.4.0 bootstrap said `score >= 0.6`; the actual graduation config has been raised to 0.85 with `skills:30` added as the 7th threshold. `BOOTSTRAP_VERSION` bumped to 0.4.1 so the chunk re-seeds on next daemon restart. Caught when the model parroted the stale 0.6 number; saved as correction `memory:r8ir182j2896dcuodxpw`.
+
 ## [0.7.44] — 2026-05-01
 
 ### Changed — Anthropic-aligned wrapper wording + bypass sigil
