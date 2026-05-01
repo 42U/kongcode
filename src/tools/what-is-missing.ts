@@ -26,6 +26,28 @@ interface ConceptNode {
   score?: number;
 }
 
+/** High-frequency low-content tokens that auto-extraction has dumped into
+ *  the graph as standalone concepts. They never represent a meaningful gap. */
+const LOW_QUALITY_STOPLIST = new Set<string>([
+  "WORK", "AND", "OR", "NOT", "ONE", "TWO", "ALL", "ANY", "NEW", "OLD",
+  "CI", "CD", "OS", "DB", "ID", "PR", "QA", "API", "URL", "RPC", "SDK",
+  "ATR", "EMA", "HIT", "POST", "GET", "PUT", "TCP",
+  "function", "method", "class", "interface", "type", "Type", "Variant",
+  "Node", "Edge", "Graph", "List", "Map", "Set", "Array", "Object",
+  "test", "Test", "build", "Build", "true", "false", "null", "undefined",
+]);
+
+/** Reject concepts that are too short, too generic, or pure uppercase
+ *  tokens — these are auto-extraction artifacts, not real concepts. */
+function isLowQualityGap(content: string): boolean {
+  const trimmed = content.trim();
+  if (trimmed.length < 5) return true;
+  if (LOW_QUALITY_STOPLIST.has(trimmed)) return true;
+  // Pure uppercase token of ≤ 6 chars (e.g. "WORK", "POST", "WHILE")
+  if (/^[A-Z]{1,6}$/.test(trimmed)) return true;
+  return false;
+}
+
 async function seedConceptsFromContext(
   state: GlobalPluginState,
   context: string,
@@ -156,9 +178,16 @@ export async function handleWhatIsMissing(
   //    related_to from the seed set.
   const neighbors = await collectGraphNeighbors(state, [...seedIds]);
 
-  // 3. Gaps = neighbors NOT already in the seed set.
+  // 3. Gaps = neighbors NOT already in the seed set, filtered to remove
+  //    low-quality concept stubs that pollute gap output. The graph
+  //    accumulates short single-token concepts (e.g. "WORK", "AND", "Node",
+  //    "ATR", "function") from past auto-extraction passes — they are real
+  //    edge-neighbors but represent no meaningful gap. Filter heuristic:
+  //    drop content < 5 chars, drop pure-uppercase tokens of ≤ 5 chars,
+  //    drop a small stoplist of high-frequency low-content tokens.
+  //    Conservative — keeps hyphenated identifiers and prose concepts.
   const gaps = neighbors
-    .filter(n => !seedIds.has(n.id) && n.content)
+    .filter(n => !seedIds.has(n.id) && n.content && !isLowQualityGap(n.content))
     .slice(0, gapLimit);
 
   // 4. Compose suggested recall queries so the caller can pull full content.
