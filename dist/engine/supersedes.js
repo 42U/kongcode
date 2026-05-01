@@ -22,8 +22,16 @@ const STABILITY_DECAY_FACTOR = 0.4;
 /** Floor — don't decay below this so the concept remains discoverable. */
 const STABILITY_FLOOR = 0.15;
 /**
- * Find concepts that match the "original" (wrong) statement in a correction,
- * create supersedes edges, and decay their stability.
+ * Find concepts AND memories that match the "original" (wrong) statement in
+ * a correction, create supersedes edges, and decay their priority in retrieval.
+ *
+ * 0.7.46+: also targets memory rows. record_finding writes memory rows
+ * synchronously while concept extraction is daemon-async. Without memory
+ * targeting, supersede was a no-op against beliefs the user/agent had
+ * just saved in the same session — silently breaking the documented
+ * save→contradict→decay flow. Memories are marked status='superseded'
+ * which excludes them from vectorSearch (filter: status='active' OR
+ * status IS NONE). Concepts continue to use stability decay.
  *
  * @param correctionMemId - The memory:xxx record ID of the correction
  * @param originalText    - The "original" (incorrect) text from the correction
@@ -31,6 +39,7 @@ const STABILITY_FLOOR = 0.15;
  * @param store           - SurrealDB store
  * @param embeddings      - Embedding service
  * @param precomputedVec  - Optional pre-computed embedding of the full correction text
+ * @returns               - Combined count of superseded concepts + memories
  */
 export async function linkSupersedesEdges(correctionMemId, originalText, correctionText, store, embeddings, precomputedVec) {
     if (!embeddings.isAvailable() || !originalText)
@@ -41,23 +50,29 @@ export async function linkSupersedesEdges(correctionMemId, originalText, correct
         const originalVec = await embeddings.embed(originalText);
         if (!originalVec?.length)
             return 0;
-        // Find concepts whose content is semantically similar to the wrong statement
-        // Pre-filter: skip already-superseded or floored concepts to avoid redundant work
-        const candidates = await store.queryFirst(`SELECT id, vector::similarity::cosine(embedding, $vec) AS score, stability
-       FROM concept
-       WHERE embedding != NONE AND array::len(embedding) > 0
-         AND superseded_at IS NONE
-         AND stability > $floor
-       ORDER BY score DESC
-       LIMIT 5`, { vec: originalVec, floor: STABILITY_FLOOR });
-        for (const candidate of candidates) {
+        // Find both concepts and memories matching the wrong statement, in parallel.
+        const [conceptCandidates, memoryCandidates] = await Promise.all([
+            store.queryFirst(`SELECT id, vector::similarity::cosine(embedding, $vec) AS score, stability
+         FROM concept
+         WHERE embedding != NONE AND array::len(embedding) > 0
+           AND superseded_at IS NONE
+           AND stability > $floor
+         ORDER BY score DESC
+         LIMIT 5`, { vec: originalVec, floor: STABILITY_FLOOR }),
+            store.queryFirst(`SELECT id, vector::similarity::cosine(embedding, $vec) AS score
+         FROM memory
+         WHERE embedding != NONE AND array::len(embedding) > 0
+           AND (status = 'active' OR status IS NONE)
+           AND id != $correctionId
+         ORDER BY score DESC
+         LIMIT 5`, { vec: originalVec, correctionId: correctionMemId }),
+        ]);
+        for (const candidate of conceptCandidates) {
             if (candidate.score < SUPERSEDE_THRESHOLD)
                 break;
             const conceptId = String(candidate.id);
-            // Create supersedes edge: correction -> supersedes -> stale concept
             await store.relate(correctionMemId, "supersedes", conceptId)
                 .catch(e => swallow("supersedes:relate", e));
-            // Decay stability of the stale concept
             const currentStability = candidate.stability ?? 1.0;
             const newStability = Math.max(STABILITY_FLOOR, currentStability * STABILITY_DECAY_FACTOR);
             try {
@@ -66,6 +81,23 @@ export async function linkSupersedesEdges(correctionMemId, originalText, correct
             }
             catch (e) {
                 swallow("supersedes:decay", e);
+            }
+            supersededCount++;
+        }
+        // Memories: same threshold, set status='superseded' so vectorSearch
+        // excludes them. resolved_at/resolved_by reuse existing schema fields.
+        for (const candidate of memoryCandidates) {
+            if (candidate.score < SUPERSEDE_THRESHOLD)
+                break;
+            const memoryId = String(candidate.id);
+            await store.relate(correctionMemId, "supersedes", memoryId)
+                .catch(e => swallow("supersedes:relate-memory", e));
+            try {
+                assertRecordId(memoryId);
+                await store.queryExec(`UPDATE ${memoryId} SET status = 'superseded', resolved_at = time::now(), resolved_by = $correctionId`, { correctionId: correctionMemId });
+            }
+            catch (e) {
+                swallow("supersedes:mark-memory", e);
             }
             supersededCount++;
         }

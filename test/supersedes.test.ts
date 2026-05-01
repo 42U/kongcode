@@ -10,9 +10,19 @@ import { linkSupersedesEdges } from "../src/engine/supersedes.js";
 
 // ── Mock helpers ──
 
-function mockStore(candidates: Array<{ id: string; score: number; stability: number }> = []) {
+function mockStore(
+  conceptCandidates: Array<{ id: string; score: number; stability: number }> = [],
+  memoryCandidates: Array<{ id: string; score: number }> = [],
+) {
+  // queryFirst is called twice in parallel — first for concepts, then for
+  // memories. Track call order and return the right list per call.
+  let callIdx = 0;
   return {
-    queryFirst: vi.fn(async () => candidates),
+    queryFirst: vi.fn(async () => {
+      const result = callIdx === 0 ? conceptCandidates : memoryCandidates;
+      callIdx++;
+      return result;
+    }),
     queryExec: vi.fn(async () => {}),
     relate: vi.fn(async () => {}),
   } as any;
