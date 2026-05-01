@@ -485,8 +485,16 @@ interface GemInput {
 interface GemLink {
   from: string;   // gem name
   to: string;     // gem name
-  edge: string;   // relation name (e.g. "elaborates", "contrasts_with", "applies_to")
+  // Relation name. Must be one of the schema-defined concept→concept edges:
+  //   "broader"   — from is a broader concept than to (parent of)
+  //   "narrower"  — from is narrower than to (child of)
+  //   "related_to" — from and to are related but not hierarchical
+  // Other edge names are silently dropped because there's no schema table
+  // for them. If you need a new relation type, define it in schema.surql.
+  edge: "broader" | "narrower" | "related_to";
 }
+
+const VALID_GEM_EDGES = new Set<string>(["broader", "narrower", "related_to"]);
 
 export async function handleCreateKnowledgeGems(
   state: GlobalPluginState,
@@ -563,31 +571,58 @@ export async function handleCreateKnowledgeGems(
       }
     }
 
-    // 3. Create cross-link edges between gems
+    // 3. Create cross-link edges between gems. Surface why each skip happened
+    // so the caller can correct the call instead of silently losing edges.
     let edgesCreated = 0;
-    let edgesSkipped = 0;
+    const edgeFailures: Array<{ from: string; to: string; edge: string; reason: string }> = [];
     for (const link of links) {
       if (!link?.from || !link?.to || !link?.edge) {
-        edgesSkipped++;
+        edgeFailures.push({
+          from: link?.from ?? "?",
+          to: link?.to ?? "?",
+          edge: link?.edge ?? "?",
+          reason: "missing from/to/edge field",
+        });
+        continue;
+      }
+      if (!VALID_GEM_EDGES.has(link.edge)) {
+        edgeFailures.push({
+          from: link.from,
+          to: link.to,
+          edge: link.edge,
+          reason: `edge type not in schema; valid concept→concept edges are: ${Array.from(VALID_GEM_EDGES).join(", ")}`,
+        });
         continue;
       }
       const fromId = nameToId.get(link.from);
       const toId = nameToId.get(link.to);
       if (!fromId || !toId) {
-        edgesSkipped++;
-        log.warn(`[gems] link unresolved: ${link.from} -${link.edge}-> ${link.to}`);
+        edgeFailures.push({
+          from: link.from,
+          to: link.to,
+          edge: link.edge,
+          reason: !fromId && !toId
+            ? `neither '${link.from}' nor '${link.to}' matches any gem name in this call`
+            : !fromId
+              ? `'${link.from}' does not match any gem name in this call`
+              : `'${link.to}' does not match any gem name in this call`,
+        });
         continue;
       }
       try {
         await store.relate(fromId, link.edge, toId);
         edgesCreated++;
       } catch (e) {
-        edgesSkipped++;
-        log.warn(`[gems] relate failed: ${link.from} -${link.edge}-> ${link.to}:`, e);
+        edgeFailures.push({
+          from: link.from,
+          to: link.to,
+          edge: link.edge,
+          reason: `relate failed: ${(e as Error).message ?? String(e)}`,
+        });
       }
     }
 
-    log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} skipped=${skipped + edgesSkipped}`);
+    log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} edge_failures=${edgeFailures.length} concepts_skipped=${skipped}`);
 
     return text(JSON.stringify({
       success: true,
@@ -596,7 +631,8 @@ export async function handleCreateKnowledgeGems(
       concepts_created: conceptIds.length,
       concepts_skipped: skipped,
       edges_created: edgesCreated,
-      edges_skipped: edgesSkipped,
+      edges_skipped: edgeFailures.length,
+      edge_failures: edgeFailures,
       concept_ids: conceptIds,
     }));
   } catch (e) {

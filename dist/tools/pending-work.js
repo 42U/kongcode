@@ -403,6 +403,7 @@ async function commitResults(item, results, state) {
             return { skipped: true, reason: `unknown work_type: ${item.work_type}` };
     }
 }
+const VALID_GEM_EDGES = new Set(["broader", "narrower", "related_to"]);
 export async function handleCreateKnowledgeGems(state, session, args) {
     const { store, embeddings } = state;
     if (!store.isAvailable())
@@ -469,19 +470,42 @@ export async function handleCreateKnowledgeGems(state, session, args) {
                 });
             }
         }
-        // 3. Create cross-link edges between gems
+        // 3. Create cross-link edges between gems. Surface why each skip happened
+        // so the caller can correct the call instead of silently losing edges.
         let edgesCreated = 0;
-        let edgesSkipped = 0;
+        const edgeFailures = [];
         for (const link of links) {
             if (!link?.from || !link?.to || !link?.edge) {
-                edgesSkipped++;
+                edgeFailures.push({
+                    from: link?.from ?? "?",
+                    to: link?.to ?? "?",
+                    edge: link?.edge ?? "?",
+                    reason: "missing from/to/edge field",
+                });
+                continue;
+            }
+            if (!VALID_GEM_EDGES.has(link.edge)) {
+                edgeFailures.push({
+                    from: link.from,
+                    to: link.to,
+                    edge: link.edge,
+                    reason: `edge type not in schema; valid concept→concept edges are: ${Array.from(VALID_GEM_EDGES).join(", ")}`,
+                });
                 continue;
             }
             const fromId = nameToId.get(link.from);
             const toId = nameToId.get(link.to);
             if (!fromId || !toId) {
-                edgesSkipped++;
-                log.warn(`[gems] link unresolved: ${link.from} -${link.edge}-> ${link.to}`);
+                edgeFailures.push({
+                    from: link.from,
+                    to: link.to,
+                    edge: link.edge,
+                    reason: !fromId && !toId
+                        ? `neither '${link.from}' nor '${link.to}' matches any gem name in this call`
+                        : !fromId
+                            ? `'${link.from}' does not match any gem name in this call`
+                            : `'${link.to}' does not match any gem name in this call`,
+                });
                 continue;
             }
             try {
@@ -489,11 +513,15 @@ export async function handleCreateKnowledgeGems(state, session, args) {
                 edgesCreated++;
             }
             catch (e) {
-                edgesSkipped++;
-                log.warn(`[gems] relate failed: ${link.from} -${link.edge}-> ${link.to}:`, e);
+                edgeFailures.push({
+                    from: link.from,
+                    to: link.to,
+                    edge: link.edge,
+                    reason: `relate failed: ${e.message ?? String(e)}`,
+                });
             }
         }
-        log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} skipped=${skipped + edgesSkipped}`);
+        log.info(`[gems] source=${source} concepts=${conceptIds.length} edges=${edgesCreated} edge_failures=${edgeFailures.length} concepts_skipped=${skipped}`);
         return text(JSON.stringify({
             success: true,
             source,
@@ -501,7 +529,8 @@ export async function handleCreateKnowledgeGems(state, session, args) {
             concepts_created: conceptIds.length,
             concepts_skipped: skipped,
             edges_created: edgesCreated,
-            edges_skipped: edgesSkipped,
+            edges_skipped: edgeFailures.length,
+            edge_failures: edgeFailures,
             concept_ids: conceptIds,
         }));
     }
