@@ -59,36 +59,58 @@ async function collectGraphNeighbors(
   seedIds: string[],
 ): Promise<ConceptNode[]> {
   if (seedIds.length === 0) return [];
-  const collected = new Map<string, ConceptNode>();
 
-  // For each seed concept, pull outgoing broader/narrower/related_to edges.
-  // Union the results; de-dup by id.
+  // Two-step: (1) collect neighbor concept IDs by traversing outgoing
+  // hierarchy/related_to edges from each seed; (2) fetch id+content for
+  // the unique neighbors in one batch.
+  //
+  // Pre-0.7.46 the inner queries projected `->broader->concept AS hits`
+  // — but `hits` is an array of concept ids, not an object with id/
+  // content fields. The outer `SELECT id, content` had no scalar fields
+  // to extract, the receiver's parser fell through to `r.hits` which
+  // it treated as an id (it's an array), and nothing was collected.
+  // Result: gaps_found was 0 even on dense graph topics.
+  const neighborIds = new Set<string>();
   for (const sid of seedIds) {
     try {
-      const rows = await state.store.queryFirst<{ id: string; content: string }>(
-        `SELECT id, content FROM (
-           SELECT ->broader->concept AS hits FROM ${sid}
-           UNION
-           SELECT ->narrower->concept AS hits FROM ${sid}
-           UNION
-           SELECT ->related_to->concept AS hits FROM ${sid}
-         )`,
+      const rows = await state.store.queryFirst<{ neighbors: string[] }>(
+        `SELECT array::distinct(array::flatten([
+           ->broader->concept,
+           ->narrower->concept,
+           ->related_to->concept
+         ])) AS neighbors FROM ${sid}`,
       ).catch(() => []);
-      for (const r of rows) {
-        const id = (r as any).id ?? (r as any).hits;
-        if (!id) continue;
-        const content = (r as any).content;
-        const idStr = String(id);
-        if (!collected.has(idStr)) {
-          collected.set(idStr, { id: idStr, content: String(content ?? "") });
-        }
+      const nbrs = Array.isArray(rows[0]?.neighbors) ? rows[0].neighbors : [];
+      for (const n of nbrs) {
+        const id = String(n ?? "");
+        if (id) neighborIds.add(id);
       }
     } catch (e) {
       swallow("whatIsMissing:traverse", e);
     }
   }
 
-  return [...collected.values()];
+  if (neighborIds.size === 0) return [];
+
+  // Fetch content for the collected neighbor ids. We use a per-id loop here
+  // because SurrealDB's `WHERE id IN $list` parameter binding for record-id
+  // arrays is finicky across versions; one-by-one is correct and small.
+  const collected: ConceptNode[] = [];
+  for (const id of neighborIds) {
+    try {
+      const rows = await state.store.queryFirst<{ id: string; content: string }>(
+        `SELECT id, content FROM ${id}`,
+      ).catch(() => []);
+      const r = rows[0];
+      if (r?.id && r?.content) {
+        collected.push({ id: String(r.id), content: String(r.content) });
+      }
+    } catch (e) {
+      swallow("whatIsMissing:fetchContent", e);
+    }
+  }
+
+  return collected;
 }
 
 export async function handleWhatIsMissing(
