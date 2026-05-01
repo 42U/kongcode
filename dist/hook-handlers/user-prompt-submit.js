@@ -13,11 +13,22 @@ import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
 import { log } from "../engine/log.js";
 import { detectAnomalies, formatAnomalyBlock } from "../engine/observability.js";
-/** Wrap raw kongcode context in a system-reminder block so Claude treats it
- * as authoritative. Claude Code's harness gives system-reminder blocks higher
- * attention weight than plain injected text — empirically the plain-text
- * injection was hitting ~10% retrieval utilization because the model read it
- * as ambient noise. */
+/** Wrap raw kongcode context in a system-reminder block. Claude Code's harness
+ * gives system-reminder blocks higher attention weight than plain injected
+ * text — empirically the plain-text injection was hitting ~10% retrieval
+ * utilization because the model read it as ambient noise.
+ *
+ * 0.7.44: legend rewritten to align with Anthropic's documented prompt-
+ * engineering guidance for Claude 4.5+:
+ *  - "MUST" and "authoritative" softened — Anthropic explicitly warns these
+ *    overtrigger on 4.5+ models.
+ *  - Motivation-first: instruction frames the WHY (let the model decide
+ *    relevance) rather than commanding compliance.
+ *  - Quote-first grounding: ask for explicit reference-by-id when grounding,
+ *    matching Anthropic's documented `<quotes>`-then-answer pattern.
+ *
+ * This is stage 2 of the v0.7.43-45 injection rework. Stages 3+ will move
+ * the body itself to XML semantic tags and intent-gate the directive load. */
 function wrapKongcodeContext(raw) {
     if (!raw || !raw.trim())
         return raw ?? "";
@@ -32,16 +43,16 @@ function wrapKongcodeContext(raw) {
         return "";
     return [
         "<system-reminder>",
-        "KONGCODE CONTEXT — authoritative for this turn.",
-        "Before your first text output or tool call, scan the items below.",
-        "Items are tagged [load-bearing] / [supporting] or untagged (background).",
-        "Items tagged [load-bearing] must be grounded on or explicitly note why",
-        "not. Items tagged [supporting] should be mentioned if applicable.",
-        "Untagged items are background — skip unless directly relevant; do not",
-        "pad responses with them. If you ground on an item, cite by its [#N]",
-        "index (e.g. [#3]); the substrate maps the index back to the source.",
-        "If no items are relevant, explicitly note that rather than pretending",
-        "they aren't there.",
+        "The following is supplementary context for this turn. Use items when",
+        "they're relevant; ignore items that don't match the question.",
+        "",
+        "Salience tags help you prioritize: [load-bearing] items are most likely",
+        "to be relevant — when answering, reference them by id (e.g. [#3]) so",
+        "the user can trace your reasoning. [supporting] items add context.",
+        "Untagged items are background — skip unless directly applicable.",
+        "",
+        "Before finalizing: check that factual claims about prior work are",
+        "either grounded in items below or explicitly framed as inference.",
         "",
         stripped,
         "</system-reminder>",
@@ -92,6 +103,17 @@ export async function handleUserPromptSubmit(state, payload) {
     session.lastUserText = userPrompt;
     // Ingest user message into graph (async, don't block context assembly)
     ingestTurn(state, session, "user", userPrompt).catch(() => { });
+    // 0.7.44: bypass sigil. Prefix with `*` or `/raw` to suppress kongcode's
+    // injection for that turn. Turn ingestion still fires (we want history
+    // tracked); only the substrate retrieval + assembly is skipped. Useful
+    // when the user wants a clean shot at the model without the substrate
+    // competing for attention. Strip the sigil from the upstream prompt so
+    // Claude doesn't see it as part of the question.
+    const bypassMatch = userPrompt.match(/^(\*\s|\/raw\s+)/);
+    if (bypassMatch) {
+        log.debug(`UserPromptSubmit: bypass sigil detected for session=${sessionId}, skipping injection`);
+        return {};
+    }
     // Run full context retrieval pipeline
     const contextString = await assembleContextString(state, session, userPrompt);
     // On first turn, check for pending background work from previous sessions

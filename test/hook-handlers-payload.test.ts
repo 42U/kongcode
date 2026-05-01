@@ -156,6 +156,39 @@ describe("wrapKongcodeContext — Anthropic-aligned wording (v0.7.44)", () => {
   });
 });
 
+describe("recalled-memory envelope tag — producer/consumer contract (v0.7.46)", () => {
+  // v0.7.45 renamed <graph_context> to <recalled_memory> in graph-context.ts
+  // but missed four downstream consumers, dropping the entire payload at the
+  // assembler. This test pins the producer's envelope literal AND asserts
+  // the assembler still accepts both the new and legacy tag forms — so a
+  // future rename can't silently drop the payload again.
+  it("graph-context.ts produces <recalled_memory> envelope", async () => {
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("src/engine/graph-context.ts", "utf8");
+    expect(src).toContain('"<recalled_memory>\\n"');
+    expect(src).toContain('"\\n</recalled_memory>"');
+  });
+
+  it("context-assembler.ts accepts the producer's envelope (and legacy fallback)", async () => {
+    const fs = await import("node:fs/promises");
+    const src = await fs.readFile("src/context-assembler.ts", "utf8");
+    expect(src).toMatch(/text\.includes\("<recalled_memory>"\)/);
+    expect(src).toMatch(/text\.includes\("<graph_context>"\)/);
+  });
+
+  it("model-facing instructions reference <recalled_memory>, not the old tag", async () => {
+    const fs = await import("node:fs/promises");
+    const beforeTool = await fs.readFile("src/engine/hooks/before-tool-call.ts", "utf8");
+    expect(beforeTool).toContain("<recalled_memory>");
+    expect(beforeTool).not.toMatch(/from <graph_context>/);
+    expect(beforeTool).not.toMatch(/in <graph_context> above/);
+
+    const graphCtx = await fs.readFile("src/engine/graph-context.ts", "utf8");
+    expect(graphCtx).toContain("<recalled_memory> already answers");
+    expect(graphCtx).not.toContain("<graph_context> already answers");
+  });
+});
+
 describe("handlePostToolUse — payload.tool_response contract", () => {
   let session: SessionState;
 

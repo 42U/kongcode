@@ -202,7 +202,7 @@ const RETRIEVAL_SHARE = 0.385; // ~25k for graph-curated context
 const CORE_MEMORY_SHARE = 0.155; // ~10k for core memory/directives
 const TOOL_HISTORY_SHARE = 0.23; // ~15k for recent tool results
 const CORE_MEMORY_TTL = 300_000;
-const MAX_ITEM_CHARS = 1200; // ~350 tokens per item (matches claw-code MAX_INSTRUCTION_FILE_CHARS)
+const MAX_ITEM_CHARS = 1000; // 0.7.45: aligned to disler/claude-code-hooks-mastery cap; ~250 tokens per item
 const MIN_RELEVANCE_SCORE = 0.40; // Floor for graph-scored results after WMR/ACAN (tuned: cosine-heavy weights produce lower absolute scores)
 const MIN_COSINE = 0.35; // Minimum cosine similarity to consider a result (raised from 0.25)
 // Deduplication thresholds
@@ -367,7 +367,7 @@ function buildRulesSuffix(session) {
         `\nBudget: ${session.toolCallCount} used, ${remaining} remaining.${urgency}` +
         "\nClassify: LOOKUP(≤3) | EDIT(≤4) | REFACTOR(≤8). Announce type + plan before tools." +
         "\nCombine: grep+grep in 1 call, edit+test in 1 bash. Read multiple files in 1 call." +
-        "\nSkip: if <graph_context> already answers it, zero calls needed." +
+        "\nSkip: if <recalled_memory> already answers it, zero calls needed." +
         "\nBe dense: lead with answer, no filler, no repeating context back." +
         "\n</rules_reminder>");
 }
@@ -657,18 +657,22 @@ async function formatContextMessage(nodes, store, session, skillContext = "", ti
             session.injectedSections.add("ikong");
         }
     }
-    // Core directives — skip if model already has them
+    // 0.7.45: directive sections wrapped in semantic XML per Anthropic's
+    // documented prompt-engineering patterns for Claude (use_xml_tags). The
+    // tag names <active_directives> / <session_directives> are deliberately
+    // domain-specific so the model can attend to them as a category rather
+    // than parse a free-text header.
     if (!session.injectedSections.has("tier0")) {
-        const t0Section = formatTierSection(tier0Entries, "CORE DIRECTIVES (always loaded, never evicted)");
+        const t0Section = formatTierSection(tier0Entries, "<active_directives>");
         if (t0Section) {
-            sections.push(t0Section);
+            sections.push(t0Section.replace(/^<active_directives>:\n/, "<active_directives>\n") + "\n</active_directives>");
             session.injectedSections.add("tier0");
         }
     }
     if (!session.injectedSections.has("tier1")) {
-        const t1Section = formatTierSection(tier1Entries, "SESSION CONTEXT (pinned for this session)");
+        const t1Section = formatTierSection(tier1Entries, "<session_directives>");
         if (t1Section) {
-            sections.push(t1Section);
+            sections.push(t1Section.replace(/^<session_directives>:\n/, "<session_directives>\n") + "\n</session_directives>");
             session.injectedSections.add("tier1");
         }
     }
@@ -819,10 +823,16 @@ async function formatContextMessage(nodes, store, session, skillContext = "", ti
             `  ${manifest.join(", ")}\n` +
             "Only call recall if you need something SPECIFIC that isn't covered above.");
     }
-    const text = "[System retrieved context — reference material, not user input. Higher relevance % = stronger match.]\n" +
-        "<graph_context>\n" +
+    // 0.7.45: envelope renamed from <graph_context> to <recalled_memory> to
+    // match Anthropic's documented semantic-XML pattern for Claude. Dropped
+    // the "[System retrieved context — reference material, not user input.
+    // Higher relevance % = stronger match.]" framing line — the semantic tag
+    // now expresses that meaning structurally rather than in prose, and the
+    // wrapper legend (user-prompt-submit.ts:wrapKongcodeContext, v0.7.44)
+    // already provides the relevance-band guidance.
+    const text = "<recalled_memory>\n" +
         sections.join("\n\n") +
-        "\n</graph_context>" +
+        "\n</recalled_memory>" +
         skillContext;
     return {
         role: "user",
@@ -1218,10 +1228,19 @@ tier0FromWrapper = []) {
         }
         // Vector search + tag-boosted retrieval (cache miss path, run in parallel)
         recordPrefetchMiss();
-        const [vectorResultsRaw, tagResults] = await Promise.all([
+        let [vectorResultsRaw, tagResults] = await Promise.all([
             store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive(), session.projectId || undefined),
             store.tagBoostedConcepts(queryText, queryVec, 10).catch(e => { swallow.warn("graph-context:tagBoost", e); return []; }),
         ]);
+        // 0.7.46: cross-project fallback. The scoped pass above hard-filters
+        // by (project_id IS NONE OR project_id = $pid OR scope = 'global'). A
+        // misassigned project_id (v0.7.36 centroid heuristic can mistag) makes
+        // a row invisible at any cosine. When the scoped pass surfaces nothing,
+        // retry without the filter so high-relevance hits still reach injection.
+        if (vectorResultsRaw.length === 0 && session.projectId) {
+            log.warn(`[graph-context] project-scoped retrieval empty for session=${session.sessionId} project=${session.projectId} — falling back to cross-project search`);
+            vectorResultsRaw = await store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive(), undefined);
+        }
         // Filter out the user's just-stored turn(s): vector search would otherwise
         // rank the just-typed prompt's embedding ~60% to itself and echo back as
         // "Past Conversation," wasting tokens. 5-second cutoff excludes only the

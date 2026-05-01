@@ -436,7 +436,7 @@ function buildRulesSuffix(session: SessionState): string {
     `\nBudget: ${session.toolCallCount} used, ${remaining} remaining.${urgency}` +
     "\nClassify: LOOKUP(≤3) | EDIT(≤4) | REFACTOR(≤8). Announce type + plan before tools." +
     "\nCombine: grep+grep in 1 call, edit+test in 1 bash. Read multiple files in 1 call." +
-    "\nSkip: if <graph_context> already answers it, zero calls needed." +
+    "\nSkip: if <recalled_memory> already answers it, zero calls needed." +
     "\nBe dense: lead with answer, no filler, no repeating context back." +
     "\n</rules_reminder>"
   );
@@ -1399,10 +1399,19 @@ async function graphTransformInner(
 
     // Vector search + tag-boosted retrieval (cache miss path, run in parallel)
     recordPrefetchMiss();
-    const [vectorResultsRaw, tagResults] = await Promise.all([
+    let [vectorResultsRaw, tagResults] = await Promise.all([
       store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive(), session.projectId || undefined),
       store.tagBoostedConcepts(queryText, queryVec, 10).catch(e => { swallow.warn("graph-context:tagBoost", e); return [] as VectorSearchResult[]; }),
     ]);
+    // 0.7.46: cross-project fallback. The scoped pass above hard-filters
+    // by (project_id IS NONE OR project_id = $pid OR scope = 'global'). A
+    // misassigned project_id (v0.7.36 centroid heuristic can mistag) makes
+    // a row invisible at any cosine. When the scoped pass surfaces nothing,
+    // retry without the filter so high-relevance hits still reach injection.
+    if (vectorResultsRaw.length === 0 && session.projectId) {
+      log.warn(`[graph-context] project-scoped retrieval empty for session=${session.sessionId} project=${session.projectId} — falling back to cross-project search`);
+      vectorResultsRaw = await store.vectorSearch(queryVec, session.sessionId, vectorSearchLimits, isACANActive(), undefined);
+    }
     // Filter out the user's just-stored turn(s): vector search would otherwise
     // rank the just-typed prompt's embedding ~60% to itself and echo back as
     // "Past Conversation," wasting tokens. 5-second cutoff excludes only the

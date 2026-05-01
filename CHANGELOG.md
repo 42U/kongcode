@@ -8,6 +8,24 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.46] — 2026-05-01
+
+### Fixed — recalled-memory tag-rename downstream cleanup + project-scope retrieval invisibility
+
+Two related bugs: one regression from 0.7.45's XML envelope rename, one latent issue surfaced by it.
+
+**Bug 1 — `<graph_context>` → `<recalled_memory>` rename missed four consumers.** v0.7.45 renamed the producer envelope but four downstream sites still referenced the old tag, with one of them load-bearing:
+
+- `src/context-assembler.ts:88` — the filter that decides whether to include the retrieved-memory message in the assembled context was looking for `<graph_context>`. Result: every `<recalled_memory>` payload was silently dropped before reaching the model. Only `systemPromptSection` (pillars + tier-0 directives) was reaching injection. Fixed by accepting both tag names.
+- `src/engine/hooks/before-tool-call.ts:92,108` — recall-redundancy blocker and planning-gate told the model to ground in `<graph_context>` (a tag that no longer exists in the injected context). Updated to `<recalled_memory>`.
+- `src/engine/graph-context.ts:439` — tool-budget rules told the model to skip a tool call if `<graph_context>` already had the answer. Updated to `<recalled_memory>`.
+
+**Bug 2 — project-scope SQL filter made cross-project gems invisible at any cosine.** `vectorSearch` applies `(project_id IS NONE OR project_id = $pid OR scope = 'global')` on `concept`/`memory`/`artifact` rows. Items whose `project_id` was assigned by the v0.7.36 centroid heuristic to a different project than the current session became unretrievable — even at high cosine similarity. Manual `recall` (no projectId arg) found them at 0.55+; auto-pipeline returned 0 graph nodes for the same query. Verified empirically: prompt "what about the anthropic context injection?" returned 0 nodes pre-fix, 1 node + 1 neighbor (the relevant artifact) post-fix.
+
+Fix in `src/engine/graph-context.ts:1402-1417`: when the project-scoped vectorSearch returns 0 results, retry without the project filter as a fallback. Logs a warn so frequent fallback-firing surfaces as a signal that the centroid project assignment needs deeper repair. Project-scoping remains the preferred path (preserves the v0.7.26-29 grounding work); the fallback only fires on the empty-result pathology.
+
+Both fixes verified live against running daemon. Full test suite (609/609) green.
+
 ## [0.7.45] — 2026-05-01
 
 ### Changed — semantic XML envelope + win32 CI port-flake fix + 0.85 quality-gate correction

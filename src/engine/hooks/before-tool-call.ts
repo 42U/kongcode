@@ -89,7 +89,7 @@ export function createBeforeToolCallHandler(state: GlobalPluginState) {
               block: true,
               blockReason:
                 `This recall query is ${(sim * 100).toFixed(0)}% similar to the context already retrieved this turn. ` +
-                "The results are in <graph_context> above. Read what you have. " +
+                "The results are in <recalled_memory> above. Read what you have. " +
                 "Only call recall with a DIFFERENT query targeting something specific not already covered.",
             };
           }
@@ -105,7 +105,7 @@ export function createBeforeToolCallHandler(state: GlobalPluginState) {
       return {
         block: true,
         blockReason:
-          "Plan before tools. Classify (LOOKUP/EDIT/REFACTOR), state what you know from <graph_context>," +
+          "Plan before tools. Classify (LOOKUP/EDIT/REFACTOR), state what you know from <recalled_memory>," +
           " list each call + what gap it fills. Combine steps. 0 calls if context answers it." +
           retrievalNote,
       };

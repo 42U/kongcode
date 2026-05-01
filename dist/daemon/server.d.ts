@@ -125,6 +125,11 @@ export declare class DaemonServer {
     /** Number of currently-attached client sockets. Used by meta.requestSupersede
      *  to report whether the daemon is "orphaned" (zero attached). */
     get attachedClientCount(): number;
+    /** OS-assigned TCP port after listen(). Returns the configured port if
+     *  tcpPort was specified non-zero, the OS-picked port if tcpPort=0, or
+     *  null if TCP isn't enabled. Tests use tcpPort=0 to dodge win32 CI
+     *  ephemeral-port permission flakes. */
+    getTcpPort(): number | null;
     /** Mark daemon for supersede: it will exit when the last attached client
      *  disconnects. Idempotent. Safe to call from a handler thread. */
     markPendingSupersede(): void;

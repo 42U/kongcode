@@ -5,7 +5,7 @@ const BOOTSTRAP_SOURCE = "cognitive_bootstrap";
  * or IDENTITY_CHUNKS change; seedCognitiveBootstrap uses it to detect stale
  * seeds and re-seed on upgrade.
  */
-export const BOOTSTRAP_VERSION = "0.4.0";
+export const BOOTSTRAP_VERSION = "0.4.1";
 // ── Tier 0 Core Memory: imperative reflexes loaded every turn ────────────
 const CORE_ENTRIES = [
     {
@@ -62,7 +62,7 @@ const IDENTITY_CHUNKS = [
         importance: 8,
     },
     {
-        text: `Soul graduation: KongCode tracks your maturity across 5 stages — nascent (0-3/7 thresholds), developing (4/7), emerging (5/7), maturing (6/7), ready (7/7). The 7 thresholds are: sessions, reflections, causal chains, concepts, monologues, span days, and total memories. Reaching 7/7 is necessary but not sufficient — you must also pass a quality gate (score >= 0.6) based on retrieval utilization, skill success rate, critical reflection rate, and tool failure rate. On graduation, you author a Soul document — a self-assessment grounded in your actual experience, not aspirational claims. Use introspect with action "status" to check your current stage and progress. The Soul document becomes part of your identity once written.`,
+        text: `Soul graduation: KongCode tracks your maturity across 5 stages — nascent (≤3/7 thresholds), developing (4/7), emerging (5/7), maturing (6/7), ready (7/7). The 7 thresholds are: sessions, reflections, causal chains, concepts, monologues, span days, total memories, and skills (skills:30 added v0.4.x as the 7th gate). Reaching 7/7 is necessary but not sufficient — you must also pass a quality gate (score >= 0.85) based on retrieval utilization, skill success rate, critical reflection rate, and tool failure rate. On graduation, you author a Soul document — a self-assessment grounded in your actual experience, not aspirational claims. Use introspect with action "status" to check your current stage and progress. The Soul document becomes part of your identity once written.`,
         importance: 8,
     },
 ];

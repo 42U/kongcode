@@ -17,7 +17,7 @@ import type { EmbeddingService } from "./embeddings.js";
  * or IDENTITY_CHUNKS change; seedCognitiveBootstrap uses it to detect stale
  * seeds and re-seed on upgrade.
  */
-export declare const BOOTSTRAP_VERSION = "0.4.0";
+export declare const BOOTSTRAP_VERSION = "0.4.1";
 /**
  * Seed cognitive bootstrap knowledge on first run.
  * Idempotent — checks for existing entries before seeding.

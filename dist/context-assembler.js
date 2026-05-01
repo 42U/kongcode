@@ -67,11 +67,12 @@ export async function assembleContextString(state, session, userPrompt) {
         // Extract text from injected context messages.
         // graphTransformContext prepends a context message to the message array.
         // We need to find it and extract its text content.
+        // 0.7.45 renamed the envelope from <graph_context> to <recalled_memory>;
+        // accept both so a future rename can't silently drop the payload again.
         for (const msg of result.messages) {
             if (msg.role === "user") {
                 const text = extractText(msg);
-                // The graph context message starts with "[System retrieved context"
-                if (text?.includes("<graph_context>")) {
+                if (text && (text.includes("<recalled_memory>") || text.includes("<graph_context>"))) {
                     parts.push(text);
                     break;
                 }
