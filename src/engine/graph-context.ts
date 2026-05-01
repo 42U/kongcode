@@ -108,14 +108,21 @@ export function applyDistributionBands<T extends { finalScore?: number; band?: S
 /** Cross-encoder rerank stage. Takes the top-N candidates by WMR/ACAN score,
  *  rescores each (query, doc) pair via a single batched call to the bge-reranker
  *  model, blends the two signals 60/40 (WMR/cross), re-sorts the top-N, and
- *  preserves the tail. Skipped when fewer than 5 candidates (cheap retrieval
- *  doesn't need rerank) or when the reranker isn't loaded.
+ *  decides what to do with the tail.
  *
  *  0.7.28: also stamps `crossScore` and `band` on each reranked candidate so
  *  the formatter can render salience tags ([load-bearing]/[supporting]/etc.)
  *  instead of the noisy relevance percentage. Drops candidates below
  *  BAND_DROP_BELOW (0.15) — the cross-encoder strongly disagreeing with WMR
- *  is a hard noise filter. */
+ *  is a hard noise filter.
+ *
+ *  0.7.43: by default, tail items (positions past RERANK_TOP_N) are now
+ *  DROPPED rather than stamped 'background' and shipped. The old behavior
+ *  was leaking irrelevant graph-neighbor concepts into context (e.g., a
+ *  4-week-old heartbeat-system concept from a different project surfacing
+ *  in unrelated turns) because tail items never saw the cross-encoder yet
+ *  arrived in the injection anyway. Set KONGCODE_RERANKER_KEEP_TAIL=true
+ *  to opt back into the old behavior. */
 async function rerankResults<T extends { id: string; text?: string; finalScore: number; crossScore?: number; band?: SalienceBand }>(
   deduped: T[],
   queryText: string,
@@ -140,9 +147,15 @@ async function rerankResults<T extends { id: string; text?: string; finalScore: 
     // Drop hard-noise (cross-encoder strongly disagrees) before re-sorting.
     const survivors = candidates.filter((c) => (c.crossScore ?? 0) >= BAND_DROP_BELOW);
     survivors.sort((a, b) => b.finalScore - a.finalScore);
+    const keepTail = process.env.KONGCODE_RERANKER_KEEP_TAIL === "true";
+    if (!keepTail) {
+      // 0.7.43 default: drop unreranked tail entirely. Tail items bypassed
+      // the cross-encoder by definition; shipping them as 'background'
+      // injects noise the user can't account for.
+      return survivors;
+    }
     const rerankedSet = new Set(survivors.map((r) => r.id));
     const tail = deduped.filter((r) => !rerankedSet.has(r.id) && !candidates.some(c => c.id === r.id));
-    // Tail items never saw the cross-encoder — band them as 'background'.
     for (const t of tail) {
       if (t.band === undefined) t.band = "background";
     }

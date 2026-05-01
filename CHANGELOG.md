@@ -8,6 +8,18 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.43] — 2026-05-01
+
+### Fixed — reranker tail-leakage: drops irrelevant graph neighbors from injection
+
+`rerankResults` in `src/engine/graph-context.ts` previously stamped `band='background'` on tail items (positions past `RERANK_TOP_N`) and shipped them in the injected context anyway. Tail items bypass the cross-encoder by definition — so an irrelevant graph-link neighbor (e.g., a 4-week-old heartbeat-system concept from a different project) could surface in unrelated turns just because it shared a graph edge with something in the seed set.
+
+**Default behavior changed**: tail items are now dropped entirely. Only items the cross-encoder actually scored (and that cleared `BAND_DROP_BELOW = 0.15`) reach the injection. Eliminates the "where did this 5-day-old concept come from?" failure mode where retrieved context contained items unrelated to prompt keywords.
+
+**Opt-out**: set `KONGCODE_RERANKER_KEEP_TAIL=true` to revert. No legitimate use case is known; the env var exists in case anyone discovers one in the field.
+
+This is the first stage of an Anthropic-aligned context-injection rework planned across v0.7.43–v0.7.45. Subsequent stages will address directive wording (`MUST` → softer language per Anthropic 4.5+ guidance), motivation-first directive structure (`Why:` lines), Skill deferral for non-load-bearing directives, per-item char cap, and a user bypass sigil.
+
 ## [0.7.42] — 2026-04-30
 
 ### Added — gap-audit Category 1: live-fire coverage extended to 25/26 synapses
