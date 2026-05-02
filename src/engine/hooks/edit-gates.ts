@@ -66,6 +66,17 @@ async function hasInvestigatedFile(
 ): Promise<boolean> {
   if (session._editGateChecked.has(filePath)) return true;
 
+  // 0.7.48: any prior file-aware tool call (Read/Edit/Write/MultiEdit)
+  // this session counts as investigation. Populated by pre-tool-use.ts
+  // before the gate runs, so a Read → Edit pair in the same response
+  // resolves immediately — without this hot path the gate had to wait
+  // for Stop to ingest assistant tool I/O into the turn table, which
+  // never happens mid-response.
+  if (session._observedFilePaths.has(filePath)) {
+    session._editGateChecked.add(filePath);
+    return true;
+  }
+
   // The user's most recent message naming the file is an authorization.
   if (session.lastUserText && session.lastUserText.includes(filePath)) {
     session._editGateChecked.add(filePath);
@@ -73,7 +84,9 @@ async function hasInvestigatedFile(
   }
 
   // Cold path: graph query for any prior turn mentioning this exact path
-  // in this session. Costs one CONTAINS scan; cached on hit.
+  // in this session. Catches paths that appeared in previous user turns
+  // or assistant turns ingested at Stop. Costs one CONTAINS scan; cached
+  // on hit.
   if (!state.store.isAvailable() || !session.surrealSessionId) {
     // No store / no session row — fail open. We can't enforce without
     // state, and blocking blindly would be hostile.
@@ -170,9 +183,10 @@ export async function checkFileEditGate(
 
   return denyResponse(
     `kongcode/edit-gate: first edit to ${filePath} this session. ` +
-      `Run \`recall("${filePath}")\` or read the file before editing — otherwise you're ` +
-      `editing blind. The gate fires once per file per session and clears once the path ` +
-      `appears in any subsequent turn.`,
+      `Use the Read tool on this exact path before editing — that registers the ` +
+      `path with the gate immediately. (Recall and Grep do NOT clear the gate; ` +
+      `only a Read/Edit/Write of this path or the path appearing in the user's ` +
+      `message does.) The gate fires once per file per session.`,
   );
 }
 

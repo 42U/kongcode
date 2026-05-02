@@ -11,6 +11,11 @@ import { shouldHookRun } from "../engine/hooks/profile.js";
 import { isProtectedConfigFile } from "../engine/hooks/config-protection.js";
 import { checkFileEditGate, checkBashGate } from "../engine/hooks/edit-gates.js";
 const FILE_EDIT_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+/** Tools that touch a file via an explicit `file_path` argument. The gate
+ *  treats any of these as an "observation" of that path for the rest of
+ *  the session, so a Read followed by an Edit in the same response is
+ *  not blocked. 0.7.48 fix for the mid-response gating gap. */
+const FILE_AWARE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit"]);
 export async function handlePreToolUse(state, payload) {
     const sessionId = payload.session_id ?? "default";
     const session = state.getSession(sessionId);
@@ -19,6 +24,19 @@ export async function handlePreToolUse(state, payload) {
     const toolName = payload.tool_name ?? "";
     session.toolCallCount++;
     session.toolCallsSinceLastText++;
+    // ── Observation pass (must run before any gate) ───────────────────────
+    // Record every file path the agent has touched via a file-aware tool so
+    // the edit-gate can resolve "I just Read this" immediately, without
+    // waiting for Stop to ingest tool I/O into turn.text. Pre-0.7.48 the
+    // gate only saw turn rows (which lag the assistant by a full response)
+    // so a Read → Edit pair in the same response was always blocked — even
+    // when the Read had succeeded.
+    if (FILE_AWARE_TOOLS.has(toolName)) {
+        const toolInput = payload.tool_input;
+        const filePath = toolInput?.file_path;
+        if (filePath)
+            session._observedFilePaths.add(filePath);
+    }
     // ── Config protection (standard, strict) ──────────────────────────────
     // Block edits to lint/format configs before anything else. Cheap, no
     // store calls. Bypass with KONGCODE_ALLOW_CONFIG_EDIT=1.

@@ -56,6 +56,14 @@ export class SessionState {
     // Internal — do not inspect from outside engine/hooks/edit-gates.ts.
     _editGateChecked = new Set();
     _editGateLastActivity = 0;
+    // Paths the agent has touched via file-aware tools (Read/Edit/Write/
+    // MultiEdit) anywhere in this session. Populated by pre-tool-use.ts at
+    // the top of every handler call so the edit-gate's "investigated" check
+    // resolves immediately when a Read precedes an Edit in the same response
+    // — at that point neither the Read nor the Edit has been ingested into
+    // the turn table yet (Stop is what writes assistant tool I/O), so the
+    // cold-path turn.text query would otherwise miss them. 0.7.48 fix.
+    _observedFilePaths = new Set();
     // Tool call optimization state (claw-code patterns)
     /** Query vector from this turn's context retrieval — used to detect redundant recall calls. */
     lastQueryVec = null;

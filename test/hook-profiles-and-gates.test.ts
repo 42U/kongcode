@@ -196,6 +196,18 @@ describe("checkFileEditGate", () => {
     expect(queryFirst).toHaveBeenCalledOnce();
   });
 
+  it("allows when a prior file-aware tool call observed the path this session (0.7.48 fix)", async () => {
+    const { state, queryFirst } = makeMockState([]);
+    const session = makeSession();
+    // Simulate pre-tool-use.ts having recorded a prior Read of this path.
+    session._observedFilePaths.add("/repo/src/foo.ts");
+
+    const r = await checkFileEditGate(state, session, "/repo/src/foo.ts");
+    expect(r).toBeNull();
+    // Hot-path observation short-circuits the store query.
+    expect(queryFirst).not.toHaveBeenCalled();
+  });
+
   it("allows when the path appears in the user's last message", async () => {
     const { state, queryFirst } = makeMockState([]);
     const session = makeSession();
