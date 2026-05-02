@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Pre-commit guard: version sync check.
+#
+# kongcode has THREE version locations that must match:
+#   1. package.json              — npm version
+#   2. .claude-plugin/plugin.json — what /plugin command reports
+#   3. src/daemon/index.ts DAEMON_VERSION + src/mcp-client/index.ts CLIENT_VERSION
+#
+# This hook fails the commit if any location disagrees with package.json.
+# Prevents the 0.7.47 incident where package.json was bumped but plugin.json
+# and DAEMON_VERSION/CLIENT_VERSION were stale.
+
+set -euo pipefail
+
+PKG_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+if [ -z "$PKG_VERSION" ]; then
+  echo "[pre-commit] WARNING: could not read package.json version — skipping sync check"
+  exit 0
+fi
+
+ERRORS=0
+
+# Check .claude-plugin/plugin.json
+if [ -f ".claude-plugin/plugin.json" ]; then
+  PLUGIN_VERSION=$(node -p "require('./.claude-plugin/plugin.json').version" 2>/dev/null || echo "")
+  if [ -n "$PLUGIN_VERSION" ] && [ "$PLUGIN_VERSION" != "$PKG_VERSION" ]; then
+    echo "[pre-commit] VERSION MISMATCH: .claude-plugin/plugin.json=$PLUGIN_VERSION != package.json=$PKG_VERSION"
+    ERRORS=1
+  fi
+fi
+
+# Check DAEMON_VERSION in src/daemon/index.ts
+if [ -f "src/daemon/index.ts" ]; then
+  DAEMON_VERSION=$(grep -oP 'DAEMON_VERSION\s*=\s*"\K[^"]+' src/daemon/index.ts 2>/dev/null || echo "")
+  if [ -n "$DAEMON_VERSION" ] && [ "$DAEMON_VERSION" != "$PKG_VERSION" ]; then
+    echo "[pre-commit] VERSION MISMATCH: DAEMON_VERSION=$DAEMON_VERSION != package.json=$PKG_VERSION"
+    ERRORS=1
+  fi
+fi
+
+# Check CLIENT_VERSION in src/mcp-client/index.ts
+if [ -f "src/mcp-client/index.ts" ]; then
+  CLIENT_VERSION=$(grep -oP 'CLIENT_VERSION\s*=\s*"\K[^"]+' src/mcp-client/index.ts 2>/dev/null || echo "")
+  if [ -n "$CLIENT_VERSION" ] && [ "$CLIENT_VERSION" != "$PKG_VERSION" ]; then
+    echo "[pre-commit] VERSION MISMATCH: CLIENT_VERSION=$CLIENT_VERSION != package.json=$PKG_VERSION"
+    ERRORS=1
+  fi
+fi
+
+if [ "$ERRORS" -ne 0 ]; then
+  echo ""
+  echo "[pre-commit] Version sync check FAILED. Update all locations to $PKG_VERSION:"
+  echo "  - .claude-plugin/plugin.json"
+  echo "  - src/daemon/index.ts (DAEMON_VERSION)"
+  echo "  - src/mcp-client/index.ts (CLIENT_VERSION)"
+  echo ""
+  echo "  Read the Tier-0 rules. Follow them."
+  exit 1
+fi

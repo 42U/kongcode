@@ -129,5 +129,17 @@ export async function handleStop(
 
   log.debug(`Stop: turn=${session.userTurnCount}, tokens=${session.cumulativeTokens}`);
 
+  if (session._pushDetected) {
+    session._pushDetected = false;
+    return {
+      decision: "block" as const,
+      reason: "[KongCode] You just ran git push. Before declaring done: " +
+        "(1) Check CI status with `gh run list` or `gh run watch`. " +
+        "(2) If CI hasn't triggered (e.g. only fires on tags), state that explicitly. " +
+        "(3) Do NOT say 'pushed' or 'done' without verifying. " +
+        "Read and follow the Tier-0 rules.",
+    };
+  }
+
   return {};
 }

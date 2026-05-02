@@ -78,6 +78,14 @@ export async function handlePreToolUse(state, payload) {
                 return denied;
         }
     }
+    // Detect git push — flag for CI reminder at Stop
+    if (toolName === "Bash") {
+        const toolInput = payload.tool_input;
+        const command = toolInput?.command;
+        if (command && /git\s+push\b/.test(command)) {
+            session._pushDetected = true;
+        }
+    }
     // Planning gate: soft interrupt if over tool budget
     if (session.toolCallCount > session.toolLimit && !session.softInterrupted) {
         session.softInterrupted = true;

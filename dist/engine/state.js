@@ -64,6 +64,11 @@ export class SessionState {
     // the turn table yet (Stop is what writes assistant tool I/O), so the
     // cold-path turn.text query would otherwise miss them. 0.7.48 fix.
     _observedFilePaths = new Set();
+    // Post-push CI reminder: set by PostToolUse when a Bash call contains
+    // "git push", consumed by Stop to inject a Tier-0 reminder telling the
+    // agent to verify CI before declaring done. Structural gate — the agent
+    // can't skip it because it fires automatically.
+    _pushDetected = false;
     // Tool call optimization state (claw-code patterns)
     /** Query vector from this turn's context retrieval — used to detect redundant recall calls. */
     lastQueryVec = null;

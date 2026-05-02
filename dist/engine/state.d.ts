@@ -41,6 +41,7 @@ export declare class SessionState {
     readonly _editGateChecked: Set<string>;
     _editGateLastActivity: number;
     readonly _observedFilePaths: Set<string>;
+    _pushDetected: boolean;
     /** Query vector from this turn's context retrieval — used to detect redundant recall calls. */
     lastQueryVec: number[] | null;
     /** Summary of what graphTransformContext injected — shown in planning gate. */
