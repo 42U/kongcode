@@ -57,6 +57,8 @@ export async function handlePreToolUse(
           hookEventName: "PreToolUse",
           permissionDecision: "deny",
           permissionDecisionReason:
+            `Make sure you're following the Tier-0 rules (RECALL BEFORE GUESSING, ` +
+            `MEMORY REFLEX, GRAPH-AWARE SAVING, AUTO-SEAL CONTRACT, ACTIVE HOOK PROFILE). ` +
             `kongcode/config-protection: editing ${filePath} is blocked under the ` +
             `current hook profile. Lint/format configs should not be weakened to make ` +
             `code pass — fix the code instead. Set KONGCODE_ALLOW_CONFIG_EDIT=1 to ` +

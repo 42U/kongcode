@@ -157,12 +157,19 @@ async function hasInvestigatedBashCommand(
   return false;
 }
 
+/** Every gate deny is prefixed with a Tier-0 reminder. Agents read the
+ *  whole deny string while figuring out how to unblock, so this is the
+ *  highest-attention surface for re-grounding behavior. Keep it short. */
+const TIER0_PREFIX =
+  "Make sure you're following the Tier-0 rules (RECALL BEFORE GUESSING, " +
+  "MEMORY REFLEX, GRAPH-AWARE SAVING, AUTO-SEAL CONTRACT, ACTIVE HOOK PROFILE). ";
+
 function denyResponse(reason: string): HookResponse {
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
       permissionDecision: "deny",
-      permissionDecisionReason: reason,
+      permissionDecisionReason: TIER0_PREFIX + reason,
     },
   };
 }
