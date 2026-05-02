@@ -8,6 +8,35 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.47] — 2026-05-02
+
+### Added — resource-aware daemon sizing
+
+Every feature now adapts to the hardware it runs on instead of assuming workstation-class resources.
+
+**Resource tier detection** (`src/engine/resource-tier.ts`): auto-detects RAM/CPUs at startup, produces a `constrained` / `standard` / `generous` profile that configures thread counts, GPU usage, idle timeout, and drain interval. Override with `KONGCODE_RESOURCE_TIER`.
+
+**Shared Llama instance** (`src/engine/llama-loader.ts`): embeddings and reranker share one native binding instead of creating separate `getLlama()` calls with doubled thread pools.
+
+**Lazy reranker**: 607MB model deferred from daemon boot to first recall call. Constrained boxes that never trigger recall never pay the load cost.
+
+**Embed watchdog + circuit breaker** (`src/engine/embeddings.ts`): `Promise.race` with 30s timeout; 3 consecutive timeouts opens circuit breaker. Prevents multi-hour stalls from blocking the daemon. `KONGCODE_EMBED_TIMEOUT_MS` override.
+
+**Persistent L2 embedding cache**: SurrealDB-backed `embedding_cache` table (sha256-keyed, model-version-aware). Daemon restarts after idle reaper no longer re-compute previously-seen embeddings. 30-day auto-purge in maintenance.
+
+**Chunked reranking**: `setImmediate` yields between chunks of 6 candidates so IPC heartbeats and concurrent sessions aren't starved. `KONGCODE_RERANK_CHUNK_SIZE` override.
+
+**Staggered maintenance**: CPU-heavy jobs (consolidation, ACAN retrain) deferred 30s after startup so first-turn context assembly is uncontested. `KONGCODE_MAINTENANCE_DEFER_MS` override.
+
+**Heuristic pre-drain** (`src/daemon/heuristic-drain.ts`): handoff notes and short-session reflections processed in-process without spawning a subprocess. Remaining queue checked after — if below threshold, subprocess spawn is skipped entirely.
+
+**Auto-drain model downgrade**: defaults to `memory-extractor-lite` (Haiku) instead of Opus. Opt back in with `KONGCODE_AUTO_DRAIN_MODEL=opus`.
+
+### Fixed
+- **reaperExit resource leak**: idle reaper path was missing `globalState.shutdown()`, `disposeReranker()`, `disposeSharedLlama()`, `stopHttpApi()` — leaked native models and DB connections on every idle timeout
+- **Idle timeout**: was hardcoded 6s causing constant cold restarts; now tier-aware (constrained=5min, standard/generous=60s)
+- `linkConceptHierarchy` accepts optional precomputed vector, avoiding redundant re-embed of concept content
+
 ## [0.7.46] — 2026-05-01
 
 ### Fixed — recalled-memory tag-rename downstream cleanup + project-scope retrieval invisibility
