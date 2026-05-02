@@ -443,6 +443,16 @@ DEFINE FIELD IF NOT EXISTS completed_at ON pending_work TYPE option<datetime>;
 DEFINE INDEX IF NOT EXISTS pw_status_idx ON pending_work FIELDS status, priority;
 
 -- ============================================================
+-- EMBEDDING CACHE: Persistent L2 cache surviving daemon restarts
+-- ============================================================
+DEFINE TABLE IF NOT EXISTS embedding_cache SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS text_hash ON embedding_cache TYPE string;
+DEFINE FIELD IF NOT EXISTS embedding ON embedding_cache TYPE array;
+DEFINE FIELD IF NOT EXISTS model_version ON embedding_cache TYPE string;
+DEFINE FIELD IF NOT EXISTS created_at ON embedding_cache TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS idx_ec_text_hash ON embedding_cache FIELDS text_hash UNIQUE;
+
+-- ============================================================
 -- MIGRATIONS (must run after table definitions)
 -- ============================================================
 -- 768d → 1024d migration completed; REMOVE INDEX / UPDATE stale

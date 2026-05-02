@@ -22,35 +22,53 @@ import { stageRetrieval, getHistoricalUtilityBatch, getLastTurnGroundingTrace } 
 import { isACANActive, scoreWithACAN, type ACANCandidate } from "./acan.js";
 import { swallow } from "./errors.js";
 import { log } from "./log.js";
-import { getLlama, LlamaLogLevel, type LlamaRankingContext } from "node-llama-cpp";
+import type { LlamaRankingContext } from "node-llama-cpp";
+import type { ResourceProfile } from "./resource-tier.js";
 
 // ── Cross-encoder reranker (bge-reranker-v2-m3) ──────────────────────────────
-// Two-stage retrieve-then-rerank: BGE-M3 + WMR/ACAN produce top-N candidates,
-// then cross-encoder rescores with a full transformer forward pass per pair.
-// Ported verbatim from kongclaw/src/graph-context.ts (lines 59-78, 813-842) —
-// the configuration that hit 98.2% R@5 on LongMemEval.
 let _rankingCtx: LlamaRankingContext | null = null;
-const RERANK_TOP_N = 30;         // candidates to send to cross-encoder
-const RERANK_BLEND_VECTOR = 0.6; // WMR/ACAN weight in blend
-const RERANK_BLEND_CROSS = 0.4;  // cross-encoder weight in blend
-const RERANK_MAX_DOC_CHARS = 24000; // truncate long docs for reranker context window
+let _rerankerModelPath: string | null = null;
+let _rerankerProfile: ResourceProfile | null = null;
+let _rerankerInitializing: Promise<void> | null = null;
+const RERANK_TOP_N = 30;
+const RERANK_BLEND_VECTOR = 0.6;
+const RERANK_BLEND_CROSS = 0.4;
+const RERANK_MAX_DOC_CHARS = 24000;
+const RERANK_CHUNK_SIZE = Number(process.env.KONGCODE_RERANK_CHUNK_SIZE) || 6;
 
-/** Initialize the cross-encoder reranker. Called once at daemon startup
- *  (after EmbeddingService.initialize). Failures degrade gracefully —
- *  retrieval still runs without reranking, just with WMR/ACAN scores. */
+export function configureReranker(modelPath: string, profile?: ResourceProfile): void {
+  _rerankerModelPath = modelPath;
+  _rerankerProfile = profile ?? null;
+}
+
+async function ensureRerankerLoaded(): Promise<boolean> {
+  if (_rankingCtx) return true;
+  if (!_rerankerModelPath) return false;
+  if (_rerankerInitializing) { await _rerankerInitializing; return _rankingCtx !== null; }
+  _rerankerInitializing = (async () => {
+    try {
+      const { getSharedLlama } = await import("./llama-loader.js");
+      const llama = await getSharedLlama(_rerankerProfile ?? undefined);
+      const model = await llama.loadModel({ modelPath: _rerankerModelPath! });
+      _rankingCtx = await model.createRankingContext();
+      log.warn("[rerank] Cross-encoder reranker loaded (lazy).");
+    } catch (e) {
+      swallow.warn("graph-context:initReranker(lazy) failed — retrieval will work without reranking", e);
+      _rankingCtx = null;
+    } finally {
+      _rerankerInitializing = null;
+    }
+  })();
+  await _rerankerInitializing;
+  return _rankingCtx !== null;
+}
+
 export async function initReranker(modelPath: string): Promise<void> {
   try {
-    const llama = await getLlama({
-      logLevel: LlamaLogLevel.error,
-      logger: (level, message) => {
-        if (message.includes("missing newline token")) return;
-        if (level === LlamaLogLevel.error) console.error(`[rerank] ${message}`);
-      },
-    });
+    const { getSharedLlama } = await import("./llama-loader.js");
+    const llama = await getSharedLlama();
     const model = await llama.loadModel({ modelPath });
     _rankingCtx = await model.createRankingContext();
-    // Promoted to warn-level so it's visible at the default KONGCODE_LOG_LEVEL.
-    // Operationally important to confirm the cross-encoder is actually live.
     log.warn("[rerank] Cross-encoder reranker loaded.");
   } catch (e) {
     swallow.warn("graph-context:initReranker failed — retrieval will work without reranking", e);
@@ -127,7 +145,9 @@ async function rerankResults<T extends { id: string; text?: string; finalScore: 
   deduped: T[],
   queryText: string,
 ): Promise<T[]> {
-  if (!_rankingCtx || deduped.length <= 5) return deduped;
+  if (deduped.length <= 5) return deduped;
+  const loaded = await ensureRerankerLoaded();
+  if (!loaded || !_rankingCtx) return deduped;
   try {
     const topN = Math.min(RERANK_TOP_N, deduped.length);
     const candidates = deduped.slice(0, topN);
@@ -135,7 +155,17 @@ async function rerankResults<T extends { id: string; text?: string; finalScore: 
       const text = r.text ?? "";
       return text.length > RERANK_MAX_DOC_CHARS ? text.slice(0, RERANK_MAX_DOC_CHARS) : text;
     });
-    const crossScores = await _rankingCtx.rankAll(queryText, texts);
+    const crossScores: number[] = new Array(texts.length);
+    for (let start = 0; start < texts.length; start += RERANK_CHUNK_SIZE) {
+      const end = Math.min(start + RERANK_CHUNK_SIZE, texts.length);
+      const chunkScores = await _rankingCtx.rankAll(queryText, texts.slice(start, end));
+      for (let i = 0; i < chunkScores.length; i++) {
+        crossScores[start + i] = chunkScores[i];
+      }
+      if (end < texts.length) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
+    }
     for (let i = 0; i < candidates.length; i++) {
       const cs = crossScores[i];
       candidates[i].crossScore = cs;

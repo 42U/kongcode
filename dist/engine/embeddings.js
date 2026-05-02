@@ -1,26 +1,34 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { swallow } from "./errors.js";
 import { log } from "./log.js";
-/** BGE-M3 embedding service (1024-dim via GGUF) with an LRU cache of up to 512 entries. */
 export class EmbeddingService {
     config;
+    resourceProfile;
     model = null;
     ctx = null;
     ready = false;
-    /** LRU embedding cache keyed by text, capped at maxCacheSize entries. */
     cache = new Map();
     maxCacheSize = 512;
-    // Init lifecycle telemetry. Captured here so the introspect probe can name
-    // the failure reason instead of just reporting "isAvailable=false". Without
-    // this, callers that swallow init() errors (mcp-server boot path) leave the
-    // service silently unavailable with no breadcrumb.
     initStartedAt = null;
     initFinishedAt = null;
     initError = null;
-    constructor(config) {
+    consecutiveTimeouts = 0;
+    maxConsecutiveTimeouts = 3;
+    embedTimeoutMs;
+    store = null;
+    modelVersion = null;
+    l2Hits = 0;
+    l2Misses = 0;
+    constructor(config, resourceProfile) {
         this.config = config;
+        this.resourceProfile = resourceProfile;
+        this.embedTimeoutMs = Number(process.env.KONGCODE_EMBED_TIMEOUT_MS) || 30_000;
     }
-    /** Initialize the embedding model. Returns true if freshly loaded, false if already ready. */
+    setStore(store) {
+        this.store = store;
+        this.modelVersion = createHash("sha256").update(this.config.modelPath).digest("hex").slice(0, 16);
+    }
     async initialize() {
         if (this.ready)
             return false;
@@ -30,19 +38,8 @@ export class EmbeddingService {
             if (!existsSync(this.config.modelPath)) {
                 throw new Error(`Embedding model not found at: ${this.config.modelPath}\n  Download BGE-M3 GGUF or set EMBED_MODEL_PATH`);
             }
-            const { loadNodeLlamaCpp } = await import("./llama-loader.js");
-            const { getLlama, LlamaLogLevel } = await loadNodeLlamaCpp();
-            const llama = await getLlama({
-                logLevel: LlamaLogLevel.error,
-                logger: (level, message) => {
-                    if (message.includes("missing newline token"))
-                        return;
-                    if (level === LlamaLogLevel.error)
-                        log.error(`[llama] ${message}`);
-                    else if (level === LlamaLogLevel.warn)
-                        log.warn(`[llama] ${message}`);
-                },
-            });
+            const { getSharedLlama } = await import("./llama-loader.js");
+            const llama = await getSharedLlama(this.resourceProfile);
             this.model = await llama.loadModel({ modelPath: this.config.modelPath });
             this.ctx = await this.model.createEmbeddingContext();
             this.ready = true;
@@ -52,13 +49,10 @@ export class EmbeddingService {
         catch (err) {
             this.initError = err instanceof Error ? err : new Error(String(err));
             this.initFinishedAt = Date.now();
-            // Log loudly so anyone tailing MCP stderr sees it immediately, even if
-            // the caller swallows the throw.
             log.error(`[embeddings] initialize() failed: ${this.initError.message}`);
             throw this.initError;
         }
     }
-    /** Snapshot init state — used by introspect/memory_health probes to name failures. */
     getDiagnostics() {
         const start = this.initStartedAt;
         const end = this.initFinishedAt;
@@ -71,27 +65,82 @@ export class EmbeddingService {
             initError: this.initError
                 ? { message: this.initError.message, stack: this.initError.stack }
                 : null,
+            circuitBreakerOpen: this.consecutiveTimeouts >= this.maxConsecutiveTimeouts,
+            consecutiveTimeouts: this.consecutiveTimeouts,
+            resourceTier: this.resourceProfile?.tier ?? null,
+            l2CacheEnabled: this.store !== null,
+            l2Hits: this.l2Hits,
+            l2Misses: this.l2Misses,
         };
     }
-    /** Return the embedding vector for text, serving from LRU cache on repeat calls. */
+    textHash(text) {
+        return createHash("sha256").update(text).digest("hex");
+    }
+    async l2Get(hash) {
+        if (!this.store?.isAvailable() || !this.modelVersion)
+            return null;
+        try {
+            const rows = await this.store.queryFirst(`SELECT embedding FROM embedding_cache WHERE text_hash = $hash AND model_version = $mv LIMIT 1`, { hash, mv: this.modelVersion });
+            if (rows.length > 0 && Array.isArray(rows[0].embedding)) {
+                this.l2Hits++;
+                return rows[0].embedding;
+            }
+        }
+        catch (e) {
+            swallow("embeddings:l2Get", e);
+        }
+        this.l2Misses++;
+        return null;
+    }
+    l2Put(hash, vec) {
+        if (!this.store?.isAvailable() || !this.modelVersion)
+            return;
+        this.store.queryExec(`INSERT INTO embedding_cache (text_hash, embedding, model_version) VALUES ($hash, $vec, $mv)
+       ON DUPLICATE KEY UPDATE embedding = $vec, model_version = $mv`, { hash, vec, mv: this.modelVersion }).catch(e => swallow("embeddings:l2Put", e));
+    }
     async embed(text) {
         if (!this.ready || !this.ctx)
             throw new Error("Embeddings not initialized");
+        if (this.consecutiveTimeouts >= this.maxConsecutiveTimeouts) {
+            throw new Error(`Embedding circuit breaker open: ${this.consecutiveTimeouts} consecutive timeouts`);
+        }
         const cached = this.cache.get(text);
         if (cached) {
-            // Move to end for LRU freshness
             this.cache.delete(text);
             this.cache.set(text, cached);
             return cached;
         }
-        const result = await this.ctx.getEmbeddingFor(text);
-        const vec = Array.from(result.vector);
-        // Evict oldest if at capacity
-        if (this.cache.size >= this.maxCacheSize) {
-            this.cache.delete(this.cache.keys().next().value);
+        const hash = this.textHash(text);
+        const l2 = await this.l2Get(hash);
+        if (l2) {
+            if (this.cache.size >= this.maxCacheSize) {
+                this.cache.delete(this.cache.keys().next().value);
+            }
+            this.cache.set(text, l2);
+            return l2;
         }
-        this.cache.set(text, vec);
-        return vec;
+        try {
+            const result = await Promise.race([
+                this.ctx.getEmbeddingFor(text),
+                new Promise((_, reject) => setTimeout(() => reject(new Error(`embed() timed out after ${this.embedTimeoutMs}ms`)), this.embedTimeoutMs)),
+            ]);
+            this.consecutiveTimeouts = 0;
+            const vec = Array.from(result.vector);
+            if (this.cache.size >= this.maxCacheSize) {
+                this.cache.delete(this.cache.keys().next().value);
+            }
+            this.cache.set(text, vec);
+            this.l2Put(hash, vec);
+            return vec;
+        }
+        catch (err) {
+            if (err instanceof Error && err.message.includes("timed out")) {
+                this.consecutiveTimeouts++;
+                log.error(`[embeddings] timeout #${this.consecutiveTimeouts}/${this.maxConsecutiveTimeouts}` +
+                    (this.consecutiveTimeouts >= this.maxConsecutiveTimeouts ? " — CIRCUIT BREAKER OPEN" : ""));
+            }
+            throw err;
+        }
     }
     async embedBatch(texts) {
         if (texts.length === 0)
@@ -100,6 +149,10 @@ export class EmbeddingService {
     }
     isAvailable() {
         return this.ready;
+    }
+    resetCircuitBreaker() {
+        this.consecutiveTimeouts = 0;
+        log.warn("[embeddings] circuit breaker manually reset");
     }
     async dispose() {
         try {

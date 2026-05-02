@@ -68,6 +68,7 @@ export async function linkConceptHierarchy(
   store: SurrealStore,
   embeddings: EmbeddingService,
   logTag: string,
+  precomputedNameVec?: number[] | null,
 ): Promise<void> {
   try {
     const existing = await store.queryFirst<{ id: string; content: string }>(
@@ -102,7 +103,7 @@ export async function linkConceptHierarchy(
     // related_to: peer-level semantic association via embedding similarity
     if (embeddings.isAvailable()) {
       try {
-        const conceptEmb = await embeddings.embed(conceptName);
+        const conceptEmb = precomputedNameVec ?? await embeddings.embed(conceptName);
         if (conceptEmb?.length) {
           const similar = await store.queryFirst<{ id: string; score: number }>(
             `SELECT id, vector::similarity::cosine(embedding, $vec) AS score

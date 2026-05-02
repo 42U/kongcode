@@ -18,15 +18,34 @@ import { checkACANReadiness } from "./acan.js";
 import { swallow } from "./errors.js";
 export function runBootstrapMaintenance(state) {
     const { store, embeddings, config } = state;
+    const deferMs = Number(process.env.KONGCODE_MAINTENANCE_DEFER_MS) || 30_000;
+    // Group 1: cheap DB queries — safe to run immediately in parallel
     Promise.all([
         store.runMemoryMaintenance(),
-        store.archiveOldTurns(),
-        store.consolidateMemories((text) => embeddings.embed(text)),
-        store.garbageCollectMemories(),
         store.purgeStalePendingWork(),
-        backfillSessionTurnCounts(state),
-        checkACANReadiness(store, config.thresholds.acanTrainingThreshold),
-    ]).catch(e => swallow.warn("bootstrap:maintenance", e));
+        purgeStaleEmbedCache(state),
+    ]).then(async () => {
+        // Group 2: moderate cost — after cheap queries complete
+        await store.archiveOldTurns().catch(e => swallow.warn("maintenance:archiveOldTurns", e));
+        await store.garbageCollectMemories().catch(e => swallow.warn("maintenance:gcMemories", e));
+        await backfillSessionTurnCounts(state);
+    }).catch(e => swallow.warn("bootstrap:maintenance:group2", e));
+    // Group 3: CPU-heavy — deferred so first-turn context assembly is uncontested
+    const heavyTimer = setTimeout(async () => {
+        try {
+            await store.consolidateMemories((text) => embeddings.embed(text));
+        }
+        catch (e) {
+            swallow.warn("maintenance:consolidate", e);
+        }
+        try {
+            await checkACANReadiness(store, config.thresholds.acanTrainingThreshold);
+        }
+        catch (e) {
+            swallow.warn("maintenance:acan", e);
+        }
+    }, deferMs);
+    heavyTimer.unref?.();
 }
 /** One-shot reconciliation: every session row pre-0.7.12 has turn_count=0
  *  because the increment lived in Stop and Stop's been flaky. The `turn`
@@ -64,5 +83,15 @@ async function backfillSessionTurnCounts(state) {
     }
     catch (e) {
         swallow.warn("maintenance:backfillTurnCount", e);
+    }
+}
+async function purgeStaleEmbedCache(state) {
+    if (!state.store.isAvailable())
+        return;
+    try {
+        await state.store.queryExec(`DELETE FROM embedding_cache WHERE created_at < time::now() - 30d LIMIT 500`);
+    }
+    catch (e) {
+        swallow.warn("maintenance:purgeEmbedCache", e);
     }
 }

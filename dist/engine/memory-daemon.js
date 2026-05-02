@@ -115,7 +115,7 @@ export async function writeExtractionResults(result, sessionId, store, embedding
                 const conceptId = await store.upsertConcept(c.content, emb, `daemon:${sessionId}`, undefined, projectId);
                 if (conceptId) {
                     extractedConceptIds.push(conceptId);
-                    await linkConceptHierarchy(conceptId, c.name, store, embeddings, "daemon:concept");
+                    await linkConceptHierarchy(conceptId, c.name, store, embeddings, "daemon:concept", emb);
                     if (taskId) {
                         await store.relate(conceptId, "derived_from", taskId)
                             .catch(e => swallow("daemon:concept:derived_from", e));

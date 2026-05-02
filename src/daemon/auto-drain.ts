@@ -31,6 +31,7 @@ import { homedir } from "node:os";
 import type { GlobalPluginState } from "../engine/state.js";
 import { log } from "../engine/log.js";
 import { swallow } from "../engine/errors.js";
+import { drainHeuristic } from "./heuristic-drain.js";
 
 interface DrainSchedulerOpts {
   /** Min pending count to trigger a drain. Below this, scheduler is a no-op. */
@@ -198,9 +199,19 @@ async function spawnHeadlessDrainer(
     return { spawned: false, reason: "claude binary not found (set KONGCODE_CLAUDE_BIN)" };
   }
 
-  const count = await getPendingCount(state);
-  if (count < opts.threshold) {
-    return { spawned: false, reason: `queue=${count} < threshold=${opts.threshold}` };
+  const rawCount = await getPendingCount(state);
+  if (rawCount >= 1) {
+    const heuristicProcessed = await drainHeuristic(state);
+    if (heuristicProcessed > 0) {
+      const remaining = await getPendingCount(state);
+      if (remaining < opts.threshold) {
+        return { spawned: false, reason: `heuristic drained ${heuristicProcessed}, remaining=${remaining} < threshold=${opts.threshold}` };
+      }
+    } else if (rawCount < opts.threshold) {
+      return { spawned: false, reason: `queue=${rawCount} < threshold=${opts.threshold}` };
+    }
+  } else {
+    return { spawned: false, reason: `queue=0 < threshold=${opts.threshold}` };
   }
 
   // Daily-spend cap: refuse to spawn if today's count would exceed maxDaily.
@@ -222,12 +233,16 @@ async function spawnHeadlessDrainer(
     return { spawned: false, reason: "another extractor already running" };
   }
 
-  log.info(`[auto-drain] spawning headless extractor (queue=${count}, reason=${reason})`);
+  const agentName = process.env.KONGCODE_AUTO_DRAIN_MODEL === "opus"
+    ? "kongcode:memory-extractor"
+    : "kongcode:memory-extractor-lite";
+  const count = await getPendingCount(state);
+  log.info(`[auto-drain] spawning headless extractor (queue=${count}, agent=${agentName}, reason=${reason})`);
   try {
     const child = spawn(
       claudeBin,
       [
-        "--agent", "kongcode:memory-extractor",
+        "--agent", agentName,
         "--print",
         "--output-format", "text",
         "--permission-mode", "bypassPermissions",

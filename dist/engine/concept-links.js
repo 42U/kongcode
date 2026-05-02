@@ -48,7 +48,7 @@ export async function linkToRelevantConcepts(sourceId, edgeName, text, store, em
  * parent-child hierarchy, e.g. "React" → "React hooks"), plus related_to
  * edges for peer-level semantic associations.
  */
-export async function linkConceptHierarchy(conceptId, conceptName, store, embeddings, logTag) {
+export async function linkConceptHierarchy(conceptId, conceptName, store, embeddings, logTag, precomputedNameVec) {
     try {
         const existing = await store.queryFirst(`SELECT id, content FROM concept WHERE id != $cid LIMIT 50`, { cid: conceptId });
         if (existing.length === 0)
@@ -77,7 +77,7 @@ export async function linkConceptHierarchy(conceptId, conceptName, store, embedd
         // related_to: peer-level semantic association via embedding similarity
         if (embeddings.isAvailable()) {
             try {
-                const conceptEmb = await embeddings.embed(conceptName);
+                const conceptEmb = precomputedNameVec ?? await embeddings.embed(conceptName);
                 if (conceptEmb?.length) {
                     const similar = await store.queryFirst(`SELECT id, vector::similarity::cosine(embedding, $vec) AS score
              FROM concept

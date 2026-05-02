@@ -1,5 +1,6 @@
 import type { EmbeddingConfig } from "./config.js";
-/** Snapshot of the embedding service's init state, surfaced via diagnostics. */
+import type { ResourceProfile } from "./resource-tier.js";
+import type { SurrealStore } from "./surreal.js";
 export interface EmbeddingDiagnostics {
     ready: boolean;
     modelPath: string;
@@ -10,27 +11,41 @@ export interface EmbeddingDiagnostics {
         message: string;
         stack?: string;
     } | null;
+    circuitBreakerOpen: boolean;
+    consecutiveTimeouts: number;
+    resourceTier: string | null;
+    l2CacheEnabled: boolean;
+    l2Hits: number;
+    l2Misses: number;
 }
-/** BGE-M3 embedding service (1024-dim via GGUF) with an LRU cache of up to 512 entries. */
 export declare class EmbeddingService {
     private readonly config;
+    private readonly resourceProfile?;
     private model;
     private ctx;
     private ready;
-    /** LRU embedding cache keyed by text, capped at maxCacheSize entries. */
     private cache;
     private readonly maxCacheSize;
     private initStartedAt;
     private initFinishedAt;
     private initError;
-    constructor(config: EmbeddingConfig);
-    /** Initialize the embedding model. Returns true if freshly loaded, false if already ready. */
+    private consecutiveTimeouts;
+    private readonly maxConsecutiveTimeouts;
+    private readonly embedTimeoutMs;
+    private store;
+    private modelVersion;
+    private l2Hits;
+    private l2Misses;
+    constructor(config: EmbeddingConfig, resourceProfile?: ResourceProfile | undefined);
+    setStore(store: SurrealStore): void;
     initialize(): Promise<boolean>;
-    /** Snapshot init state — used by introspect/memory_health probes to name failures. */
     getDiagnostics(): EmbeddingDiagnostics;
-    /** Return the embedding vector for text, serving from LRU cache on repeat calls. */
+    private textHash;
+    private l2Get;
+    private l2Put;
     embed(text: string): Promise<number[]>;
     embedBatch(texts: string[]): Promise<number[][]>;
     isAvailable(): boolean;
+    resetCircuitBreaker(): void;
     dispose(): Promise<void>;
 }

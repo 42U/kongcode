@@ -68,7 +68,9 @@ import { handleTaskCreated, handleSubagentStop } from "../hook-handlers/subagent
 import { startHttpApi, stopHttpApi, registerHookHandler } from "../http-api.js";
 import type { HookResponse } from "../http-api.js";
 import { startDrainScheduler } from "./auto-drain.js";
-import { initReranker, disposeReranker, isRerankerActive } from "../engine/graph-context.js";
+import { configureReranker, disposeReranker, isRerankerActive } from "../engine/graph-context.js";
+import { disposeSharedLlama } from "../engine/llama-loader.js";
+import { detectResourceProfile } from "../engine/resource-tier.js";
 
 /** Daemon version reported via meta.handshake — kept in sync with package.json. */
 const DAEMON_VERSION = "0.7.23";
@@ -97,6 +99,8 @@ const startedAt = Date.now();
  *  Mirrors mcp-server.ts's globalState pattern but lives in the daemon now. */
 let globalState: GlobalPluginState | null = null;
 
+const resourceProfile = detectResourceProfile();
+
 function setBootstrapPhase(p: BootstrapPhase, err?: Error): void {
   bootstrapPhase = p;
   if (p === "failed" && err) {
@@ -117,6 +121,11 @@ async function initializeStack(): Promise<void> {
   setBootstrapPhase("starting");
 
   const config = parsePluginConfig();
+  log.info(
+    `[daemon] resource tier: ${resourceProfile.tier} ` +
+    `(ram=${resourceProfile.totalRamMb}MB, cpus=${resourceProfile.cpuCount}, ` +
+    `gpu=${resourceProfile.llamaGpu}, threads=${resourceProfile.llamaMaxThreads})`,
+  );
 
   if (process.env.KONGCODE_SKIP_BOOTSTRAP !== "1") {
     setBootstrapPhase("npm-install");
@@ -156,7 +165,7 @@ async function initializeStack(): Promise<void> {
   }
 
   const store = new SurrealStore(config.surreal);
-  const embeddings = new EmbeddingService(config.embedding);
+  const embeddings = new EmbeddingService(config.embedding, resourceProfile);
   globalState = new GlobalPluginState(config, store, embeddings);
   globalState.workspaceDir = process.env.KONGCODE_PROJECT_DIR ?? process.cwd();
 
@@ -166,6 +175,10 @@ async function initializeStack(): Promise<void> {
     log.info("[daemon] SurrealDB connected");
   } catch (err) {
     log.error("[daemon] SurrealDB connection failed — running in degraded mode:", err);
+  }
+
+  if (store.isAvailable()) {
+    embeddings.setStore(store);
   }
 
   setBootstrapPhase("loading-embeddings");
@@ -182,15 +195,11 @@ async function initializeStack(): Promise<void> {
   // downloaded by bootstrap when enabled. Same configuration that hit
   // 98.2% R@5 on LongMemEval in kongclaw.
   if (config.reranker.enabled) {
-    try {
-      const { existsSync } = await import("node:fs");
-      if (existsSync(config.reranker.modelPath)) {
-        await initReranker(config.reranker.modelPath);
-      } else {
-        log.warn(`[daemon] reranker model not found at ${config.reranker.modelPath} — recall will use WMR/ACAN only`);
-      }
-    } catch (err) {
-      log.error("[daemon] reranker init failed — recall will use WMR/ACAN only:", err);
+    if (existsSync(config.reranker.modelPath)) {
+      configureReranker(config.reranker.modelPath, resourceProfile);
+      log.info(`[daemon] reranker configured for lazy init (model at ${config.reranker.modelPath})`);
+    } else {
+      log.warn(`[daemon] reranker model not found at ${config.reranker.modelPath} — recall will use WMR/ACAN only`);
     }
   }
 
@@ -215,9 +224,9 @@ async function initializeStack(): Promise<void> {
       const env = process.env.KONGCODE_AUTO_DRAIN_INTERVAL_MS;
       if (env !== undefined) {
         const n = Number(env);
-        return Number.isFinite(n) && n >= 0 ? n : 5 * 60_000;
+        return Number.isFinite(n) && n >= 0 ? n : resourceProfile.drainIntervalMs;
       }
-      return 5 * 60_000;
+      return resourceProfile.drainIntervalMs;
     })();
     const drainMaxDaily = (() => {
       const env = process.env.KONGCODE_AUTO_DRAIN_MAX_DAILY;
@@ -322,15 +331,21 @@ async function main(): Promise<void> {
     const env = process.env.KONGCODE_DAEMON_IDLE_TIMEOUT_MS;
     if (env !== undefined) {
       const n = Number(env);
-      return Number.isFinite(n) && n >= 0 ? n : 6_000;
+      return Number.isFinite(n) && n >= 0 ? n : resourceProfile.idleTimeoutMs;
     }
-    return 6_000;
+    return resourceProfile.idleTimeoutMs;
   })();
 
   const reaperExit = (reason: string) => () => {
     log.info(`[daemon] graceful exit: ${reason}`);
     setImmediate(async () => {
       try { await server.close(); } catch {}
+      try { await stopHttpApi(); } catch {}
+      if (globalState) {
+        try { await globalState.shutdown(); } catch {}
+      }
+      try { await disposeReranker(); } catch {}
+      try { await disposeSharedLlama(); } catch {}
       removeOwnPidFile();
       process.exit(0);
     });

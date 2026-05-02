@@ -27,4 +27,4 @@ export declare function linkToRelevantConcepts(sourceId: string, edgeName: strin
  * parent-child hierarchy, e.g. "React" → "React hooks"), plus related_to
  * edges for peer-level semantic associations.
  */
-export declare function linkConceptHierarchy(conceptId: string, conceptName: string, store: SurrealStore, embeddings: EmbeddingService, logTag: string): Promise<void>;
+export declare function linkConceptHierarchy(conceptId: string, conceptName: string, store: SurrealStore, embeddings: EmbeddingService, logTag: string, precomputedNameVec?: number[] | null): Promise<void>;

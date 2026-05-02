@@ -9,9 +9,8 @@ import type { AgentMessage } from "./types.js";
 import type { SurrealStore } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { SessionState } from "./state.js";
-/** Initialize the cross-encoder reranker. Called once at daemon startup
- *  (after EmbeddingService.initialize). Failures degrade gracefully —
- *  retrieval still runs without reranking, just with WMR/ACAN scores. */
+import type { ResourceProfile } from "./resource-tier.js";
+export declare function configureReranker(modelPath: string, profile?: ResourceProfile): void;
 export declare function initReranker(modelPath: string): Promise<void>;
 export declare function disposeReranker(): Promise<void>;
 export declare function isRerankerActive(): boolean;
