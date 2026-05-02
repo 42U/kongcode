@@ -19,6 +19,7 @@ import {
   checkFileEditGate,
   checkBashGate,
 } from "../src/engine/hooks/edit-gates.js";
+import { handlePostToolUse } from "../src/hook-handlers/post-tool-use.js";
 import { GlobalPluginState, SessionState } from "../src/engine/state.js";
 
 beforeEach(() => {
@@ -341,6 +342,108 @@ describe("checkBashGate", () => {
     expect(r).toBeNull();
   });
 
+});
+
+describe("PostToolUse path extraction (clears edit-gate via recall/Grep/Glob)", () => {
+  function makePostToolUseState(session: SessionState): GlobalPluginState {
+    return {
+      store: { isAvailable: () => false } as unknown as GlobalPluginState["store"],
+      embeddings: { isAvailable: () => false } as unknown as GlobalPluginState["embeddings"],
+      getSession: (k: string) => k === session.sessionKey ? session : undefined,
+    } as unknown as GlobalPluginState;
+  }
+
+  it("extracts slash-paths and known-extension filenames from recall results", async () => {
+    const session = new SessionState("sess-pt", "sess-pt");
+    const state = makePostToolUseState(session);
+
+    await handlePostToolUse(state, {
+      session_id: "sess-pt",
+      tool_name: "mcp__plugin_kongcode_kongcode__recall",
+      tool_response: "Found 2 results: /home/zero/voidorigin/kongcode/src/foo.ts and ./relative/bar.py — also schema.surql is relevant.",
+    });
+
+    expect(session._observedFilePaths.has("/home/zero/voidorigin/kongcode/src/foo.ts")).toBe(true);
+    expect(session._observedFilePaths.has("./relative/bar.py")).toBe(true);
+    expect(session._observedFilePaths.has("schema.surql")).toBe(true);
+  });
+
+  it("extracts paths from Grep results", async () => {
+    const session = new SessionState("sess-pt2", "sess-pt2");
+    const state = makePostToolUseState(session);
+
+    await handlePostToolUse(state, {
+      session_id: "sess-pt2",
+      tool_name: "Grep",
+      tool_response: "src/engine/state.ts:42:  readonly _observedFilePaths\nsrc/hook-handlers/pre-tool-use.ts:15:  // observation pass",
+    });
+
+    expect(session._observedFilePaths.has("src/engine/state.ts")).toBe(true);
+    expect(session._observedFilePaths.has("src/hook-handlers/pre-tool-use.ts")).toBe(true);
+  });
+
+  it("does NOT extract paths from non-observing tools (e.g. Bash)", async () => {
+    const session = new SessionState("sess-pt3", "sess-pt3");
+    const state = makePostToolUseState(session);
+
+    await handlePostToolUse(state, {
+      session_id: "sess-pt3",
+      tool_name: "Bash",
+      tool_response: "/home/zero/foo.ts exists",
+    });
+
+    expect(session._observedFilePaths.size).toBe(0);
+  });
+
+  it("strips trailing punctuation from extracted paths", async () => {
+    const session = new SessionState("sess-pt4", "sess-pt4");
+    const state = makePostToolUseState(session);
+
+    await handlePostToolUse(state, {
+      session_id: "sess-pt4",
+      tool_name: "Glob",
+      tool_response: "Found: /a/b.ts, /c/d.js. Also see /e/f.py!",
+    });
+
+    expect(session._observedFilePaths.has("/a/b.ts")).toBe(true);
+    expect(session._observedFilePaths.has("/c/d.js")).toBe(true);
+    expect(session._observedFilePaths.has("/e/f.py")).toBe(true);
+  });
+
+  it("recall path extraction unblocks a follow-up edit-gate check end-to-end", async () => {
+    const session = new SessionState("sess-pt5", "sess-pt5");
+    session.surrealSessionId = "session:abc";
+    const ptState = makePostToolUseState(session);
+
+    // Step 1: a recall call returns the path.
+    await handlePostToolUse(ptState, {
+      session_id: "sess-pt5",
+      tool_name: "mcp__plugin_kongcode_kongcode__recall",
+      tool_response: "Top hit: /repo/src/target.ts (score 0.91)",
+    });
+
+    // Step 2: edit-gate check on that exact path.
+    const gateState = {
+      store: { isAvailable: () => true, queryFirst: vi.fn(async () => []) } as unknown as GlobalPluginState["store"],
+    } as unknown as GlobalPluginState;
+    const r = await checkFileEditGate(gateState, session, "/repo/src/target.ts");
+    expect(r).toBeNull();
+  });
+
+  it("does NOT block on a path that's never been surfaced", async () => {
+    const session = new SessionState("sess-pt6", "sess-pt6");
+    session.surrealSessionId = "session:abc";
+
+    const gateState = {
+      store: { isAvailable: () => true, queryFirst: vi.fn(async () => []) } as unknown as GlobalPluginState["store"],
+    } as unknown as GlobalPluginState;
+    const r = await checkFileEditGate(gateState, session, "/repo/src/never-mentioned.ts");
+    expect(r).not.toBeNull(); // expected: still denied, gate works as-designed
+    expect(r?.hookSpecificOutput?.permissionDecision).toBe("deny");
+  });
+});
+
+describe("Bash gate cache (regression)", () => {
   it("caches the per-pattern decision (rm -rf only blocks once, even on different paths)", async () => {
     const { state, queryFirst } = makeMockState([{ id: "turn:abc" }]);
     const session = makeSession();
