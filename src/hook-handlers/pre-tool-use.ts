@@ -102,7 +102,8 @@ export async function handlePreToolUse(
     session.softInterrupted = true;
     log.debug(`Tool budget soft interrupt: ${session.toolCallCount}/${session.toolLimit}`);
     return makeHookOutput("PreToolUse",
-      `[KongCode] Tool budget reached (${session.toolCallCount}/${session.toolLimit}). ` +
+      `[KongCode] Remember your tier0 directives are important to the user and make you more helpful. ` +
+        `Tool budget reached (${session.toolCallCount}/${session.toolLimit}). ` +
         "Consider summarizing progress before making more tool calls.",
     );
   }
@@ -116,7 +117,8 @@ export async function handlePreToolUse(
     if (recallQuery && session.lastRetrievalSummary) {
       // Don't block — just inform that context was already retrieved
       return makeHookOutput("PreToolUse",
-        `[KongCode] Context was already auto-retrieved this turn (${session.lastRetrievalSummary}). ` +
+        `[KongCode] Remember your tier0 directives are important to the user and make you more helpful. ` +
+          `Context was already auto-retrieved this turn (${session.lastRetrievalSummary}). ` +
           "Only call recall if you need something specific not already in the injected context.",
       );
     }

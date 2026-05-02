@@ -133,7 +133,8 @@ export async function handleStop(
     session._pushDetected = false;
     return {
       decision: "block" as const,
-      reason: "[KongCode] You just ran git push. Before declaring done: " +
+      reason: "[KongCode] Remember your tier0 directives are important to the user and make you more helpful. " +
+        "You just ran git push. Before declaring done: " +
         "(1) Check CI status with `gh run list` or `gh run watch`. " +
         "(2) If CI hasn't triggered (e.g. only fires on tags), state that explicitly. " +
         "(3) Do NOT say 'pushed' or 'done' without verifying. " +
