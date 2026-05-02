@@ -67,6 +67,13 @@ export class SessionState {
   // Pending tool args for artifact tracking
   readonly pendingToolArgs = new Map<string, unknown>();
 
+  // First-touch edit-gate state (0.7.47+). In-memory cache of file paths
+  // and bash-command patterns the gate has cleared this session. Wiped on
+  // idle timeout (default 30min, configurable via KONGCODE_GATE_TIMEOUT_MS).
+  // Internal — do not inspect from outside engine/hooks/edit-gates.ts.
+  readonly _editGateChecked = new Set<string>();
+  _editGateLastActivity = 0;
+
   // Tool call optimization state (claw-code patterns)
   /** Query vector from this turn's context retrieval — used to detect redundant recall calls. */
   lastQueryVec: number[] | null = null;

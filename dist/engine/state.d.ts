@@ -38,6 +38,8 @@ export declare class SessionState {
     _turnTokensOutStart: number;
     readonly _activeSubagents: Map<string, string>;
     readonly pendingToolArgs: Map<string, unknown>;
+    readonly _editGateChecked: Set<string>;
+    _editGateLastActivity: number;
     /** Query vector from this turn's context retrieval — used to detect redundant recall calls. */
     lastQueryVec: number[] | null;
     /** Summary of what graphTransformContext injected — shown in planning gate. */

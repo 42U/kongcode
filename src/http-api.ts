@@ -23,6 +23,10 @@ let portFilePath: string | null = null;
  * matching `hookEventName` — Claude Code's Zod schema silently strips
  * unknown top-level keys. Top-level fields are only: continue,
  * suppressOutput, decision, reason, stopReason, systemMessage, hookSpecificOutput.
+ *
+ * PreToolUse blocking (0.7.47+) uses `hookSpecificOutput.permissionDecision`
+ * and `permissionDecisionReason` — the documented modern contract. The older
+ * top-level `decision: "approve" | "block"` is for Stop hooks.
  */
 export interface HookResponse {
   continue?: boolean;
@@ -33,6 +37,10 @@ export interface HookResponse {
   hookSpecificOutput?: {
     hookEventName: string;
     additionalContext?: string;
+    /** PreToolUse only: gate the tool call. */
+    permissionDecision?: "allow" | "deny" | "ask";
+    /** PreToolUse only: reason text shown to the agent on deny. */
+    permissionDecisionReason?: string;
     [key: string]: unknown;
   };
   /** For Stop hooks: approve or block the stop. */
