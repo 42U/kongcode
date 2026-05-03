@@ -8,6 +8,16 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.51] — 2026-05-03
+
+### Fixed — graduation quality unblocked
+
+Graduation quality score was stuck at 0.76/0.85 with retrieval utilization at 19% — the sole blocker (skill success, reflections, and tool failure rates were all perfect). Root cause: utilization was purely lexical overlap, systematically undercounting real usage when the assistant paraphrases retrieved context.
+
+- **Citation-boosted utilization**: `[#N]` citations already tracked in `retrieval_outcome` rows now feed back into the `utilization` value (floor at 0.7 for cited items). The graduation query `math::mean(utilization)` picks this up automatically.
+- **Improved unigram sensitivity**: minimum word length lowered from 5 to 4 characters, capturing discriminative terms like "ACAN", "file", "tool", "edit".
+- **ACAN finding**: trained weights have a -0.499 coefficient on `provenUtility`, creating a negative feedback loop. Will retrain after citation-boosted data accumulates (~3-5 days).
+
 ## [0.7.47] — 2026-05-02
 
 ### Added — resource-aware daemon sizing
