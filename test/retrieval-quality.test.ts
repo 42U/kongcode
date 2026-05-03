@@ -189,4 +189,21 @@ describe("computeSignals — utilization formula", () => {
     const { utilization } = computeSignals(item, response, null);
     expect(utilization).toBeLessThan(0.05);
   });
+
+  it("citation boost floors utilization at 0.7 for cited items", () => {
+    const item = mkItem("User prefers bundled PRs for refactors");
+    const response = "i suggested a single pull request for the refactor".toLowerCase();
+    const uncited = computeSignals(item, response, null).utilization;
+    const cited = computeSignals(item, response, null, true).utilization;
+    expect(uncited).toBeLessThan(0.7);
+    expect(cited).toBeGreaterThanOrEqual(0.7);
+  });
+
+  it("citation boost does not lower already-high utilization", () => {
+    const item = mkItem("KongCode persistent memory graph SurrealDB BGE-M3 embeddings");
+    const response = "kongcode persistent memory graph surrealdb bge-m3 embeddings all working".toLowerCase();
+    const base = computeSignals(item, response, true).utilization;
+    const withCite = computeSignals(item, response, true, true).utilization;
+    expect(withCite).toBeGreaterThanOrEqual(base);
+  });
 });
