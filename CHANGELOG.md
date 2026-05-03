@@ -8,6 +8,12 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.54] — 2026-05-03
+
+### Added — vague query expansion
+
+Continuation prompts ("yes do it", "ya lets look into that", "proceed") embed as generic vectors that match nothing in the graph. When the prompt has <3 content words after stopword removal, `expandVagueQuery` prepends up to 10 key terms from the last assistant response before embedding. Zero extra embedding calls — just text augmentation.
+
 ## [0.7.53] — 2026-05-03
 
 ### Fixed — context signal-to-noise ratio
