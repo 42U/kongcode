@@ -90,7 +90,7 @@ async function purgeStaleEmbedCache(state: GlobalPluginState): Promise<void> {
   if (!state.store.isAvailable()) return;
   try {
     await state.store.queryExec(
-      `DELETE FROM embedding_cache WHERE created_at < time::now() - 30d LIMIT 500`,
+      `DELETE FROM embedding_cache WHERE id IN (SELECT id FROM embedding_cache WHERE created_at < time::now() - 30d LIMIT 500)`,
     );
   } catch (e) {
     swallow.warn("maintenance:purgeEmbedCache", e);
