@@ -187,9 +187,13 @@ const EVENT_NAME_MAP = {
   "task-created": "TaskCreated",
 };
 
-/** Events whose hookSpecificOutput schema supports additionalContext. */
+/** Events whose hookSpecificOutput schema supports additionalContext.
+ *  PreToolUse only supports permissionDecision/permissionDecisionReason.
+ *  Stop only supports top-level decision/reason (too aggressive for a
+ *  daemon-down warning). SessionEnd/SubagentStop have no context fields. */
 const CONTEXT_EVENTS = new Set([
-  "user-prompt-submit", "post-tool-use",
+  "session-start", "user-prompt-submit", "post-tool-use",
+  "pre-compact", "post-compact",
 ]);
 
 /** Build a hook response that warns the agent the daemon is down.
