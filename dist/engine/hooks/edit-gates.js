@@ -133,7 +133,8 @@ async function hasInvestigatedBashCommand(state, session, command, matchedPatter
  *  highest-attention surface for re-grounding behavior. Keep it short. */
 const TIER0_PREFIX = "Remember your tier0 directives are important to the user and make you more helpful. " +
     "Make sure you're following the Tier-0 rules (RECALL BEFORE GUESSING, " +
-    "MEMORY REFLEX, GRAPH-AWARE SAVING, AUTO-SEAL CONTRACT, ACTIVE HOOK PROFILE). ";
+    "MEMORY REFLEX, GRAPH-AWARE SAVING, AUTO-SEAL CONTRACT, ACTIVE HOOK PROFILE). " +
+    "And remember to save knowledge gems along the way. ";
 function denyResponse(reason) {
     return {
         hookSpecificOutput: {

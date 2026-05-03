@@ -196,7 +196,8 @@ function daemonDownResponse(eventName) {
         "[KongCode] Remember your tier0 directives are important to the user and make you more helpful. " +
         "WARNING: kongcode daemon is unreachable — hooks, memory injection, and gates are inactive this turn. " +
         "The daemon has been respawned and should be available on the next turn. " +
-        "If this persists, tell the user.",
+        "If this persists, tell the user. " +
+        "And remember to save knowledge gems along the way.",
     },
   });
 }

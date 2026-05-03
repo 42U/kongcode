@@ -112,7 +112,8 @@ export async function handleStop(state, payload) {
                 "(1) Check CI status with `gh run list` or `gh run watch`. " +
                 "(2) If CI hasn't triggered (e.g. only fires on tags), state that explicitly. " +
                 "(3) Do NOT say 'pushed' or 'done' without verifying. " +
-                "Read and follow the Tier-0 rules.",
+                "Read and follow the Tier-0 rules. " +
+                "And remember to save knowledge gems along the way.",
         };
     }
     return {};
