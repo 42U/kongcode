@@ -38,6 +38,8 @@ if (!HOOK_EVENT) {
 
 const HOME = process.env.HOME || process.env.USERPROFILE || os.homedir();
 const TIMEOUT_MS = 10_000; // matches hook-proxy.sh's curl --max-time default
+const CACHE_DIR = path.join(HOME, ".kongcode", "cache");
+const DAEMON_SOCKET = path.join(HOME, ".kongcode-daemon.sock");
 
 function readStdin() {
   return new Promise((resolve, reject) => {
@@ -124,12 +126,88 @@ function postJson({ socketPath, port, eventName, body }) {
   });
 }
 
+/** Spawn the daemon in the background if no socket/port is reachable.
+ *  Fire-and-forget — this hook call returns a warning; the NEXT hook call
+ *  will find the daemon alive. Checks the daemon PID file to avoid racing
+ *  with the MCP client's ensureDaemon() or another hook-proxy invocation. */
+function trySpawnDaemon() {
+  try { fs.mkdirSync(CACHE_DIR, { recursive: true }); } catch {}
+
+  // If a daemon PID file exists and that PID is alive, the daemon is either
+  // running (socket not yet created) or being spawned by the MCP client.
+  const pidFile = path.join(CACHE_DIR, "daemon.pid");
+  try {
+    const pid = Number(fs.readFileSync(pidFile, "utf8").trim());
+    if (isPidAlive(pid)) return; // daemon or spawner is alive, don't double-spawn
+  } catch {}
+
+  // Also check the MCP client's spawn lock — if held by a live process,
+  // the MCP client is mid-spawn and will create the daemon.
+  const lockPath = path.join(CACHE_DIR, "daemon.spawn.lock");
+  try {
+    const holderPid = Number(fs.readFileSync(lockPath, "utf8").trim());
+    if (isPidAlive(holderPid)) return;
+  } catch {}
+
+  // Find daemon script relative to plugin root
+  const pluginRoot = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, "..", "..");
+  const daemonScript = path.join(pluginRoot, "dist", "daemon", "index.js");
+  if (!fs.existsSync(daemonScript)) return;
+
+  const logFile = path.join(CACHE_DIR, "daemon.log");
+  let logFd;
+  try { logFd = fs.openSync(logFile, "a"); } catch { logFd = "ignore"; }
+
+  try {
+    const { spawn } = require("node:child_process");
+    const child = spawn(process.execPath, [daemonScript], {
+      detached: true,
+      stdio: ["ignore", logFd, logFd],
+      env: process.env,
+    });
+    child.unref();
+    process.stderr.write(`hook-proxy: spawned daemon pid=${child.pid}\n`);
+  } catch (e) {
+    process.stderr.write(`hook-proxy: daemon spawn failed: ${e.message}\n`);
+  }
+
+  if (typeof logFd === "number") try { fs.closeSync(logFd); } catch {}
+}
+
+const EVENT_NAME_MAP = {
+  "session-start": "SessionStart",
+  "user-prompt-submit": "UserPromptSubmit",
+  "pre-tool-use": "PreToolUse",
+  "post-tool-use": "PostToolUse",
+  "stop": "Stop",
+  "pre-compact": "PreCompact",
+  "post-compact": "PostCompact",
+  "session-end": "SessionEnd",
+  "subagent-stop": "SubagentStop",
+  "task-created": "TaskCreated",
+};
+
+/** Build a hook response that warns the agent the daemon is down. */
+function daemonDownResponse(eventName) {
+  return JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: EVENT_NAME_MAP[eventName] || eventName,
+      additionalContext:
+        "[KongCode] Remember your tier0 directives are important to the user and make you more helpful. " +
+        "WARNING: kongcode daemon is unreachable — hooks, memory injection, and gates are inactive this turn. " +
+        "The daemon has been respawned and should be available on the next turn. " +
+        "If this persists, tell the user.",
+    },
+  });
+}
+
 (async () => {
   const payload = await readStdin();
   const sock = findUnixSocket();
   const port = sock ? null : readPort();
   if (!sock && !port) {
-    process.stdout.write("{}");
+    trySpawnDaemon();
+    process.stdout.write(daemonDownResponse(HOOK_EVENT));
     return;
   }
   const out = await postJson({
@@ -138,5 +216,11 @@ function postJson({ socketPath, port, eventName, body }) {
     eventName: HOOK_EVENT,
     body: payload || "{}",
   });
-  process.stdout.write(out || "{}");
+  if (!out) {
+    // Socket/port existed but daemon didn't respond — also try respawn
+    trySpawnDaemon();
+    process.stdout.write(daemonDownResponse(HOOK_EVENT));
+    return;
+  }
+  process.stdout.write(out);
 })();
