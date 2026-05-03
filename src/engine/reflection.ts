@@ -12,6 +12,7 @@
 import type { EmbeddingService } from "./embeddings.js";
 import type { SurrealStore } from "./surreal.js";
 import { swallow } from "./errors.js";
+import { cosineSimilarity } from "./graph-context.js";
 
 // --- Types ---
 
@@ -183,7 +184,7 @@ export async function retrieveReflections(
     const bindings: Record<string, unknown> = { vec: queryVec, lim: limit };
     if (projectId) bindings.pid = projectId;
     const rows = await store.queryFirst<any>(
-      `SELECT id, text, category, severity, importance,
+      `SELECT id, text, category, severity, importance, embedding,
               vector::similarity::cosine(embedding, $vec) AS score
        FROM reflection
        WHERE embedding != NONE AND array::len(embedding) > 0${projectFilter}
@@ -191,16 +192,29 @@ export async function retrieveReflections(
       bindings,
     );
 
-    return rows
-      .filter((r: any) => (r.score ?? 0) > 0.35)
-      .map((r: any) => ({
-        id: String(r.id),
-        text: r.text ?? "",
-        category: r.category ?? "efficiency",
-        severity: r.severity ?? "minor",
-        importance: Number(r.importance ?? 7.0),
-        score: r.score,
-      }));
+    const filtered = rows.filter((r: any) => (r.score ?? 0) > 0.35);
+
+    // Cosine dedup: near-duplicate reflections waste context budget.
+    // Jaccard fails on long texts with high semantic but low lexical overlap.
+    // Pairwise cosine on embeddings catches semantic duplicates reliably.
+    const deduped: typeof filtered = [];
+    for (const r of filtered) {
+      if (!r.embedding?.length) { deduped.push(r); continue; }
+      const isDup = deduped.some((existing) => {
+        if (!existing.embedding?.length) return false;
+        return cosineSimilarity(r.embedding, existing.embedding) > 0.80;
+      });
+      if (!isDup) deduped.push(r);
+    }
+
+    return deduped.map((r: any) => ({
+      id: String(r.id),
+      text: r.text ?? "",
+      category: r.category ?? "efficiency",
+      severity: r.severity ?? "minor",
+      importance: Number(r.importance ?? 7.0),
+      score: r.score,
+    }));
   } catch (e) {
     swallow.warn("reflection:retrieve", e);
     return [];

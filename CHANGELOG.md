@@ -8,6 +8,27 @@ All notable changes to KongCode are documented here. The 0.7.x series introduced
 - README rewrite covering daemon arch, multi-session, auto-drain costs, env-var matrix, and troubleshooting (`README.md`)
 - This CHANGELOG file
 
+## [0.7.53] — 2026-05-03
+
+### Fixed — context signal-to-noise ratio
+
+Retrieval was returning 0 nodes on many turns due to overly aggressive filters, near-duplicate reflections wasted context budget, and tier-0 directives were duplicated after window compaction.
+
+- **Lowered retrieval filters**: `MIN_COSINE` 0.35→0.25, intent score floors ~40% lower, `MIN_RELEVANCE_SCORE` 0.40→0.30. WMR/ACAN scoring handles quality discrimination downstream; the pre-filters should only remove truly irrelevant items.
+- **Reflection dedup at retrieval**: Jaccard word-overlap dedup (>65% threshold) in `retrieveReflections` prevents near-duplicate reflections from consuming context budget.
+- **Reflection dedup at write**: `processShortReflection` in heuristic-drain now checks for existing similar reflections (>0.85 cosine) before creating new ones.
+- **Reflection dedup in maintenance**: `consolidateMemories` Pass 3 deduplicates the reflection table with the same 0.88 cosine threshold used for memories.
+- **Fixed tier-0 compaction duplication**: `injectedSections.clear()` on window rotation now preserves the `"tier0"` flag, preventing tier-0 directives from appearing in both system prompt and `active_directives`.
+- **Consolidated tier-0 directives**: Reduced from 8 entries (~2KB) to 3 entries (~800 bytes). Merged MEMORY REFLEX, GRAPH-AWARE SAVING, AUTO-SEAL CONTRACT, and KONGCODE-ONLY MEMORY into a single "SAVE TO GRAPH" directive. Demoted MEMORY TOOLS and GRAPH SCHEMA REFERENCE to tier-1.
+
+## [0.7.52] — 2026-05-03
+
+### Fixed — Stop hook schema error
+
+The daemon-down warning in `hook-proxy.cjs` used `additionalContext` for all hook events, but Stop only supports `decision`/`reason` in its `hookSpecificOutput` schema. Claude Code's hook validator rejected the malformed response.
+
+- Made `daemonDownResponse()` event-schema-aware: only injects `additionalContext` for the 5 events that support it (SessionStart, UserPromptSubmit, PostToolUse, PreCompact, PostCompact). All other events get `{}`.
+
 ## [0.7.51] — 2026-05-03
 
 ### Fixed — graduation quality unblocked

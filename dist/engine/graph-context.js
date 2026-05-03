@@ -235,8 +235,8 @@ const CORE_MEMORY_SHARE = 0.155; // ~10k for core memory/directives
 const TOOL_HISTORY_SHARE = 0.23; // ~15k for recent tool results
 const CORE_MEMORY_TTL = 300_000;
 const MAX_ITEM_CHARS = 1000; // 0.7.45: aligned to disler/claude-code-hooks-mastery cap; ~250 tokens per item
-const MIN_RELEVANCE_SCORE = 0.40; // Floor for graph-scored results after WMR/ACAN (tuned: cosine-heavy weights produce lower absolute scores)
-const MIN_COSINE = 0.35; // Minimum cosine similarity to consider a result (raised from 0.25)
+const MIN_RELEVANCE_SCORE = 0.30; // Floor for graph-scored results after WMR/ACAN
+const MIN_COSINE = 0.25; // Minimum cosine similarity to consider a result
 // Deduplication thresholds
 const DEDUP_COSINE_THRESHOLD = 0.88;
 const DEDUP_JACCARD_THRESHOLD = 0.80;
@@ -249,12 +249,12 @@ const UTILITY_PREFILTER_MIN_RETRIEVALS = 5;
 const UTILITY_PREFILTER_MAX_UTIL = 0.05;
 // Intent score floors
 const INTENT_SCORE_FLOORS = {
-    "simple-question": 0.20, "meta-session": 0.18, "code-read": 0.14,
-    "code-write": 0.12, "code-debug": 0.12, "deep-explore": 0.10,
-    "reference-prior": 0.08, "multi-step": 0.12, "continuation": 0.10,
-    "unknown": 0.12,
+    "simple-question": 0.12, "meta-session": 0.10, "code-read": 0.08,
+    "code-write": 0.08, "code-debug": 0.08, "deep-explore": 0.06,
+    "reference-prior": 0.05, "multi-step": 0.08, "continuation": 0.06,
+    "unknown": 0.08,
 };
-const SCORE_FLOOR_DEFAULT = 0.12;
+const SCORE_FLOOR_DEFAULT = 0.08;
 const INTENT_REMINDER_THRESHOLD = 10;
 /** Split the context window into 4 budgets: conversation, retrieval, core memory, and tool history. @internal */
 export function calcBudgets(contextWindow) {
@@ -1066,7 +1066,14 @@ function getRecentTurns(messages, convTokens, toolTokens, contextWindow, session
         const firstOriginal = groups[0];
         const firstSelected = selectedGroups[0];
         if (firstOriginal !== firstSelected) {
+            // Preserve tier0 flag — it lives in the system prompt (prefix-cached)
+            // and doesn't need re-injection into the user message. Clearing it
+            // caused tier-0 to appear in BOTH system prompt AND active_directives
+            // after every window compaction.
+            const hadTier0 = session.injectedSections.has("tier0");
             session.injectedSections.clear();
+            if (hadTier0)
+                session.injectedSections.add("tier0");
         }
     }
     return selectedGroups.flat();

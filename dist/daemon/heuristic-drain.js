@@ -101,6 +101,13 @@ async function processShortReflection(item, state) {
         }
         catch { /* ok */ }
     }
+    if (emb?.length) {
+        const existing = await store.queryFirst(`SELECT vector::similarity::cosine(embedding, $vec) AS score
+       FROM reflection WHERE embedding != NONE AND array::len(embedding) > 0
+       ORDER BY score DESC LIMIT 1`, { vec: emb });
+        if (existing.length > 0 && (existing[0].score ?? 0) > 0.85)
+            return true;
+    }
     const record = {
         session_id: item.session_id,
         text,

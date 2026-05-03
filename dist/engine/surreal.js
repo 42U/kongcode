@@ -1206,6 +1206,36 @@ export class SurrealStore {
                     swallow.warn("surreal:consolidate-backfill", e);
                 }
             }
+            // Pass 3: Vector similarity dedup for reflections
+            const embReflections = await this.queryFirst(`SELECT id, text, importance, category, embedding, created_at
+         FROM reflection
+         WHERE embedding != NONE AND array::len(embedding) > 0
+         ORDER BY created_at ASC
+         LIMIT 50`);
+            for (const ref of embReflections) {
+                if (seen.has(String(ref.id)))
+                    continue;
+                const dupes = await this.queryFirst(`SELECT id, importance,
+                  vector::similarity::cosine(embedding, $vec) AS score
+           FROM reflection
+           WHERE id != $rid
+             AND embedding != NONE AND array::len(embedding) > 0
+           ORDER BY score DESC
+           LIMIT 3`, { vec: ref.embedding, rid: ref.id });
+                for (const dupe of dupes) {
+                    if (dupe.score < 0.88)
+                        break;
+                    if (seen.has(String(dupe.id)))
+                        continue;
+                    const keepRef = ref.importance > dupe.importance;
+                    const [keep, drop] = keepRef ? [ref.id, dupe.id] : [dupe.id, ref.id];
+                    assertRecordId(String(keep));
+                    assertRecordId(String(drop));
+                    await this.queryExec(`DELETE ${String(drop)}`);
+                    seen.add(String(drop));
+                    merged++;
+                }
+            }
             await this.recordMaintenanceRun("consolidateMemories", merged, Date.now() - started);
             return merged;
         }
