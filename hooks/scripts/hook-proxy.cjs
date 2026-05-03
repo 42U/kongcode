@@ -187,8 +187,17 @@ const EVENT_NAME_MAP = {
   "task-created": "TaskCreated",
 };
 
-/** Build a hook response that warns the agent the daemon is down. */
+/** Events whose hookSpecificOutput schema supports additionalContext. */
+const CONTEXT_EVENTS = new Set([
+  "user-prompt-submit", "post-tool-use",
+]);
+
+/** Build a hook response that warns the agent the daemon is down.
+ *  Only UserPromptSubmit and PostToolUse support additionalContext in
+ *  hookSpecificOutput — other events (Stop, PreToolUse, etc.) get empty
+ *  responses to avoid schema validation errors. */
 function daemonDownResponse(eventName) {
+  if (!CONTEXT_EVENTS.has(eventName)) return "{}";
   return JSON.stringify({
     hookSpecificOutput: {
       hookEventName: EVENT_NAME_MAP[eventName] || eventName,
