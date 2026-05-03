@@ -15,7 +15,7 @@ import {
 } from "../src/engine/cognitive-check.js";
 import { predictQueries } from "../src/engine/prefetch.js";
 import { buildSystemPrompt, buildTranscript } from "../src/engine/memory-daemon.js";
-import { formatRelativeTime } from "../src/engine/graph-context.js";
+import { formatRelativeTime, expandVagueQuery } from "../src/engine/graph-context.js";
 import { formatSkillContext, type Skill } from "../src/engine/skills.js";
 import { formatReflectionContext, shouldReflect, type Reflection, type ReflectionMetrics } from "../src/engine/reflection.js";
 
@@ -544,5 +544,49 @@ describe("shouldReflect", () => {
     };
     const { reflect } = shouldReflect(metrics);
     expect(reflect).toBe(false);
+  });
+});
+
+// ── expandVagueQuery ─────────────────────────────────────────────────────────
+
+describe("expandVagueQuery", () => {
+  function mockSession(lastAssistantText: string) {
+    const s = new SessionState("test", "test");
+    s.lastAssistantText = lastAssistantText;
+    return s;
+  }
+
+  it("returns query unchanged when it has 3+ content words", () => {
+    const session = mockSession("irrelevant context");
+    expect(expandVagueQuery("retrieval filter improvement testing", session)).toBe("retrieval filter improvement testing");
+  });
+
+  it("expands vague continuation prompts with assistant context", () => {
+    const session = mockSession("The next lever would be query expansion for the retrieval pipeline, turning vague prompts into better vectors.");
+    const result = expandVagueQuery("ya lets look into that", session);
+    expect(result).not.toBe("ya lets look into that");
+    expect(result).toContain("query");
+    expect(result).toContain("expansion");
+    expect(result).toContain("ya lets look into that");
+  });
+
+  it("returns unchanged when no session context available", () => {
+    expect(expandVagueQuery("yes do it")).toBe("yes do it");
+    expect(expandVagueQuery("sure", new SessionState("test", "test"))).toBe("sure");
+  });
+
+  it("handles single-word prompts", () => {
+    const session = mockSession("The daemon needs a restart after code changes to load new dist/ artifacts.");
+    const result = expandVagueQuery("proceed", session);
+    expect(result).toContain("daemon");
+    expect(result).toContain("proceed");
+  });
+
+  it("limits expansion to 10 context terms", () => {
+    const longContext = "alpha bravo charlie delta echo foxtrot golf hotel india juliet kilo lima mike november oscar papa quebec romeo sierra tango";
+    const session = mockSession(longContext);
+    const result = expandVagueQuery("ok", session);
+    const addedTerms = result.replace("ok", "").trim().split(/\s+/);
+    expect(addedTerms.length).toBeLessThanOrEqual(10);
   });
 });

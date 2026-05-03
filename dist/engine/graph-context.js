@@ -428,15 +428,58 @@ function injectRulesSuffix(messages, session) {
     return messages;
 }
 // ── Contextual query vector ────────────────────────────────────────────────────
+const EXPANSION_STOP = new Set([
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+    "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "about",
+    "it", "its", "this", "that", "these", "those", "i", "you", "we", "they", "he", "she",
+    "my", "your", "our", "their", "what", "which", "who", "how", "when", "where", "why",
+    "not", "no", "and", "or", "but", "if", "so", "any", "all", "some", "more", "just", "also",
+    "very", "too", "much", "many", "yes", "yeah", "yep", "sure", "okay", "lets", "let",
+    "please", "thanks", "thank", "go", "going", "ahead", "right", "well", "now", "then",
+    "look", "into", "take", "done", "want", "need", "make", "get", "got", "like",
+    "really", "actually", "think", "know", "see", "tell", "give", "keep", "come", "back",
+]);
+export function expandVagueQuery(query, session) {
+    const words = query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+    const contentWords = words.filter(w => !EXPANSION_STOP.has(w));
+    if (contentWords.length >= 3)
+        return query;
+    const context = session?.lastAssistantText;
+    if (!context)
+        return query;
+    // Extract key terms from the last assistant response (~first 500 chars)
+    const snippet = context.slice(0, 500);
+    const contextWords = snippet
+        .toLowerCase()
+        .split(/\s+/)
+        .filter(w => w.length >= 4 && !EXPANSION_STOP.has(w));
+    const seen = new Set();
+    const terms = [];
+    for (const w of contextWords) {
+        const clean = w.replace(/[^a-z0-9-_.]/g, "");
+        if (clean.length < 4 || seen.has(clean))
+            continue;
+        seen.add(clean);
+        terms.push(clean);
+        if (terms.length >= 10)
+            break;
+    }
+    if (terms.length === 0)
+        return query;
+    return `${terms.join(" ")} ${query}`;
+}
 async function buildContextualQueryVec(queryText, _messages, embeddings, session) {
-    // Reuse embedding from ingest if available (same user message, already embedded)
+    const expanded = expandVagueQuery(queryText, session);
+    // When expanded, bypass the ingest cache — raw embedding doesn't capture
+    // the session context we added
+    if (expanded !== queryText) {
+        return embeddings.embed(expanded);
+    }
     if (session?.lastUserEmbedding) {
         return session.lastUserEmbedding;
     }
-    // Fallback: embed the query text (first turn, or ingest didn't fire yet)
     return embeddings.embed(queryText);
-    // Note: removed the 3-message "blend" — pure query vector is sufficient for retrieval
-    // and saves 1-3 embedding calls per turn (~15-200ms)
 }
 // ── Scoring ────────────────────────────────────────────────────────────────────
 async function scoreResults(results, neighborIds, queryEmbedding, store, currentIntent) {
