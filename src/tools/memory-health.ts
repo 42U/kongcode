@@ -180,9 +180,31 @@ export async function handleMemoryHealth(
         return total;
       };
       const physical = dirSize(storePath);
-      const embedded = [concept_embedded, memory_embedded, turn_embedded, artifact_embedded]
-        .reduce((a: number, v) => a + (v ?? 0), 0);
-      const logical = Math.max(embedded * 4096 * 1.3, 50_000_000); // floor 50MB
+      // Logical size is MEASURED, not guessed: sample real rows per heavy
+      // table, average their serialized size, multiply by the table's count.
+      // The old `embedded * 4096 * 1.3` constant under-estimated ~17x on
+      // stores with large embeddings. 2026-07-10 false alarm: a 2.5GB store
+      // flagged "25x bloat" when a verified full export measured 1.71GB
+      // (true amplification 1.3x).
+      const heavyTables: Array<[string, number | null]> = [
+        ["concept", concept_count],
+        ["memory", memory_count],
+        ["turn", turn_count],
+        ["artifact", artifact_count],
+        ["retrieval_outcome", retrieval_outcome_count],
+        ["embedding_cache", await countRow(state, "SELECT count() AS n FROM embedding_cache GROUP ALL")],
+      ];
+      let measured = 0;
+      for (const [table, count] of heavyTables) {
+        if (!count) continue;
+        const sample = await state.store.queryFirst<Record<string, unknown>>(
+          `SELECT * FROM ${table} LIMIT 8`,
+        );
+        if (sample.length === 0) continue;
+        const avgBytes = sample.reduce((a, r) => a + JSON.stringify(r).length, 0) / sample.length;
+        measured += avgBytes * count;
+      }
+      const logical = Math.max(measured, 50_000_000); // floor 50MB
       const amplification = physical / logical;
       if (amplification > 10) {
         diagnostics.push({
