@@ -146,7 +146,7 @@ export async function handleMemoryHealth(state, _session, _args) {
             // The old `embedded * 4096 * 1.3` constant under-estimated ~17x on
             // stores with large embeddings. 2026-07-10 false alarm: a 2.5GB store
             // flagged "25x bloat" when a verified full export measured 1.71GB
-            // (true amplification 1.3x).
+            // (true amplification ~1.3-1.5x).
             const heavyTables = [
                 ["concept", concept_count],
                 ["memory", memory_count],
@@ -154,6 +154,11 @@ export async function handleMemoryHealth(state, _session, _args) {
                 ["artifact", artifact_count],
                 ["retrieval_outcome", retrieval_outcome_count],
                 ["embedding_cache", await countRow(state, "SELECT count() AS n FROM embedding_cache GROUP ALL")],
+                // turn_archive: archiveOldTurns copies rows verbatim (embeddings
+                // included) and E7 retention holds ~100k of them — the largest vector
+                // table. Omitting it under-measures logical on mature stores and
+                // re-creates the exact false positive this measurement replaces.
+                ["turn_archive", await countRow(state, "SELECT count() AS n FROM turn_archive GROUP ALL")],
             ];
             let measured = 0;
             for (const [table, count] of heavyTables) {
@@ -162,7 +167,9 @@ export async function handleMemoryHealth(state, _session, _args) {
                 const sample = await state.store.queryFirst(`SELECT * FROM ${table} LIMIT 8`);
                 if (sample.length === 0)
                     continue;
-                const avgBytes = sample.reduce((a, r) => a + JSON.stringify(r).length, 0) / sample.length;
+                // Buffer.byteLength, not .length: UTF-16 code units under-count
+                // multibyte text up to ~3x, in the false-positive direction.
+                const avgBytes = sample.reduce((a, r) => a + Buffer.byteLength(JSON.stringify(r)), 0) / sample.length;
                 measured += avgBytes * count;
             }
             const logical = Math.max(measured, 50_000_000); // floor 50MB

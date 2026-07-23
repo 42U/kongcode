@@ -4,7 +4,7 @@
  * The old estimate (`embedded * 4096 * 1.3`) ignored retrieval_outcome and
  * embedding_cache and under-estimated embedding-heavy rows ~17x, so a healthy
  * 2.5GB store was flagged "25x bloat" forever (2026-07-10 false alarm; a full
- * export measured 1.71GB → true amplification ~1.3x). The fix samples 8 real
+ * export measured 1.71GB → true amplification ~1.3-1.5x). The fix samples 8 real
  * rows per heavy table, averages their JSON-serialized size, and multiplies by
  * the table's row count.
  *
@@ -95,6 +95,18 @@ describe("store_amplification measured logical size (PR #18)", () => {
     const state = mockState({
       counts: { concept: 30_000 },
       embedded: { concept: 30_000 },
+      sampleRow: { content: "A".repeat(20_000) },
+    });
+    expect(await ampDiagnostics(state)).toEqual([]);
+  });
+
+  it("counts turn_archive — the largest vector table (auditor M1)", async () => {
+    // All live volume drained into the archive (mature-store shape after
+    // archiveOldTurns): logical must still be measured, not floored.
+    // Without turn_archive in heavyTables: measured=0 → 50MB floor → false 100x.
+    const state = mockState({
+      counts: { turn_archive: 30_000 },
+      embedded: {},
       sampleRow: { content: "A".repeat(20_000) },
     });
     expect(await ampDiagnostics(state)).toEqual([]);
