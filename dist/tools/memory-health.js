@@ -108,10 +108,13 @@ export async function handleMemoryHealth(state, _session, _args) {
         // it, soft-archived forensic rows (active=false) count as phantom backlog.
         countRow(state, "SELECT count() AS n FROM pending_work WHERE status = 'pending' AND (active = true OR active IS NONE) GROUP ALL"),
     ]);
-    // 0.7.121 store-amplification metric: physical store size vs a logical
-    // estimate (embedded vectors x 4KB x 1.3 overhead). The 2026-06-12
-    // forensics found a 65.7GB store wrapping ~0.3GB of live data (~200x) —
-    // invisible from SQL, so it must be watched from the filesystem.
+    // 0.7.121 store-amplification metric: physical store size vs a MEASURED
+    // logical size (per heavy table: sampled avg row size x row count — PR #18;
+    // the old `embedded x 4KB x 1.3` guess ignored retrieval_outcome and
+    // embedding_cache entirely and under-estimated ~17x on embedding-heavy
+    // stores, tripping the >10x warn forever). The 2026-06-12 forensics found
+    // a 65.7GB store wrapping ~0.3GB of live data (~200x) — invisible from
+    // SQL, so it must be watched from the filesystem.
     //
     // M3 fix: the check used to be gated SOLELY on process.env.LAQRUMCODE_STORE_PATH,
     // which is NEVER set for a managed single-host install (the daemon bootstraps
