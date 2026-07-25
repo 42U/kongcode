@@ -39,6 +39,9 @@ export declare function createCoreMemoryToolDef(state: GlobalPluginState, sessio
             count: number;
             error?: undefined;
             reason?: undefined;
+            usedChars?: undefined;
+            budgetChars?: undefined;
+            evicted?: undefined;
             id?: undefined;
         };
     } | {
@@ -50,6 +53,41 @@ export declare function createCoreMemoryToolDef(state: GlobalPluginState, sessio
             error: boolean;
             reason: string;
             count?: undefined;
+            usedChars?: undefined;
+            budgetChars?: undefined;
+            evicted?: undefined;
+            id?: undefined;
+        };
+    } | {
+        content: {
+            type: "text";
+            text: string;
+        }[];
+        details: {
+            error: boolean;
+            reason: string;
+            usedChars: number;
+            budgetChars: number;
+            count?: undefined;
+            evicted?: undefined;
+            id?: undefined;
+        };
+    } | {
+        content: {
+            type: "text";
+            text: string;
+        }[];
+        details: {
+            error: boolean;
+            reason: string;
+            evicted: {
+                id: string;
+                priority: number;
+                chars: number;
+            }[];
+            count?: undefined;
+            usedChars?: undefined;
+            budgetChars?: undefined;
             id?: undefined;
         };
     } | {
@@ -61,6 +99,9 @@ export declare function createCoreMemoryToolDef(state: GlobalPluginState, sessio
             error: boolean;
             count?: undefined;
             reason?: undefined;
+            usedChars?: undefined;
+            budgetChars?: undefined;
+            evicted?: undefined;
             id?: undefined;
         };
     } | {
@@ -73,6 +114,9 @@ export declare function createCoreMemoryToolDef(state: GlobalPluginState, sessio
             count?: undefined;
             error?: undefined;
             reason?: undefined;
+            usedChars?: undefined;
+            budgetChars?: undefined;
+            evicted?: undefined;
         };
     }>;
 };

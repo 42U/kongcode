@@ -5,7 +5,7 @@
  * → dedup → budget trim → format.
  */
 import type { AgentMessage } from "./types.js";
-import type { SurrealStore, VectorSearchResult } from "./surreal.js";
+import type { SurrealStore, VectorSearchResult, CoreMemoryEntry } from "./surreal.js";
 import type { EmbeddingService } from "./embeddings.js";
 import type { SessionState } from "./state.js";
 import type { LlamaRankingContext } from "node-llama-cpp";
@@ -106,6 +106,41 @@ export declare function expandVagueQuery(query: string, session?: SessionState):
 export declare function reciprocalRankFusion(rankedLists: string[][], k?: number): Map<string, number>;
 export declare function deduplicateResults(ranked: ScoredResult[]): ScoredResult[];
 export declare function mmrReorder(ranked: ScoredResult[], lambda?: number): ScoredResult[];
+/** Context window assumed when a caller does not supply one. @internal */
+export declare const DEFAULT_CONTEXT_WINDOW = 200000;
+/** @internal Exported so the core_memory tool can check admission against the
+ * same budget the renderer actually enforces, instead of a separate entry count. */
+export declare function getTier0BudgetChars(budgets: Budgets): number;
+/** @internal */
+export declare function getTier1BudgetChars(budgets: Budgets): number;
+export interface CoreBudgetResult {
+    kept: CoreMemoryEntry[];
+    /** Entries dropped wholesale because the budget was exhausted. */
+    dropped: {
+        id: string;
+        priority: number;
+        chars: number;
+    }[];
+    /** Entries that were injected but cut short by the per-item cap. */
+    truncated: {
+        id: string;
+        priority: number;
+        from: number;
+        to: number;
+    }[];
+    usedChars: number;
+    budgetChars: number;
+}
+/**
+ * Fit core-memory entries into a character budget, in the priority-DESC order
+ * the store returns them.
+ *
+ * Returns what it had to drop and truncate rather than discarding that
+ * silently. A directive that stops being injected, or is cut off mid-sentence,
+ * is indistinguishable to the model from a directive that was never written,
+ * so the loss has to be observable to somebody.
+ */
+export declare function applyCoreBudgetVerbose(entries: CoreMemoryEntry[], budgetChars: number): CoreBudgetResult;
 export interface GraphTransformParams {
     messages: AgentMessage[];
     session: SessionState;

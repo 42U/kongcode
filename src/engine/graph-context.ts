@@ -1091,29 +1091,94 @@ function takeWithConstraints(ranked: ScoredResult[], budgetTokens: number, maxIt
 
 // ── Core memory ────────────────────────────────────────────────────────────────
 
-function getTier0BudgetChars(budgets: Budgets): number {
+/** Context window assumed when a caller does not supply one. @internal */
+export const DEFAULT_CONTEXT_WINDOW = 200000;
+
+/** @internal Exported so the core_memory tool can check admission against the
+ * same budget the renderer actually enforces, instead of a separate entry count. */
+export function getTier0BudgetChars(budgets: Budgets): number {
   return Math.round(budgets.core * 0.55 * CHARS_PER_TOKEN);
 }
-function getTier1BudgetChars(budgets: Budgets): number {
+/** @internal */
+export function getTier1BudgetChars(budgets: Budgets): number {
   return Math.round(budgets.core * 0.45 * CHARS_PER_TOKEN);
 }
 
-const MAX_CORE_MEMORY_CHARS = 800; // Per-item cap (claw-code: MAX_INSTRUCTION_FILE_CHARS)
+// Per-item cap (claw-code: MAX_INSTRUCTION_FILE_CHARS). This is a FLOOR that
+// every entry is guaranteed, not the maximum an entry may occupy: see
+// perItemCapFor(). A flat 800 here silently guillotined the highest-priority
+// directives, because importance correlates with length and truncation eats
+// the tail, which is exactly where a rule's concrete specifics live.
+const MAX_CORE_MEMORY_CHARS = 800;
 
-function applyCoreBudget(entries: CoreMemoryEntry[], budgetChars: number): CoreMemoryEntry[] {
+// A top-priority directive may occupy up to this multiple of the base cap,
+// scaling with priority. priority>=90 gets the full multiple, priority<=50
+// gets the base cap.
+const PRIORITY_CAP_MULTIPLE = 3;
+
+/** Per-item character cap, scaled by priority. */
+function perItemCapFor(priority: number | undefined): number {
+  const p = Math.max(0, Math.min(100, priority ?? 50));
+  if (p <= 50) return MAX_CORE_MEMORY_CHARS;
+  const t = Math.min(1, (p - 50) / 40); // 50->0, 90+->1
+  return Math.round(MAX_CORE_MEMORY_CHARS * (1 + t * (PRIORITY_CAP_MULTIPLE - 1)));
+}
+
+export interface CoreBudgetResult {
+  kept: CoreMemoryEntry[];
+  /** Entries dropped wholesale because the budget was exhausted. */
+  dropped: { id: string; priority: number; chars: number }[];
+  /** Entries that were injected but cut short by the per-item cap. */
+  truncated: { id: string; priority: number; from: number; to: number }[];
+  usedChars: number;
+  budgetChars: number;
+}
+
+/**
+ * Fit core-memory entries into a character budget, in the priority-DESC order
+ * the store returns them.
+ *
+ * Returns what it had to drop and truncate rather than discarding that
+ * silently. A directive that stops being injected, or is cut off mid-sentence,
+ * is indistinguishable to the model from a directive that was never written,
+ * so the loss has to be observable to somebody.
+ */
+export function applyCoreBudgetVerbose(
+  entries: CoreMemoryEntry[],
+  budgetChars: number,
+): CoreBudgetResult {
   let used = 0;
-  const result: CoreMemoryEntry[] = [];
+  const kept: CoreMemoryEntry[] = [];
+  const dropped: CoreBudgetResult["dropped"] = [];
+  const truncated: CoreBudgetResult["truncated"] = [];
   for (const e of entries) {
-    // Cap individual entries so one large directive doesn't starve others
-    const text = e.text.length > MAX_CORE_MEMORY_CHARS
-      ? e.text.slice(0, MAX_CORE_MEMORY_CHARS) + "..."
-      : e.text;
+    const cap = perItemCapFor(e.priority);
+    const text = e.text.length > cap ? e.text.slice(0, cap) + "..." : e.text;
     const len = text.length + 6;
-    if (used + len > budgetChars) continue;
-    result.push(text !== e.text ? { ...e, text } : e);
+    if (used + len > budgetChars) {
+      dropped.push({ id: e.id, priority: e.priority ?? 50, chars: e.text.length });
+      continue;
+    }
+    if (text !== e.text) {
+      truncated.push({ id: e.id, priority: e.priority ?? 50, from: e.text.length, to: cap });
+    }
+    kept.push(text !== e.text ? { ...e, text } : e);
     used += len;
   }
-  return result;
+  return { kept, dropped, truncated, usedChars: used, budgetChars };
+}
+
+function applyCoreBudget(entries: CoreMemoryEntry[], budgetChars: number): CoreMemoryEntry[] {
+  const r = applyCoreBudgetVerbose(entries, budgetChars);
+  if (r.dropped.length || r.truncated.length) {
+    log.warn(
+      `[core-memory] budget pressure: ${r.usedChars}/${r.budgetChars} chars, ` +
+      `${r.truncated.length} truncated, ${r.dropped.length} dropped` +
+      (r.dropped.length ? ` (dropped: ${r.dropped.map((d) => d.id).join(", ")})` : "") +
+      (r.truncated.length ? ` (truncated: ${r.truncated.map((t) => `${t.id} ${t.from}->${t.to}`).join(", ")})` : ""),
+    );
+  }
+  return r.kept;
 }
 
 function formatTierSection(entries: CoreMemoryEntry[], label: string): string {
@@ -1732,7 +1797,7 @@ export async function graphTransformContext(
   params: GraphTransformParams,
 ): Promise<GraphTransformResult> {
   const { messages, session, store, embeddings, signal } = params;
-  const contextWindow = params.contextWindow ?? 200000;
+  const contextWindow = params.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
   const budgets = calcBudgets(contextWindow);
 
   // Build static system prompt section for API prefix caching.

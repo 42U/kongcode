@@ -5,8 +5,8 @@
 import { Type } from "@sinclair/typebox";
 import { stripStructuralTags } from "../sanitize.js";
 import { log } from "../log.js";
+import { calcBudgets, getTier0BudgetChars, applyCoreBudgetVerbose, DEFAULT_CONTEXT_WINDOW, } from "../graph-context.js";
 const TIER0_MAX_PER_SESSION = 5;
-const TIER0_MAX_TOTAL = 25;
 const tier0WritesPerSession = new Map();
 /**
  * Per-state guard so we wire the session-removed cleanup hook exactly once
@@ -102,11 +102,46 @@ export function createCoreMemoryToolDef(state, session) {
                                     details: { error: true, reason: "session_rate_limit" },
                                 };
                             }
+                            // Admit against the SAME character budget the renderer enforces,
+                            // not a separate entry count. A count cap governs the wrong unit:
+                            // entries vary by an order of magnitude in size, so N entries can
+                            // sit well under budget (and be wrongly refused) or over it (and
+                            // be silently dropped at render time).
                             const existing = await store.getAllCoreMemory(0);
-                            if (existing.length >= TIER0_MAX_TOTAL) {
+                            const budgetChars = getTier0BudgetChars(calcBudgets(DEFAULT_CONTEXT_WINDOW));
+                            const NEW_ID = " pending-add";
+                            const candidate = {
+                                id: NEW_ID,
+                                text: sanitized,
+                                category: params.category ?? "general",
+                                priority: params.priority ?? 50,
+                                tier: 0,
+                                active: true,
+                            };
+                            const merged = [...existing, candidate]
+                                .sort((a, b) => (b.priority ?? 50) - (a.priority ?? 50));
+                            const fit = applyCoreBudgetVerbose(merged, budgetChars);
+                            const evicted = fit.dropped.filter((d) => d.id !== NEW_ID);
+                            if (fit.dropped.some((d) => d.id === NEW_ID)) {
+                                const weakest = [...existing]
+                                    .sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50))
+                                    .slice(0, 3)
+                                    .map((e) => `${e.id} (p${e.priority}, ${e.text.length} chars)`)
+                                    .join("; ");
                                 return {
-                                    content: [{ type: "text", text: `Tier 0 capacity reached (${TIER0_MAX_TOTAL} entries). Deactivate unused entries before adding new ones.` }],
-                                    details: { error: true, reason: "total_cap" },
+                                    content: [{ type: "text", text: `Tier 0 budget full: ${fit.usedChars}/${budgetChars} chars across ${existing.length} entries. ` +
+                                                `This entry (p${candidate.priority}, ${sanitized.length} chars) does not fit. ` +
+                                                `Shorten it, raise its priority, or deactivate one of the lowest-priority entries: ${weakest}` }],
+                                    details: { error: true, reason: "budget_full", usedChars: fit.usedChars, budgetChars },
+                                };
+                            }
+                            if (evicted.length) {
+                                const list = evicted.map((d) => `${d.id} (p${d.priority})`).join("; ");
+                                return {
+                                    content: [{ type: "text", text: `Refused: adding this entry (p${candidate.priority}) would push ${evicted.length} lower-priority ` +
+                                                `entr${evicted.length === 1 ? "y" : "ies"} out of the tier-0 budget, and they would silently stop ` +
+                                                `loading: ${list}. Deactivate them explicitly first, or lower this entry's priority.` }],
+                                    details: { error: true, reason: "would_evict", evicted },
                                 };
                             }
                             log.warn(`[core-memory] tier-0 write: "${sanitized.slice(0, 120)}..." (session=${session.sessionId})`);
