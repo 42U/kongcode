@@ -3,7 +3,9 @@
  *
  * - Planning gate: model must output text before its first tool call
  * - Tool limit: blocks when budget exceeded
- * - Soft interrupt: blocks when user pressed Ctrl+C
+ * - Soft interrupt: blocks after the loop guard trips (many tool calls with no
+ *   output). NOT a user Ctrl+C; nothing sets softInterrupted from a real user
+ *   interrupt.
  */
 
 import type { GlobalPluginState } from "../state.js";
@@ -42,11 +44,18 @@ export function createBeforeToolCallHandler(state: GlobalPluginState) {
     const textLengthSoFar = event.assistantTextLengthSoFar ?? session.turnTextLength;
     const toolIndex = event.toolCallIndexInTurn ?? (session.toolCallCount - 1);
 
-    // Soft interrupt
+    // Soft interrupt.
+    //
+    // This previously claimed "The user pressed Ctrl+C to interrupt you."
+    // Nothing in the codebase sets softInterrupted from a real user interrupt:
+    // its only producer is the loop gate in hook-handlers/pre-tool-use.ts, so
+    // that attribution was always false. Telling the model the user did
+    // something the user did not do is worse than saying nothing, because the
+    // model then reports a phantom interruption back to them.
     if (session.softInterrupted) {
       return {
         block: true,
-        blockReason: "The user pressed Ctrl+C to interrupt you. Stop all tool calls immediately. Summarize what you've found so far, respond to the user with your current progress, and ask how to proceed.",
+        blockReason: "Automatic loop guard: you have made many tool calls without producing any output. Stop calling tools, say what you have found so far, and continue from there.",
       };
     }
 

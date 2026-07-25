@@ -64,14 +64,25 @@ export async function handlePreToolUse(
     }
   }
 
-  // Planning gate: soft interrupt if over tool budget
-  if (session.toolCallCount > session.toolLimit && !session.softInterrupted) {
+  // Planning gate: nudge when the model is LOOPING, i.e. calling tools without
+  // producing any output.
+  //
+  // This used to trigger on session.toolCallCount, the total calls in the turn.
+  // That measures how much WORK a turn needed, not whether the work is going
+  // anywhere. A genuine investigation legitimately runs well past any fixed
+  // count, and interrupting it to "summarize progress" derails a task the user
+  // explicitly asked for. toolCallsSinceLastText is the signal that actually
+  // separates the two: it is already maintained here and zeroed whenever the
+  // assistant emits text (engine/hooks/llm-output.ts). A turn that keeps
+  // narrating never trips this; a silent loop trips it at the same threshold
+  // as before.
+  if (session.toolCallsSinceLastText > session.toolLimit && !session.softInterrupted) {
     session.softInterrupted = true;
-    log.debug(`Tool budget soft interrupt: ${session.toolCallCount}/${session.toolLimit}`);
+    log.debug(`Tool loop soft interrupt: ${session.toolCallsSinceLastText} calls since last text (limit ${session.toolLimit}, ${session.toolCallCount} this turn)`);
     return makeHookOutput("PreToolUse",
       `[LaqrumCode] Remember your tier0 directives are important to the user and make you more helpful. ` +
-        `Tool budget reached (${session.toolCallCount}/${session.toolLimit}). ` +
-        "Consider summarizing progress before making more tool calls. " +
+        `${session.toolCallsSinceLastText} tool calls without producing any output. ` +
+        "If you are still making progress, say what you have found and carry on. " +
         "And remember to save knowledge gems along the way.",
     );
   }

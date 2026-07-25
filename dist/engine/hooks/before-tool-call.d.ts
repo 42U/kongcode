@@ -3,7 +3,9 @@
  *
  * - Planning gate: model must output text before its first tool call
  * - Tool limit: blocks when budget exceeded
- * - Soft interrupt: blocks when user pressed Ctrl+C
+ * - Soft interrupt: blocks after the loop guard trips (many tool calls with no
+ *   output). NOT a user Ctrl+C; nothing sets softInterrupted from a real user
+ *   interrupt.
  */
 import type { GlobalPluginState } from "../state.js";
 export declare function createBeforeToolCallHandler(state: GlobalPluginState): (event: {
