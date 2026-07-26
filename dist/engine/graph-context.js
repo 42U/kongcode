@@ -972,28 +972,84 @@ function takeWithConstraints(ranked, budgetTokens, maxItems) {
     return selected;
 }
 // ── Core memory ────────────────────────────────────────────────────────────────
-function getTier0BudgetChars(budgets) {
+/** Context window assumed when a caller does not supply one. @internal */
+export const DEFAULT_CONTEXT_WINDOW = 200000;
+/** @internal Exported so the core_memory tool can check admission against the
+ * same budget the renderer actually enforces, instead of a separate entry count. */
+export function getTier0BudgetChars(budgets) {
     return Math.round(budgets.core * 0.55 * CHARS_PER_TOKEN);
 }
-function getTier1BudgetChars(budgets) {
+/** @internal */
+export function getTier1BudgetChars(budgets) {
     return Math.round(budgets.core * 0.45 * CHARS_PER_TOKEN);
 }
-const MAX_CORE_MEMORY_CHARS = 800; // Per-item cap (claw-code: MAX_INSTRUCTION_FILE_CHARS)
-function applyCoreBudget(entries, budgetChars) {
+// Per-item cap (claw-code: MAX_INSTRUCTION_FILE_CHARS). This is a FLOOR that
+// every entry is guaranteed, not the maximum an entry may occupy: see
+// perItemCapFor(). A flat 800 here silently guillotined the highest-priority
+// directives, because importance correlates with length and truncation eats
+// the tail, which is exactly where a rule's concrete specifics live.
+const MAX_CORE_MEMORY_CHARS = 800;
+// A top-priority directive may occupy up to this multiple of the base cap,
+// scaling with priority. priority>=90 gets the full multiple, priority<=50
+// gets the base cap.
+const PRIORITY_CAP_MULTIPLE = 3;
+/**
+ * Per-item character cap, scaled by priority.
+ *
+ * Applies to BOTH tiers, deliberately. `applyCoreBudget` is shared by tier 0
+ * and tier 1, and the harm this fixes is identical in each: a half-delivered
+ * rule is worse than a short one, and a user-set session directive ("do not
+ * modify anything in these containers") is exactly as unsafe to cut mid-clause
+ * as a permanent one. The tiers differ in lifetime, not in how much a severed
+ * tail costs. Each tier is still bounded by its own separate character budget,
+ * so a generous per-item cap in one cannot starve the other.
+ */
+function perItemCapFor(priority) {
+    const p = Math.max(0, Math.min(100, priority ?? 50));
+    if (p <= 50)
+        return MAX_CORE_MEMORY_CHARS;
+    const t = Math.min(1, (p - 50) / 40); // 50->0, 90+->1
+    return Math.round(MAX_CORE_MEMORY_CHARS * (1 + t * (PRIORITY_CAP_MULTIPLE - 1)));
+}
+/**
+ * Fit core-memory entries into a character budget, in the priority-DESC order
+ * the store returns them.
+ *
+ * Returns what it had to drop and truncate rather than discarding that
+ * silently. A directive that stops being injected, or is cut off mid-sentence,
+ * is indistinguishable to the model from a directive that was never written,
+ * so the loss has to be observable to somebody.
+ */
+export function applyCoreBudgetVerbose(entries, budgetChars) {
     let used = 0;
-    const result = [];
+    const kept = [];
+    const dropped = [];
+    const truncated = [];
     for (const e of entries) {
-        // Cap individual entries so one large directive doesn't starve others
-        const text = e.text.length > MAX_CORE_MEMORY_CHARS
-            ? e.text.slice(0, MAX_CORE_MEMORY_CHARS) + "..."
-            : e.text;
+        const cap = perItemCapFor(e.priority);
+        const text = e.text.length > cap ? e.text.slice(0, cap) + "..." : e.text;
         const len = text.length + 6;
-        if (used + len > budgetChars)
+        if (used + len > budgetChars) {
+            dropped.push({ id: e.id, priority: e.priority ?? 50, chars: e.text.length });
             continue;
-        result.push(text !== e.text ? { ...e, text } : e);
+        }
+        if (text !== e.text) {
+            truncated.push({ id: e.id, priority: e.priority ?? 50, from: e.text.length, to: cap });
+        }
+        kept.push(text !== e.text ? { ...e, text } : e);
         used += len;
     }
-    return result;
+    return { kept, dropped, truncated, usedChars: used, budgetChars };
+}
+function applyCoreBudget(entries, budgetChars) {
+    const r = applyCoreBudgetVerbose(entries, budgetChars);
+    if (r.dropped.length || r.truncated.length) {
+        log.warn(`[core-memory] budget pressure: ${r.usedChars}/${r.budgetChars} chars, ` +
+            `${r.truncated.length} truncated, ${r.dropped.length} dropped` +
+            (r.dropped.length ? ` (dropped: ${r.dropped.map((d) => d.id).join(", ")})` : "") +
+            (r.truncated.length ? ` (truncated: ${r.truncated.map((t) => `${t.id} ${t.from}->${t.to}`).join(", ")})` : ""));
+    }
+    return r.kept;
 }
 function formatTierSection(entries, label) {
     if (entries.length === 0)
@@ -1535,7 +1591,7 @@ function formatStageTrace(trace, startedAt, diedAt) {
 }
 export async function graphTransformContext(params) {
     const { messages, session, store, embeddings, signal } = params;
-    const contextWindow = params.contextWindow ?? 200000;
+    const contextWindow = params.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
     const budgets = calcBudgets(contextWindow);
     // Build static system prompt section for API prefix caching.
     // Done here (wrapper) so it attaches to any inner return path.
