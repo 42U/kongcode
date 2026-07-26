@@ -2,6 +2,31 @@
 
 All notable changes to LaqrumCode are documented here. The 0.7.x series introduced the daemon-split architecture; 0.8.0 will be the first marketplace-ready stable.
 
+## [0.8.5] - 2026-07-26
+
+Directive delivery and daemon stability. Two of the fixes in this release correct regressions introduced earlier in the same release cycle and caught by the pre-release QA waterfall before any tag existed — the notes below describe net behaviour against 0.8.4.
+
+### Fixed
+- **Tier-0 directives were silently truncated at 800 chars.** `MAX_CORE_MEMORY_CHARS` applied a flat per-item guillotine with no signal to anyone. Because importance correlates with length and truncation eats the tail — where a rule's concrete specifics live — this preferentially destroyed the most important directives. On a real 25-entry install, a majority were being cut mid-clause every turn while ~4k chars of the tier-0 budget sat unused. `perItemCapFor()` now scales the cap with priority, and `applyCoreBudgetVerbose()` fits entries in **two passes**: admission at the flat floor first, then leftover slack spent raising caps highest-priority-first (partial upgrades allowed). Nothing is dropped that would have fit before, nothing gets less room than before, and the budget is actually used. Measured on the same install: 25/25 entries injected, 0 dropped, full budget consumed. (#19)
+- **`TIER0_MAX_TOTAL` capped tier 0 by entry COUNT**, which is the wrong unit — entries vary by an order of magnitude in size, so a count cap refuses writes while under budget and permits sets that overflow. Admission now tests the candidate against the same character budget the renderer enforces, and refuses with something actionable (`budget_full` names the weakest entries; `would_evict` names only what the candidate would actually displace, diffed against a baseline so pre-existing overflow is reported separately rather than blamed on the new entry). The `update` path is checked too, not just `add`. (#19)
+- **The injection envelope was deleting its own section tags.** `wrapMemoryContext` ran `stripStructuralTags` over the fully assembled context, and `recalled_memory` / `active_directives` / `session_directives` / `reflection_context` are all on that list — so the labels laqrumcode had just written were stripped on the way out and tier-0 and tier-1 directives reached the model as one unlabelled run of bullets. Breakout protection moved to the content (retrieved nodes, core-memory text and category, skill and reflection fields, resurfacing memories, wakeup briefing, compaction summary, soul summary), where the wrapper tags survive; `stripReminderWrapper` now removes only `<system-reminder>`. (#21)
+- **`stripStructuralTags` was single-pass and defeatable by nesting** — deleting an inner tag splices the outer halves into a live one, so depth-N nesting needed N+1 passes. Both strippers now run to a fixpoint (guaranteed to converge, since every effective pass strictly shortens the string) and neutralize any residue if the safety bound is ever reached.
+- **Tier-1 "session-pinned" directives were pinned to nothing.** `getAllCoreMemory` had no session filter and nothing retires the rows, so every session directive ever written loaded into every later session — including entries whose own text says "this session". Root cause was deeper than the read path: the MCP relay invented `mcp-client-<pid>` as its session id while the hook path keyed on Claude Code's session UUID, so the two id spaces never intersected. The relay now sends `CLAUDE_CODE_SESSION_ID` (`resolveSessionId()`, with an explicit `LAQRUMCODE_SESSION_ID` pin still winning for `auto-drain`), unifying the spaces; tier-1 reads are scoped to the asking session; and a one-shot migration retires legacy `mcp-client-*` rows explicitly rather than letting them go quietly invisible. This also fixes `injectedSections` invalidation (it was clearing the cache on the session that does not build the prompt) and makes the per-session tier-0 write cap survive a relay restart. (#21)
+- **`archiveOldTurns` could stop draining silently.** The anti-join ran in-DB with `LIMIT` applied *after* the membership filter, so the whole backlog paid an O(stale × referenced) per-row test and crossed the 8s TIMEOUT once it grew. Rewritten as indexed scans plus a pure O(stale + referenced) Set anti-join (`selectUnreferencedTurns`), now **paged** rather than capped at a single window — referenced turns stay candidates forever and pile up at the head of the scan, so a fixed window eventually yields nothing on every run. The job also records a `status='error'` row on failure so the 30-minute backoff engages instead of re-firing the full scan every boot, and warns when a non-empty candidate set yields nothing archivable.
+- **Bootstrap maintenance no longer re-hammers the database during a daemon flap** — deferred and gated on the daemon having retained an IPC client, so transient cold-boot daemons skip it.
+- **Daemon spawn-lock race.** The holder pid is now stamped at `O_EXCL` acquisition, so a racer can no longer read an empty lock (`Number("") === 0`), judge it dead, and spawn a second daemon concurrently.
+- **Reconnect thundering herd** — jittered backoff before an mcp-client reconnect so a single daemon exit doesn't make every relay re-handshake in the same instant.
+
+### Changed
+- The tool-call planning gate keys on `toolCallsSinceLastText` rather than total tool calls — the signal that separates a loop from productive work. **Documented as inert**: nothing in the production hook path produces that signal today, so it fires exactly where the old predicate did. See #20.
+- The `softInterrupt` block message no longer claims the user pressed Ctrl+C; nothing sets that flag from a real interrupt.
+
+### Known follow-ups
+- #20 — wire an assistant-text producer so the loop guard can actually distinguish looping from work.
+- Age-based archival of orphaned tier-1 rows (hygiene; read-scoping is the correctness mechanism).
+- `retrieval_outcome` id prefetch in `archiveOldTurns` is unbounded and re-Set per page.
+- Integration tests gated on a live SurrealDB return early rather than skipping, so they report green in CI, which provides no database.
+
 ## [0.8.4] - 2026-06-27
 
 The dense+sparse hybrid retrieval arm — and the correction of an earlier wrong "infeasible" call.
