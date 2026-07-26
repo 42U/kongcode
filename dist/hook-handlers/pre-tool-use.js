@@ -67,6 +67,17 @@ export async function handlePreToolUse(state, payload) {
     // assistant emits text (engine/hooks/llm-output.ts). A turn that keeps
     // narrating never trips this; a silent loop trips it at the same threshold
     // as before.
+    //
+    // INERT AS OF THIS COMMIT — see #20. engine/hooks/llm-output.ts, the only
+    // code that zeroes this counter on assistant text, is imported solely by
+    // test/hooks.test.ts and is not among the hook methods daemon/index.ts
+    // registers; Claude Code's hook surface has no assistant-text event at all.
+    // The counter is therefore incremented one line below toolCallCount and
+    // reset alongside it in resetTurn(), so on the production path the two are
+    // always equal and this predicate fires exactly where the old one did. The
+    // predicate is the correct one to key on and lands now so the producer has
+    // something to feed; it does NOT yet stop the gate firing during long,
+    // legitimate work. Do not describe that symptom as fixed until #20 closes.
     if (session.toolCallsSinceLastText > session.toolLimit && !session.softInterrupted) {
         session.softInterrupted = true;
         log.debug(`Tool loop soft interrupt: ${session.toolCallsSinceLastText} calls since last text (limit ${session.toolLimit}, ${session.toolCallCount} this turn)`);
