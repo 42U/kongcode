@@ -43,6 +43,91 @@ function ensureSessionRemovedHook(state) {
         tier0WritesPerSession.delete(sessionId);
     });
 }
+/** Sentinel id for an entry that is not in the store yet. Real ids are always
+ *  `core_memory:<id>`, so this cannot collide with one. */
+const CANDIDATE_ID = "(pending admission)";
+/**
+ * Test a candidate tier-0 entry against the SAME character budget the renderer
+ * enforces (graph-context `applyCoreBudget`), rather than a separate entry count.
+ *
+ * The candidate is only blamed for evictions it actually causes. Tier 0 can
+ * already be over budget when this runs — `cognitive-bootstrap.ts`,
+ * `hooks/profile.ts` and `soul.ts` all create tier-0 rows without passing
+ * through this tool — so the drop set is diffed against a baseline computed
+ * WITHOUT the candidate. Skipping that diff means a single pre-existing
+ * overflow makes every later write fail with a `would_evict` naming entries
+ * that had already stopped loading, and tier 0 closes to writes permanently.
+ *
+ * @param existing    active tier-0 entries, as the store returns them
+ * @param candidate   the entry being added, or the post-update form of one
+ * @param replacingId on update, the id whose current cost the candidate
+ *                    replaces; omitted for a fresh add
+ */
+export function checkTier0Admission(existing, candidate, replacingId) {
+    const budgetChars = getTier0BudgetChars(calcBudgets(DEFAULT_CONTEXT_WINDOW));
+    const byPriorityDesc = (a, b) => (b.priority ?? 50) - (a.priority ?? 50);
+    // Incumbents = what remains alongside the candidate. On update the row being
+    // rewritten drops out so its OLD cost is not counted on top of its new one.
+    const incumbents = replacingId ? existing.filter((e) => e.id !== replacingId) : [...existing];
+    // Baseline: what the renderer drops today, candidate absent. Array sort is
+    // stable, so equal priorities keep store order and the candidate — appended
+    // last — never outranks an incumbent it ties with.
+    const baseline = applyCoreBudgetVerbose([...incumbents].sort(byPriorityDesc), budgetChars);
+    const alreadyDropped = new Set(baseline.dropped.map((d) => d.id));
+    const fit = applyCoreBudgetVerbose([...incumbents, candidate].sort(byPriorityDesc), budgetChars);
+    const base = {
+        preExistingDropped: baseline.dropped,
+        usedChars: fit.usedChars,
+        budgetChars,
+    };
+    if (fit.dropped.some((d) => d.id === candidate.id)) {
+        return { ok: false, reason: "budget_full", evicted: [], ...base };
+    }
+    // Greedy fill in priority order is monotonic — inserting the candidate can
+    // only ever grow the drop set — so this difference is exactly what IT displaced.
+    const evicted = fit.dropped.filter((d) => d.id !== candidate.id && !alreadyDropped.has(d.id));
+    if (evicted.length) {
+        return { ok: false, reason: "would_evict", evicted, ...base };
+    }
+    return { ok: true, evicted: [], ...base };
+}
+/** Trailing sentence distinguishing "you caused this" from "this was already
+ *  broken when you got here". Silence on a pre-existing overflow is what let
+ *  the old count cap look correct while entries were being dropped anyway. */
+function preExistingNote(v) {
+    if (!v.preExistingDropped.length)
+        return "";
+    const n = v.preExistingDropped.length;
+    const ids = v.preExistingDropped.map((d) => `${d.id} (p${d.priority})`).join("; ");
+    return ` NOTE: tier 0 was already over budget before this write — ${n} ` +
+        `entr${n === 1 ? "y is" : "ies are"} already not loading: ${ids}. That is not ` +
+        `caused by this entry; shorten or deactivate them to recover the space.`;
+}
+function tier0Refusal(v, candidate, incumbents, subject) {
+    if (v.reason === "budget_full") {
+        const weakest = [...incumbents]
+            .sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50))
+            .slice(0, 3)
+            .map((e) => `${e.id} (p${e.priority}, ${e.text.length} chars)`)
+            .join("; ");
+        return {
+            content: [{ type: "text", text: `Tier 0 budget full: ${v.usedChars}/${v.budgetChars} chars across ${incumbents.length} entries. ` +
+                        `${subject[0].toUpperCase()}${subject.slice(1)} (p${candidate.priority}, ${candidate.text.length} chars) ` +
+                        `does not fit. Shorten it, raise its priority, or deactivate one of the lowest-priority ` +
+                        `entries: ${weakest}.` + preExistingNote(v) }],
+            details: { error: true, reason: "budget_full", usedChars: v.usedChars, budgetChars: v.budgetChars },
+        };
+    }
+    const n = v.evicted.length;
+    const list = v.evicted.map((d) => `${d.id} (p${d.priority})`).join("; ");
+    return {
+        content: [{ type: "text", text: `Refused: ${subject} (p${candidate.priority}) would push ${n} lower-priority ` +
+                    `entr${n === 1 ? "y" : "ies"} out of the tier-0 budget, and ${n === 1 ? "it" : "they"} would ` +
+                    `silently stop loading: ${list}. Deactivate ${n === 1 ? "it" : "them"} explicitly first, or ` +
+                    `lower this entry's priority.` + preExistingNote(v) }],
+        details: { error: true, reason: "would_evict", evicted: v.evicted },
+    };
+}
 const coreMemorySchema = Type.Object({
     action: Type.Union([
         Type.Literal("list"),
@@ -108,41 +193,21 @@ export function createCoreMemoryToolDef(state, session) {
                             // sit well under budget (and be wrongly refused) or over it (and
                             // be silently dropped at render time).
                             const existing = await store.getAllCoreMemory(0);
-                            const budgetChars = getTier0BudgetChars(calcBudgets(DEFAULT_CONTEXT_WINDOW));
-                            const NEW_ID = " pending-add";
                             const candidate = {
-                                id: NEW_ID,
+                                id: CANDIDATE_ID,
                                 text: sanitized,
                                 category: params.category ?? "general",
                                 priority: params.priority ?? 50,
                                 tier: 0,
                                 active: true,
                             };
-                            const merged = [...existing, candidate]
-                                .sort((a, b) => (b.priority ?? 50) - (a.priority ?? 50));
-                            const fit = applyCoreBudgetVerbose(merged, budgetChars);
-                            const evicted = fit.dropped.filter((d) => d.id !== NEW_ID);
-                            if (fit.dropped.some((d) => d.id === NEW_ID)) {
-                                const weakest = [...existing]
-                                    .sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50))
-                                    .slice(0, 3)
-                                    .map((e) => `${e.id} (p${e.priority}, ${e.text.length} chars)`)
-                                    .join("; ");
-                                return {
-                                    content: [{ type: "text", text: `Tier 0 budget full: ${fit.usedChars}/${budgetChars} chars across ${existing.length} entries. ` +
-                                                `This entry (p${candidate.priority}, ${sanitized.length} chars) does not fit. ` +
-                                                `Shorten it, raise its priority, or deactivate one of the lowest-priority entries: ${weakest}` }],
-                                    details: { error: true, reason: "budget_full", usedChars: fit.usedChars, budgetChars },
-                                };
-                            }
-                            if (evicted.length) {
-                                const list = evicted.map((d) => `${d.id} (p${d.priority})`).join("; ");
-                                return {
-                                    content: [{ type: "text", text: `Refused: adding this entry (p${candidate.priority}) would push ${evicted.length} lower-priority ` +
-                                                `entr${evicted.length === 1 ? "y" : "ies"} out of the tier-0 budget, and they would silently stop ` +
-                                                `loading: ${list}. Deactivate them explicitly first, or lower this entry's priority.` }],
-                                    details: { error: true, reason: "would_evict", evicted },
-                                };
+                            const verdict = checkTier0Admission(existing, candidate);
+                            if (!verdict.ok)
+                                return tier0Refusal(verdict, candidate, existing, "this entry");
+                            if (verdict.preExistingDropped.length) {
+                                log.warn(`[core-memory] tier 0 is over budget: ${verdict.preExistingDropped.length} ` +
+                                    `entr${verdict.preExistingDropped.length === 1 ? "y" : "ies"} not loading ` +
+                                    `(${verdict.preExistingDropped.map((d) => d.id).join(", ")})`);
                             }
                             log.warn(`[core-memory] tier-0 write: "${sanitized.slice(0, 120)}..." (session=${session.sessionId})`);
                         }
@@ -168,9 +233,39 @@ export function createCoreMemoryToolDef(state, session) {
                         if (!params.id) {
                             return { content: [{ type: "text", text: "Error: 'id' is required for update action." }], details: null };
                         }
+                        // Budget-check BEFORE writing. An update changes tier-0 cost in
+                        // three ways the `add` guard never sees: growing an entry's text,
+                        // raising its priority (which raises that entry's own per-item cap,
+                        // so cost grows with the text untouched), and moving a row INTO
+                        // tier 0. Any of them can push other entries out of the budget,
+                        // and those entries then stop loading with no signal to anyone.
+                        //
+                        // The per-item cap bounds how far a single entry can grow, so this
+                        // was never an unbounded hole — an oversized update is truncated at
+                        // render, not admitted whole. It was an unguarded one: the eviction
+                        // it causes in the tail is silent, which is the same failure the
+                        // add-side check exists to prevent.
+                        const all = await store.getAllCoreMemory();
+                        const current = all.find((e) => e.id === params.id);
+                        const newText = params.text !== undefined ? stripStructuralTags(params.text) : current?.text;
+                        const newTier = params.tier ?? current?.tier;
+                        if (current && newTier === 0 && newText !== undefined) {
+                            const tier0 = all.filter((e) => e.tier === 0);
+                            const candidate = {
+                                ...current,
+                                text: newText,
+                                category: params.category ?? current.category,
+                                priority: params.priority ?? current.priority ?? 50,
+                                tier: 0,
+                            };
+                            const verdict = checkTier0Admission(tier0, candidate, current.id);
+                            if (!verdict.ok) {
+                                return tier0Refusal(verdict, candidate, tier0.filter((e) => e.id !== current.id), "this update");
+                            }
+                        }
                         const fields = {};
                         if (params.text !== undefined) {
-                            fields.text = stripStructuralTags(params.text);
+                            fields.text = newText;
                             log.warn(`[core-memory] update ${params.id}: "${String(fields.text).slice(0, 120)}..." (session=${session.sessionId})`);
                         }
                         if (params.category !== undefined)

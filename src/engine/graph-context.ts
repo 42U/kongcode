@@ -1116,7 +1116,17 @@ const MAX_CORE_MEMORY_CHARS = 800;
 // gets the base cap.
 const PRIORITY_CAP_MULTIPLE = 3;
 
-/** Per-item character cap, scaled by priority. */
+/**
+ * Per-item character cap, scaled by priority.
+ *
+ * Applies to BOTH tiers, deliberately. `applyCoreBudget` is shared by tier 0
+ * and tier 1, and the harm this fixes is identical in each: a half-delivered
+ * rule is worse than a short one, and a user-set session directive ("do not
+ * modify anything in these containers") is exactly as unsafe to cut mid-clause
+ * as a permanent one. The tiers differ in lifetime, not in how much a severed
+ * tail costs. Each tier is still bounded by its own separate character budget,
+ * so a generous per-item cap in one cannot starve the other.
+ */
 function perItemCapFor(priority: number | undefined): number {
   const p = Math.max(0, Math.min(100, priority ?? 50));
   if (p <= 50) return MAX_CORE_MEMORY_CHARS;
