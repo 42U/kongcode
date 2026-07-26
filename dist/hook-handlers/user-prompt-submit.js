@@ -11,7 +11,7 @@
 import { makeHookOutput } from "../http-api.js";
 import { assembleContextString, ingestTurn } from "../context-assembler.js";
 import { swallow } from "../engine/errors.js";
-import { stripStructuralTags } from "../engine/sanitize.js";
+import { stripReminderWrapper } from "../engine/sanitize.js";
 import { log } from "../engine/log.js";
 import { detectAnomalies, formatAnomalyBlock } from "../engine/observability.js";
 import { countActionablePendingWork } from "../tools/pending-work.js";
@@ -31,14 +31,21 @@ import { countActionablePendingWork } from "../tools/pending-work.js";
  *
  * This is stage 2 of the v0.7.43-45 injection rework. Stages 3+ will move
  * the body itself to XML semantic tags and intent-gate the directive load. */
-function wrapMemoryContext(raw) {
+/** @internal Exported for test — the section tags it must NOT eat are the
+ *  whole point of the injection format. */
+export function wrapMemoryContext(raw) {
     if (!raw || !raw.trim())
         return raw ?? "";
     // Strip any pre-existing <system-reminder>...</system-reminder> blocks from the
     // input before re-wrapping. Without this, laqrumcode's wrapper ends up nested
     // inside Claude Code's harness wrapper (or a prior hook's wrapper), which
     // shows visibly to the model and suggests sloppy concatenation.
-    const stripped = stripStructuralTags(raw).trim();
+    // Only the <system-reminder> wrapper. This used to be stripStructuralTags,
+    // which also deletes <recalled_memory>, <active_directives> and
+    // <session_directives> — laqrumcode's own section tags, added moments
+    // earlier — so none of them ever reached the model. Content is sanitized
+    // where it enters the block instead (graph-context formatContextMessage).
+    const stripped = stripReminderWrapper(raw).trim();
     if (!stripped)
         return "";
     return [

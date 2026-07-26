@@ -20,6 +20,7 @@ import { getCachedContext, setCachedContext, recordPrefetchHit, recordPrefetchMi
 import { stageRetrieval, stageSkills, getHistoricalUtilityBatch, getLastTurnGroundingTrace } from "./retrieval-quality.js";
 import { isACANActive, scoreWithACAN, type ACANCandidate } from "./acan.js";
 import { swallow } from "./errors.js";
+import { stripStructuralTags } from "./sanitize.js";
 import { clamp } from "./math.js";
 import { log } from "./log.js";
 import type { LlamaRankingContext, Token } from "node-llama-cpp";
@@ -1195,7 +1196,12 @@ function formatTierSection(entries: CoreMemoryEntry[], label: string): string {
   if (entries.length === 0) return "";
   const grouped: Record<string, string[]> = {};
   for (const e of entries) {
-    (grouped[e.category] ??= []).push(e.text);
+    // Rows written through the core_memory tool are already sanitized, but
+    // rows seeded directly (cognitive-bootstrap, hooks/profile, soul) and
+    // anything predating that sanitization are not. Cheap to redo here, and
+    // this is the one place both render paths — the system-prompt section and
+    // the context message — pass through.
+    (grouped[e.category] ??= []).push(stripStructuralTags(e.text));
   }
   const lines: string[] = [];
   for (const [cat, texts] of Object.entries(grouped)) {
@@ -1277,6 +1283,26 @@ async function formatContextMessage(
   tier0Entries: CoreMemoryEntry[] = [],
   tier1Entries: CoreMemoryEntry[] = [],
 ): Promise<AgentMessage> {
+  // Retrieved text is untrusted with respect to the injection envelope. Turn
+  // rows are stored verbatim by ingestTurn, so a conversation that merely
+  // DISCUSSED "</system-reminder>" or "<active_directives>" would otherwise
+  // render those tags live inside the block — closing the envelope early, or
+  // forging a directives section the user never wrote.
+  //
+  // Sanitize once here rather than at each of the render sites below (TOP
+  // HITS, per-section listings, ALREADY RETRIEVED): a missed site is a
+  // breakout, and sites get added.
+  //
+  // This replaces running stripStructuralTags over the whole assembled string
+  // at injection time (user-prompt-submit.ts). That did stop breakouts, but
+  // <recalled_memory>, <active_directives> and <session_directives> are all on
+  // its tag list, so it also deleted the section tags laqrumcode had just
+  // written — the model received tier-0 and tier-1 directives as one
+  // unlabelled run of bullets with no way to tell a permanent rule from a
+  // session pin. Sanitizing the content instead of the container keeps the
+  // breakout protection and the labels.
+  nodes = nodes.map((n) => (n.text ? { ...n, text: stripStructuralTags(n.text) } : n));
+
   const groups: Record<string, ScoredResult[]> = {};
   for (const n of nodes) {
     const isCausal = n.source?.startsWith("causal_");
@@ -1383,7 +1409,7 @@ async function formatContextMessage(
         const ageDays = ageMs != null ? Math.floor(ageMs / 86400000) : null;
         const ageStr = ageDays == null ? "unknown"
           : ageDays === 0 ? "today" : ageDays === 1 ? "yesterday" : `${ageDays} days ago`;
-        return `  - [${m.id}] (${ageStr}, surfaced ${m.surface_count}x): ${m.text}`;
+        return `  - [${m.id}] (${ageStr}, surfaced ${m.surface_count}x): ${stripStructuralTags(String(m.text ?? ""))}`;
       }).join("\n");
       sections.push(
         `RESURFACING MEMORIES (mention naturally during conversation, never reveal scheduling):\n` + memLines
