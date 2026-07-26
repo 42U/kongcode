@@ -2,6 +2,19 @@
 
 All notable changes to LaqrumCode are documented here. The 0.7.x series introduced the daemon-split architecture; 0.8.0 will be the first marketplace-ready stable.
 
+## [0.8.6] - 2026-07-26
+
+The loop guard finally works, and the release script can no longer lie about what it bumped.
+
+### Fixed
+- **The planning gate now fires on silence, not on volume of work.** It keyed on `session.toolCallsSinceLastText` — the right quantity — but nothing ever reset it: the only code that zeroed it on assistant text (`engine/hooks/llm-output.ts`) is imported solely by a test and is not among the hook methods the daemon registers, and Claude Code's hook surface has no assistant-text event at all. So it tracked `toolCallCount` exactly and interrupted long, legitimate investigations to "summarize progress". The count is now **derived from the transcript** (`countToolCallsSinceText`) rather than tracked in memory, which also makes it correct across daemon restarts, relay reconnects and session-map eviction. Two structural facts were verified against a live transcript rather than assumed: Claude Code writes each content block as its own JSONL entry, and the entry carrying a `tool_use` is flushed before the tool runs. `thinking` blocks deliberately do not reset the count (thinking happens inside loops too), and `tool_result` blocks — which arrive as `user`-typed entries — do not either, since treating them as user input would reset on every call and disable the gate. Fails open: an unreadable transcript keeps the gate quiet. Measured live mid-session: old predicate 26 (fires), new predicate 2 (quiet). Closes #20.
+- **`scripts/bump-version.sh` missed surfaces and printed a green summary anyway.** `package-lock.json` (both refs) and `src/mcp-server.ts` were never bumped, and its staleness check only verified surfaces it already knew about — self-fulfilling, since it cannot discover a surface nobody wired in. v0.8.5 shipped with two stale surfaces because of this. The script now bumps all seven surfaces (package-lock via `node`, never a blanket `sed` that would corrupt dependency pins), verifies each explicitly, and then **sweeps the repo for the old version**, failing on anything still carrying it — so an unknown surface breaks the run instead of passing quietly.
+- **`bump-version.sh` no longer touches git by default.** It ran `git add -A && git commit && git tag` unconditionally, which on v0.8.5 swept ten unrelated fixes into `chore: bump to v0.8.5` and violated QA-BEFORE-BUMP. `--commit` and `--tag` are now opt-in, and `--commit` refuses when the working tree holds changes outside the version surfaces. Adds `--skip-tests` (the README badge ran the full suite on every bump) and semver validation of the argument.
+
+### Added
+- `test/loop-guard-transcript.test.ts` (16) — synthetic transcripts, no database, runs in CI. Verified fail-on-revert.
+- `test/tier1-legacy-migration.test.ts` (2) — exercises the v0.8.5 legacy tier-1 migration against a live throwaway database, because `string::starts_with` throws on a NONE `session_id` and `queryExec` swallows it, so a missing guard would make the migration a silent no-op that still reports success.
+
 ## [0.8.5] - 2026-07-26
 
 Directive delivery and daemon stability. Two of the fixes in this release correct regressions introduced earlier in the same release cycle and caught by the pre-release QA waterfall before any tag existed — the notes below describe net behaviour against 0.8.4.
