@@ -11,6 +11,8 @@ import { log } from "../engine/log.js";
 import { swallow, isUniqueViolation } from "../engine/errors.js";
 import { runGates } from "../engine/hooks/gate-registry.js";
 import { commitKnowledge } from "../engine/commit.js";
+import { countToolCallsSinceText, deriveTranscriptPath } from "../engine/transcript-reader.js";
+import { homedir } from "node:os";
 
 /** Tools that touch a file via an explicit `file_path` argument. The gate
  *  treats any of these as an "observation" of that path for the rest of
@@ -28,7 +30,6 @@ export async function handlePreToolUse(
 
   const toolName = (payload.tool_name as string) ?? "";
   session.toolCallCount++;
-  session.toolCallsSinceLastText++;
 
   // ── Observation pass (must run before any gate) ───────────────────────
   // Record every file path the agent has touched via a file-aware tool so
@@ -64,32 +65,36 @@ export async function handlePreToolUse(
     }
   }
 
-  // Planning gate: nudge when the model is LOOPING, i.e. calling tools without
-  // producing any output.
+  // Planning gate: nudge when the model is LOOPING — calling tools without
+  // producing any output — not merely when a turn has needed a lot of tools.
   //
-  // This used to trigger on session.toolCallCount, the total calls in the turn.
-  // That measures how much WORK a turn needed, not whether the work is going
-  // anywhere. A genuine investigation legitimately runs well past any fixed
-  // count, and interrupting it to "summarize progress" derails a task the user
-  // explicitly asked for. toolCallsSinceLastText is the signal that actually
-  // separates the two: it is already maintained here and zeroed whenever the
-  // assistant emits text (engine/hooks/llm-output.ts). A turn that keeps
-  // narrating never trips this; a silent loop trips it at the same threshold
-  // as before.
+  // History (#20). This gate first keyed on session.toolCallCount, which
+  // measures how much WORK a turn required, not whether the work is going
+  // anywhere: a real investigation runs well past any fixed count, and telling
+  // it to "summarize progress" derails a task the user explicitly asked for.
+  // v0.8.5 switched the predicate to session.toolCallsSinceLastText, which is
+  // the right quantity — but that counter had no producer. The only code that
+  // zeroed it on assistant text (engine/hooks/llm-output.ts) is test-only, and
+  // Claude Code's hook surface has no assistant-text event, so it stayed equal
+  // to toolCallCount and the gate fired exactly where it always had.
   //
-  // INERT AS OF THIS COMMIT — see #20. engine/hooks/llm-output.ts, the only
-  // code that zeroes this counter on assistant text, is imported solely by
-  // test/hooks.test.ts and is not among the hook methods daemon/index.ts
-  // registers; Claude Code's hook surface has no assistant-text event at all.
-  // The counter is therefore incremented one line below toolCallCount and
-  // reset alongside it in resetTurn(), so on the production path the two are
-  // always equal and this predicate fires exactly where the old one did. The
-  // predicate is the correct one to key on and lands now so the producer has
-  // something to feed; it does NOT yet stop the gate firing during long,
-  // legitimate work. Do not describe that symptom as fixed until #20 closes.
-  if (session.toolCallsSinceLastText > session.toolLimit && !session.softInterrupted) {
+  // The count is now DERIVED FROM THE TRANSCRIPT instead of tracked in memory.
+  // Two facts make that work, both verified against a live transcript rather
+  // than assumed: each content block is its own JSONL entry (so text and
+  // tool_use are separately visible in order), and the entry carrying a
+  // tool_use is flushed before the tool runs (so the text preceding this call
+  // is already on disk). Being stateless, it also survives daemon restarts and
+  // session-map eviction, which the in-memory counter did not.
+  //
+  // Fails OPEN: an unreadable transcript yields 0 and the gate stays quiet.
+  // A gate that misfires during real work is worse than one that misses a loop.
+  const transcriptPath = (payload.transcript_path as string)
+    || deriveTranscriptPath(session.sessionId, (payload.cwd as string) ?? process.cwd(), homedir());
+  const sinceText = countToolCallsSinceText(transcriptPath);
+  session.toolCallsSinceLastText = sinceText; // keep the field truthful for observers
+  if (sinceText > session.toolLimit && !session.softInterrupted) {
     session.softInterrupted = true;
-    log.debug(`Tool loop soft interrupt: ${session.toolCallsSinceLastText} calls since last text (limit ${session.toolLimit}, ${session.toolCallCount} this turn)`);
+    log.debug(`Tool loop soft interrupt: ${sinceText} calls since last text (limit ${session.toolLimit}, ${session.toolCallCount} this turn)`);
     return makeHookOutput("PreToolUse",
       `[LaqrumCode] Remember your tier0 directives are important to the user and make you more helpful. ` +
         `${session.toolCallsSinceLastText} tool calls without producing any output. ` +

@@ -178,3 +178,132 @@ export function readTurnTokenUsage(transcriptPath) {
         return null;
     return { inputTokens: latestInput ?? 0, outputTokens: outputSum };
 }
+// ── Loop detection (issue #20) ───────────────────────────────────────────────
+/**
+ * Derive a Claude Code transcript path from a session id and working directory.
+ *
+ * Fallback for hook payloads that don't carry `transcript_path`. Claude Code
+ * stores transcripts at `~/.claude/projects/<cwd-with-separators-as-dashes>/
+ * <session-id>.jsonl` — e.g. cwd `/home/u/proj` becomes `-home-u-proj`.
+ *
+ * Only usable because v0.8.5 unified the session-id spaces: `session.sessionId`
+ * is now Claude Code's own session UUID (see mcp-client resolveSessionId), which
+ * is exactly the transcript filename. Before that the tool path carried
+ * `mcp-client-<pid>` and this derivation would have pointed at nothing.
+ */
+export function deriveTranscriptPath(sessionId, cwd, home) {
+    if (!sessionId || !cwd || !home)
+        return "";
+    const slug = cwd.replace(/[/\\]/g, "-");
+    return `${home}/.claude/projects/${slug}/${sessionId}.jsonl`;
+}
+/** Read the tail of a file as UTF-8, dropping the partial first line. */
+function readTail(path, bytes) {
+    try {
+        const stats = statSync(path);
+        if (stats.size <= bytes)
+            return readFileSync(path, "utf-8");
+        const buf = Buffer.alloc(bytes);
+        const fd = openSync(path, "r");
+        try {
+            readSync(fd, buf, 0, bytes, stats.size - bytes);
+        }
+        finally {
+            closeSync(fd);
+        }
+        const raw = buf.toString("utf-8");
+        const nl = raw.indexOf("\n");
+        return nl >= 0 ? raw.slice(nl + 1) : raw;
+    }
+    catch {
+        return null;
+    }
+}
+/** Minimum characters of assistant text that count as "the model said something".
+ *  Matches the threshold the (test-only) llm-output handler used, so behaviour is
+ *  unchanged for anyone who was relying on that path in tests. A bare "Ok." is
+ *  not narration and must not reset the loop counter. */
+const MIN_NARRATION_CHARS = 50;
+/**
+ * How many assistant tool calls have been recorded since the model last produced
+ * visible text (or since the last real user turn).
+ *
+ * This is the signal the planning gate in hook-handlers/pre-tool-use.ts needs and
+ * has never had. `session.toolCallsSinceLastText` was incremented but never reset,
+ * because the only code that zeroed it (engine/hooks/llm-output.ts) is test-only
+ * and Claude Code's hook surface has no assistant-text event. Deriving the count
+ * from the transcript sidesteps that entirely — and is stateless, so it stays
+ * correct across daemon restarts, relay reconnects and session-map eviction.
+ *
+ * Two structural facts about Claude Code transcripts make this work, both
+ * verified against a live file rather than assumed:
+ *
+ *  1. Each content block is its own JSONL entry. A turn appears as a run of
+ *     separate `assistant` entries — `text`, then `thinking`, then `tool_use`,
+ *     … — not one message with a mixed content array. So "did the model narrate
+ *     before this tool call" is answerable by scanning entries in order.
+ *  2. The assistant entry carrying a `tool_use` is flushed to disk BEFORE the
+ *     tool runs, so a PreToolUse hook sees the text that preceded it.
+ *
+ * `thinking` blocks deliberately do NOT reset the count: thinking happens just
+ * as much inside a loop, and the gate exists to notice silence toward the user.
+ *
+ * A `user` entry resets the count, but only when it is a real user turn —
+ * tool_result blocks come back as `user`-typed entries, and treating those as
+ * user input would reset on every single tool call and disable the gate.
+ *
+ * Returns 0 when the transcript is missing or unreadable, which fails OPEN: the
+ * gate simply never fires rather than firing spuriously.
+ */
+export function countToolCallsSinceText(transcriptPath, minTextChars = MIN_NARRATION_CHARS) {
+    if (!transcriptPath)
+        return 0;
+    const raw = readTail(transcriptPath, READ_TAIL_BYTES);
+    if (raw === null)
+        return 0;
+    let count = 0;
+    for (const line of raw.split(/\r?\n/)) {
+        if (!line.trim())
+            continue;
+        let obj;
+        try {
+            obj = JSON.parse(line);
+        }
+        catch {
+            continue; // truncated / interleaved write — skip, don't abort
+        }
+        const content = obj.message?.content;
+        if (obj.type === "user") {
+            if (!isPurelyToolResult(content))
+                count = 0;
+            continue;
+        }
+        if (obj.type !== "assistant")
+            continue;
+        const blocks = Array.isArray(content) ? content : [];
+        for (const b of blocks) {
+            const type = b?.type;
+            if (type === "text") {
+                const t = b.text ?? "";
+                if (t.trim().length >= minTextChars)
+                    count = 0;
+            }
+            else if (type === "tool_use") {
+                count++;
+            }
+        }
+        // A string-content assistant entry is plain text.
+        if (typeof content === "string" && content.trim().length >= minTextChars)
+            count = 0;
+    }
+    return count;
+}
+/** True when a `user` entry carries only tool_result blocks — i.e. it is the
+ *  transport for a tool's output, not something the human typed. */
+function isPurelyToolResult(content) {
+    if (!Array.isArray(content))
+        return false;
+    if (content.length === 0)
+        return false;
+    return content.every((b) => b?.type === "tool_result");
+}
