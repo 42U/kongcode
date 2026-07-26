@@ -37,7 +37,7 @@ import { MCP_TOOLS, MCP_TO_IPC_METHOD } from "../shared/tool-defs.js";
 import { IpcErrorCode } from "../shared/ipc-types.js";
 import { log } from "../engine/log.js";
 
-const CLIENT_VERSION = "0.8.4";
+const CLIENT_VERSION = "0.8.5";
 
 let ipc: IpcClient | null = null;
 /** In-flight connect promise — concurrent callers share it so we never
@@ -45,9 +45,45 @@ let ipc: IpcClient | null = null;
  *  c3fb591 documented). The cache clears on success or failure. */
 let ipcInFlight: Promise<IpcClient> | null = null;
 /** Track our session ID so every IPC call carries it — daemon's session map
- *  is keyed on this. LAQRUMCODE_SESSION_ID env var lets users pin a stable id;
- *  default uses pid for per-process uniqueness. */
-const SESSION_ID = process.env.LAQRUMCODE_SESSION_ID ?? `mcp-client-${process.pid}`;
+ *  is keyed on this.
+ *
+ *  ipc-types.ts states the contract: "Every RPC carries the originating Claude
+ *  Code session id". Until v0.8.5 this invented `mcp-client-${pid}` instead,
+ *  which meant the daemon held TWO SessionStates per conversation in two
+ *  disjoint id spaces — the hook path keyed on Claude Code's UUID, the tool
+ *  path on our pid — and anything written under one identity was invisible to
+ *  the other. That silently broke tier-1 core-memory scoping (rows written by
+ *  the core_memory tool could never match the session rendering context) and
+ *  `injectedSections` invalidation (it cleared the cache on the session that
+ *  does not build the prompt). It also reset the per-session tier-0 write cap
+ *  whenever the relay restarted mid-conversation.
+ *
+ *  Claude Code exports the real id as CLAUDE_CODE_SESSION_ID (verified present
+ *  on live relay processes, distinct per conversation, stable across the
+ *  conversation). Prefer it.
+ *
+ *  Precedence is deliberate:
+ *   - LAQRUMCODE_SESSION_ID first: an explicit pin must always win.
+ *     daemon/auto-drain.ts sets it to a fresh UUID specifically to isolate a
+ *     spawned drain agent from its parent; inheriting CLAUDE_CODE_SESSION_ID
+ *     would undo that.
+ *   - CLAUDE_CODE_SESSION_ID second: the contract's intended value.
+ *   - pid last: unchanged behaviour for non-Claude-Code MCP hosts, where
+ *     neither variable exists.
+ *
+ *  Note CLAUDE_CODE_CHILD_SESSION is a boolean flag ("1"), not a rival id — a
+ *  subagent still reports its parent conversation, which is the attribution we
+ *  want. */
+export function resolveSessionId(
+  env: NodeJS.ProcessEnv = process.env,
+  pid: number = process.pid,
+): string {
+  return env.LAQRUMCODE_SESSION_ID
+    || env.CLAUDE_CODE_SESSION_ID
+    || `mcp-client-${pid}`;
+}
+
+const SESSION_ID = resolveSessionId();
 
 /** Decide what to do given a version-mismatch outcome from meta.requestSupersede.
  *  Pure function so the policy is testable without real socket setup. */
@@ -277,6 +313,12 @@ async function handleToolCall(
       // (E2): a bare TCP reconnect can leave the new socket un-handshaked;
       // getOrConnectIpc()/connectAndHandshake below re-handshakes, re-authing it.
       log.warn(`[mcp-client] daemon transient error, reconnecting and retrying once: ${err.message}`);
+      // Jittered backoff before the reconnect. When one daemon exit rejects
+      // in-flight calls across several concurrent sessions at once, a zero-delay
+      // reconnect makes every relay re-handshake (and possibly re-spawn) in the
+      // same instant — a thundering herd piling onto a cold daemon. ~0.1–0.6s of
+      // jitter spreads them out without meaningfully slowing a lone reconnect.
+      await new Promise((r) => setTimeout(r, 100 + Math.floor(Math.random() * 500)));
       ipc?.close();
       ipc = null;
       try {

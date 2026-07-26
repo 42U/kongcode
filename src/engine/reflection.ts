@@ -12,6 +12,7 @@
 import type { SurrealStore } from "./surreal.js";
 import { swallow, safeId } from "./errors.js";
 import { cosineSimilarity } from "./graph-context.js";
+import { stripStructuralTags } from "./sanitize.js";
 
 // --- Types ---
 
@@ -95,8 +96,12 @@ export async function retrieveReflections(
 export function formatReflectionContext(reflections: Reflection[]): string {
   if (reflections.length === 0) return "";
 
+  // Sanitize the interpolated fields, not the assembled block — the
+  // <reflection_context> wrapper is itself a structural tag and must survive.
+  // Reflection text is daemon-extracted from conversation and never sanitized
+  // on write.
   const lines = reflections.map((r) => {
-    return `[reflection/${r.category}] ${r.text}`;
+    return `[reflection/${stripStructuralTags(String(r.category ?? ""))}] ${stripStructuralTags(String(r.text ?? ""))}`;
   });
 
   return `\n<reflection_context>\n[Lessons from past sessions — avoid repeating these mistakes]\n${lines.join("\n\n")}\n</reflection_context>`;

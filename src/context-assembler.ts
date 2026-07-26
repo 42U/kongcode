@@ -14,6 +14,7 @@ import { upsertAndLinkConcepts } from "./engine/concept-extract.js";
 import { swallow } from "./engine/errors.js";
 import { log } from "./engine/log.js";
 import { loadPrivacyConfig, redactSecrets, isIgnoredProject } from "./engine/redact.js";
+import { stripStructuralTags } from "./engine/sanitize.js";
 
 /**
  * Run the full context retrieval pipeline and return a formatted string
@@ -110,7 +111,13 @@ export async function assembleContextString(
             wakeupTimer = setTimeout(() => resolve(null), 2000);
           }),
         ]);
-        if (wakeup) parts.push(wakeup);
+        // Sanitize: synthesizeWakeup interpolates verbatim previous-session
+        // turn text, handoff text and identity/soul fields, none of which are
+        // sanitized at write time. Since v0.8.5 the injection wrapper no longer
+        // strips structural tags from the assembled string (it was deleting
+        // laqrumcode's own section tags), so every contributor to that string
+        // has to sanitize its own content.
+        if (wakeup) parts.push(stripStructuralTags(wakeup));
       } catch { /* non-critical */ } finally {
         // Clear so a fast-resolving wakeupPromise doesn't leak a 2s pending
         // Timeout per first-turn context assembly.
@@ -120,7 +127,8 @@ export async function assembleContextString(
 
     // Include compaction summary if present
     if (session._compactionSummary) {
-      parts.push(session._compactionSummary);
+      // Built in pre-compact.ts from raw turn text (LAST:/PENDING:/RECENT ERRORS:).
+      parts.push(stripStructuralTags(session._compactionSummary));
       session._compactionSummary = undefined;
     }
 
@@ -129,7 +137,7 @@ export async function assembleContextString(
       const gc = session._graduationCelebration;
       parts.push(
         `[SOUL GRADUATION] Quality: ${gc.qualityScore.toFixed(2)} | Volume: ${gc.volumeScore.toFixed(2)}\n` +
-        gc.soulSummary,
+        stripStructuralTags(gc.soulSummary),
       );
       session._graduationCelebration = undefined;
     }

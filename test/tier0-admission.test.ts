@@ -143,11 +143,12 @@ describe("core_memory add — refusal wording matches what actually happened", (
 });
 
 describe("core_memory update — routed through the same budget check", () => {
-  it("refuses a priority raise that silently evicts other entries", async () => {
-    // Nothing about the TEXT changes here. Raising p50 -> p100 raises this
-    // entry's own per-item cap, so its rendered cost grows by ~1600 chars and
-    // the tail of the tier falls out of the budget. The add-side check never
-    // sees this path.
+  it("lets a priority raise through — under two-pass admission it cannot evict", async () => {
+    // Raising p50 -> p100 raises this entry's per-item CAP, but caps are only
+    // paid out of leftover slack (pass 2), never out of another entry's
+    // admission (pass 1). So the raise takes whatever room is spare and stops;
+    // nobody is pushed out, and there is nothing to refuse. Before the
+    // two-pass fix this same setup evicted the tail.
     const rows = [entry("core_memory:a", 50, 5_000)];
     let used = 803 + 6;
     while (used + 706 <= TIER0_BUDGET) {
@@ -159,8 +160,29 @@ describe("core_memory update — routed through the same budget check", () => {
     const written: Record<string, unknown>[] = [];
     const tool = makeTool(rows, (f) => written.push(f));
     const res = await tool.execute("t", { action: "update", id: "core_memory:a", priority: 100 });
-    expect((res!.details as { reason?: string }).reason).toBe("would_evict");
-    expect(written).toHaveLength(0); // refused BEFORE the write, not after
+    expect((res!.details as { id?: string }).id).toBe("core_memory:a");
+    expect(written).toHaveLength(1);
+
+    // And the raise still evicts nobody once applied.
+    const after = rows.map((r) => (String(r.id) === "core_memory:a" ? { ...r, priority: 100 } : r));
+    expect(applyCoreBudgetVerbose(after, TIER0_BUDGET).dropped).toEqual([]);
+  });
+
+  it("still refuses an update that moves a row INTO tier 0 when there is no room", async () => {
+    // The one remaining way an update can cost tier 0 a whole admission slot.
+    const rows: CoreMemoryEntry[] = [];
+    let used = 0;
+    while (used + 706 <= TIER0_BUDGET) {
+      rows.push(entry(`core_memory:f${rows.length}`, 90, 700));
+      used += 706;
+    }
+    rows.push(entry("core_memory:t1row", 10, 700, 1)); // currently tier 1
+
+    const written: Record<string, unknown>[] = [];
+    const tool = makeTool(rows, (f) => written.push(f));
+    const res = await tool.execute("t", { action: "update", id: "core_memory:t1row", tier: 0 });
+    expect((res!.details as { reason?: string }).reason).toBe("budget_full");
+    expect(written).toHaveLength(0);
   });
 
   it("admits an oversized rewrite but the renderer still caps it", async () => {

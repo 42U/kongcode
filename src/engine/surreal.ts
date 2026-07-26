@@ -151,6 +151,32 @@ export function utilityMean(row: {
   return row.avg_utilization ?? null;
 }
 
+/** v0.8.5 — pure anti-join for archiveOldTurns, extracted so it is unit-testable
+ *  without a live DB. Returns candidate turn rows whose stringified id
+ *  (`sid` = `<string>id`, e.g. "turn:xxx") is NOT present in
+ *  `referencedMemoryIds` (the retrieval_outcome.memory_id values, stored as
+ *  strings), capped at `limit`. Replaces the old in-DB
+ *  `<string>id NOT IN (SELECT VALUE memory_id ...)` membership test — which was
+ *  O(stale × referenced) with LIMIT applied AFTER the filter, so the whole
+ *  backlog paid the cost and crossed the 8s TIMEOUT once it grew — with an
+ *  O(stale + referenced) Set lookup. memory_id strings that aren't turns (e.g.
+ *  "guaranteed:...") can never equal a "turn:xxx" sid, so they're ignored. */
+export function selectUnreferencedTurns<T extends { sid: string }>(
+  candidates: T[],
+  referencedMemoryIds: Iterable<unknown>,
+  limit: number,
+): T[] {
+  const inUse = new Set<string>();
+  for (const m of referencedMemoryIds) inUse.add(String(m));
+  const out: T[] = [];
+  for (const row of candidates) {
+    if (inUse.has(row.sid)) continue;
+    out.push(row);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
 /** K14 — restore chronological (oldest→newest) order for a page fetched
  *  `ORDER BY timestamp DESC` off the session index. We sort ascending on the
  *  selected `timestamp` rather than a bare `.reverse()`: a reverse assumes the
@@ -2962,22 +2988,69 @@ export class SurrealStore {
       // after week 1 regardless of volume.
       if (!(await this.shouldRunMaintenance("archiveOldTurns", 500, 7, count))) return 0;
 
-      // A server-side `TIMEOUT` caps this scan at 8s ON THE SERVER. Without it,
-      // an overloaded instance lets this (anti-join) scan run to the 60s CLIENT
-      // deadline in deadlineQuery, which flags the shared WS connection "zombie"
-      // and tears it down (close() + reconnect) — rejecting in-flight HOOK
-      // queries and making the daemon intermittently "unreachable" (observed
-      // 2026-06-27). A SurrealDB TIMEOUT error is "...exceeded the timeout: 8s",
-      // which does NOT contain "deadline exceeded", so it does NOT match
-      // isRetryableSurrealError → no zombie flag, no shared-socket reconnect, no
-      // retry-doubling. Worst case the archival skips a cycle (caught → returns
-      // 0) while the daemon stays responsive; the client 60s deadline remains
-      // the true-zombie backstop for genuinely hung sockets.
-      const staleRows = await this.queryFirst<{ id: string }>(
-        `SELECT id FROM turn WHERE timestamp < time::now() - 7d AND pruned_at IS NONE AND <string>id NOT IN (SELECT VALUE memory_id FROM retrieval_outcome WHERE memory_table = 'turn') LIMIT 500 TIMEOUT 8s`,
+      // v0.8.5: split the old single-query anti-join into two INDEXED scans + an
+      // O(1) Set membership in app code (selectUnreferencedTurns). The previous
+      //   `... AND <string>id NOT IN (SELECT VALUE memory_id FROM
+      //    retrieval_outcome WHERE memory_table='turn') LIMIT 500`
+      // applied LIMIT *after* the membership filter, so every stale turn (not
+      // just 500) paid a per-row `<string>id NOTINSIDE(subquery)` test —
+      // O(stale × referenced). Once the backlog grew (~2026-06) it crossed the
+      // 8s TIMEOUT, threw, and the backlog never drained. memory_id is stored as
+      // a string ("turn:xxx"), so the membership is plain string equality.
+      // The 8s server-side TIMEOUTs below are KEPT as a safety cap: a timeout
+      // throws → the catch records a status='error' row → shouldRunMaintenance's
+      // 30-min FAILURE_BACKOFF stops per-boot re-fire. A SurrealDB TIMEOUT error
+      // ("...exceeded the timeout: 8s") does NOT match isRetryableSurrealError,
+      // so it never flags the shared WS socket zombie — that flag/reconnect was
+      // the 2026-06-27 daemon-flap "unreachable" symptom.
+      //
+      // Candidates are PAGED, not capped. A single `LIMIT 2000` window looks
+      // like a safe over-fetch but is not: referenced turns never get
+      // `pruned_at` set, so they stay candidates forever and pile up at the head
+      // of this (timestamp-ascending, stable) scan while archivable rows only
+      // appear behind them. Measured on a real store: 1082 candidates, 3
+      // archivable, all three in the last 4 rows, referenced density flat at
+      // 99.7%. Once the stuck referenced prefix exceeds the window the page
+      // yields nothing on every run, the job records status='ok', and the
+      // backlog grows forever with no error to notice. Paging walks past the
+      // prefix; the page cap plus the overall TIMEOUT bound the work per cycle.
+      const referenced = await this.queryFirst<string>(
+        `SELECT VALUE memory_id FROM retrieval_outcome WHERE memory_table = 'turn' TIMEOUT 8s`,
       );
-      if (!staleRows.length) return 0;
-      for (const row of staleRows as { id: string }[]) {
+      const PAGE = 2000;
+      const MAX_PAGES = 25; // 50k candidates scanned per cycle, worst case
+      const staleRows: { id: unknown; sid: string }[] = [];
+      let scanned = 0;
+      for (let page = 0; page < MAX_PAGES && staleRows.length < 500; page++) {
+        // `timestamp` is in the projection deliberately: SurrealDB 3.x rejects
+        // ORDER BY on a field absent from the selection ("Missing order idiom").
+        // It currently only parses because queryFirst's patchOrderByFields
+        // rewrites it — relying on that would make this a hard parse error the
+        // day the rewriter changes.
+        const candidates = await this.queryFirst<{ id: unknown; sid: string }>(
+          `SELECT id, <string>id AS sid, timestamp FROM turn
+           WHERE timestamp < time::now() - 7d AND pruned_at IS NONE
+           ORDER BY timestamp ASC LIMIT ${PAGE} START ${page * PAGE} TIMEOUT 8s`,
+        );
+        if (!candidates.length) break;
+        scanned += candidates.length;
+        staleRows.push(...selectUnreferencedTurns(candidates, referenced, 500 - staleRows.length));
+        if (candidates.length < PAGE) break; // last page
+      }
+      if (!staleRows.length) {
+        // Distinguish "nothing to do" from "there is a backlog and none of it is
+        // archivable" — the second is the silent-stall shape and must be
+        // visible. Keying this on the page budget (50k) was useless: the real
+        // store carries ~1k candidates, so the stall it was written to surface
+        // would never have tripped it. Any non-empty candidate set that yields
+        // nothing is the condition worth reporting.
+        if (scanned > 0) {
+          log.warn(`[maintenance] archiveOldTurns: ${scanned} stale candidates, none archivable (all still referenced by retrieval_outcome) — backlog is not draining`);
+        }
+        await this.recordMaintenanceRun("archiveOldTurns", 0, Date.now() - started);
+        return 0;
+      }
+      for (const row of staleRows) {
         try {
           assertRecordId(String(row.id));
           const rid = String(row.id);
@@ -3002,6 +3075,22 @@ export class SurrealStore {
       return n;
     } catch (e) {
       swallow.warn("surreal:archiveOldTurns", e);
+      // E11 hot-loop fix: record a status='error' row so shouldRunMaintenance's
+      // 30-min FAILURE_BACKOFF engages. This catch (uniquely among maintenance
+      // jobs) previously recorded NOTHING on failure — so once the anti-join
+      // scan above started exceeding its 8s TIMEOUT (backlog of stale turns +
+      // retrieval_outcome grew past ~2026-06), the newest maintenance_runs row
+      // stayed the last SUCCESS, went >7d old, and the AGE gate re-fired this
+      // full-core 8s scan on EVERY boot/cycle (a CPU sink + the 2026-06-27 flap
+      // accelerant) while never draining the backlog. An error row caps retries
+      // at one per 30 min until the underlying scan is made to complete.
+      await this.recordMaintenanceRun(
+        "archiveOldTurns",
+        0,
+        Date.now() - started,
+        "error",
+        e instanceof Error ? e.message : String(e),
+      );
       return 0;
     }
   }

@@ -61,6 +61,19 @@ export declare function utilityMean(row: {
     retrieval_count?: number | null;
     avg_utilization?: number | null;
 }): number | null;
+/** v0.8.5 — pure anti-join for archiveOldTurns, extracted so it is unit-testable
+ *  without a live DB. Returns candidate turn rows whose stringified id
+ *  (`sid` = `<string>id`, e.g. "turn:xxx") is NOT present in
+ *  `referencedMemoryIds` (the retrieval_outcome.memory_id values, stored as
+ *  strings), capped at `limit`. Replaces the old in-DB
+ *  `<string>id NOT IN (SELECT VALUE memory_id ...)` membership test — which was
+ *  O(stale × referenced) with LIMIT applied AFTER the filter, so the whole
+ *  backlog paid the cost and crossed the 8s TIMEOUT once it grew — with an
+ *  O(stale + referenced) Set lookup. memory_id strings that aren't turns (e.g.
+ *  "guaranteed:...") can never equal a "turn:xxx" sid, so they're ignored. */
+export declare function selectUnreferencedTurns<T extends {
+    sid: string;
+}>(candidates: T[], referencedMemoryIds: Iterable<unknown>, limit: number): T[];
 /** Whitelist of valid SurrealDB edge table names — prevents SQL injection via edge interpolation. */
 declare const VALID_EDGES: Set<string>;
 declare function assertValidEdge(edge: string): void;

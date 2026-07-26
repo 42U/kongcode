@@ -156,6 +156,34 @@ async function seedCognitiveBootstrapImpl(
     swallow.warn("bootstrap:migrateLegacyCore", e);
   }
 
+  // v0.8.5 one-shot: retire tier-1 rows stamped with the pre-unification relay
+  // identity. Until v0.8.5 the MCP relay sent `mcp-client-<pid>` as its session
+  // id while the context renderer keyed on Claude Code's session UUID, so these
+  // rows can never match a live session again once tier-1 reads are scoped.
+  // Archive them EXPLICITLY rather than letting them go quietly invisible —
+  // some are user-set safety rules, and "silently stopped loading" is exactly
+  // the failure mode this release exists to remove. Soft-archive per the
+  // append-only convention; `core_memory list` still shows them.
+  try {
+    await store.queryExec(
+      `UPDATE core_memory SET
+         active = false,
+         archived_at = time::now(),
+         archive_reason = 'tier1_session_id_space_unified_v0.8.5'
+       WHERE tier = 1
+         AND (active = true OR active IS NONE)
+         AND session_id != NONE
+         AND string::starts_with(session_id, 'mcp-client-')`,
+      // `session_id != NONE` is load-bearing, not defensive: session_id is
+      // option<string> and bootstrap-seeded tier-1 rows leave it unset.
+      // string::starts_with throws on NONE (verified against SurrealDB 3.1.4),
+      // and queryExec would swallow that — the migration would appear to run
+      // and silently archive nothing.
+    );
+  } catch (e) {
+    swallow.warn("bootstrap:migrateLegacyTier1SessionIds", e);
+  }
+
   try {
     // Version-tag check: look for an entry marked with the current
     // BOOTSTRAP_VERSION. If absent, re-seed the core entries (clearing stale

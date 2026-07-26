@@ -98,13 +98,20 @@ export function checkTier0Admission(
 
   // Incumbents = what remains alongside the candidate. On update the row being
   // rewritten drops out so its OLD cost is not counted on top of its new one.
-  const incumbents = replacingId ? existing.filter((e) => e.id !== replacingId) : [...existing];
+  // String() every id before comparing. SurrealStore.queryFirst does no id
+  // normalization, so `e.id` is a surrealdb RecordId OBJECT, not a string — a
+  // bare `===` against an id string is always false and the comparison silently
+  // matches nothing. (createCoreMemory and archiveOldTurns already String() for
+  // this reason.) Mocked tests using plain-string ids cannot catch it.
+  const incumbents = replacingId
+    ? existing.filter((e) => String(e.id) !== String(replacingId))
+    : [...existing];
 
   // Baseline: what the renderer drops today, candidate absent. Array sort is
   // stable, so equal priorities keep store order and the candidate — appended
   // last — never outranks an incumbent it ties with.
   const baseline = applyCoreBudgetVerbose([...incumbents].sort(byPriorityDesc), budgetChars);
-  const alreadyDropped = new Set(baseline.dropped.map((d) => d.id));
+  const alreadyDropped = new Set(baseline.dropped.map((d) => String(d.id)));
 
   const fit = applyCoreBudgetVerbose([...incumbents, candidate].sort(byPriorityDesc), budgetChars);
   const base = {
@@ -113,12 +120,15 @@ export function checkTier0Admission(
     budgetChars,
   };
 
-  if (fit.dropped.some((d) => d.id === candidate.id)) {
+  const candidateId = String(candidate.id);
+  if (fit.dropped.some((d) => String(d.id) === candidateId)) {
     return { ok: false, reason: "budget_full" as const, evicted: [], ...base };
   }
   // Greedy fill in priority order is monotonic — inserting the candidate can
   // only ever grow the drop set — so this difference is exactly what IT displaced.
-  const evicted = fit.dropped.filter((d) => d.id !== candidate.id && !alreadyDropped.has(d.id));
+  const evicted = fit.dropped.filter(
+    (d) => String(d.id) !== candidateId && !alreadyDropped.has(String(d.id)),
+  );
   if (evicted.length) {
     return { ok: false, reason: "would_evict" as const, evicted, ...base };
   }
@@ -245,7 +255,7 @@ export function createCoreMemoryToolDef(state: GlobalPluginState, session: Sessi
               const candidate: CoreMemoryEntry = {
                 id: CANDIDATE_ID,
                 text: sanitized,
-                category: params.category ?? "general",
+                category: stripStructuralTags(params.category ?? "general"),
                 priority: params.priority ?? 50,
                 tier: 0,
                 active: true,
@@ -301,7 +311,10 @@ export function createCoreMemoryToolDef(state: GlobalPluginState, session: Sessi
             // it causes in the tail is silent, which is the same failure the
             // add-side check exists to prevent.
             const all = await store.getAllCoreMemory();
-            const current = all.find((e) => e.id === params.id);
+            // String(): rows carry RecordId objects, so `e.id === params.id`
+            // is always false and this guard would never fire (v0.8.5 fix —
+            // the check shipped dead because its tests mocked string ids).
+            const current = all.find((e) => String(e.id) === params.id);
             const newText = params.text !== undefined ? stripStructuralTags(params.text) : current?.text;
             const newTier = params.tier ?? current?.tier;
             if (current && newTier === 0 && newText !== undefined) {
@@ -325,7 +338,7 @@ export function createCoreMemoryToolDef(state: GlobalPluginState, session: Sessi
               fields.text = newText;
               log.warn(`[core-memory] update ${params.id}: "${String(fields.text).slice(0, 120)}..." (session=${session.sessionId})`);
             }
-            if (params.category !== undefined) fields.category = params.category;
+            if (params.category !== undefined) fields.category = stripStructuralTags(params.category);
             if (params.priority !== undefined) fields.priority = params.priority;
             if (params.tier !== undefined) fields.tier = params.tier;
             const updated = await store.updateCoreMemory(params.id, fields);

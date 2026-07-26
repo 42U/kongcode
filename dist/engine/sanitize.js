@@ -19,8 +19,43 @@ const STRUCTURAL_TAGS = [
     "user-prompt-submit-hook",
 ];
 const TAG_RE = new RegExp(`</?(?:${STRUCTURAL_TAGS.join("|")})\\b[^>]*>`, "gi");
+/** Safety bound on the fixpoint loops. Termination does not depend on it —
+ *  every pass that changes the string strictly shortens it, so convergence is
+ *  guaranteed in at most len/3 passes. The bound only caps worst-case work on a
+ *  pathological input; if it is ever hit, {@link neutralize} makes the leftover
+ *  inert rather than shipping it. An earlier version used a bound of 8 and
+ *  simply returned, which a 171-character depth-8 payload defeated. */
+const MAX_STRIP_PASSES = 64;
+/** Last resort when the loop bound is hit: defang every remaining `<` so no
+ *  residue can be read as a tag. Deliberately lossy — a mangled payload is
+ *  always preferable to a live one. */
+function neutralize(text) {
+    return text.replace(/</g, "&lt;");
+}
+/** Remove every occurrence of `re`, repeating until the string stops changing.
+ *  A single pass is not enough: deleting an inner tag splices the surrounding
+ *  halves into a new, live one —
+ *    "<active_dir<active_directives>ectives>" -> "<active_directives>"
+ *  and depth-N nesting needs N+1 passes. */
+function stripToFixpoint(text, re) {
+    let out = text;
+    for (let i = 0; i < MAX_STRIP_PASSES; i++) {
+        const next = out.replace(re, "");
+        if (next === out)
+            return out;
+        out = next;
+    }
+    return neutralize(out.replace(re, ""));
+}
 export function stripStructuralTags(text) {
-    return text.replace(TAG_RE, "").replace(/\n{3,}/g, "\n\n");
+    // Loop to a fixpoint. A SINGLE pass is defeatable by nesting, because
+    // removing the inner tag splices the outer halves into a live one:
+    //   "<active_dir<active_directives>ectives>"  --1 pass-->  "<active_directives>"
+    // which then renders to the model as a genuine directive block. This used to
+    // be masked by a second, whole-string strip at injection time; that pass was
+    // removed in v0.8.5 (it was deleting laqrumcode's own section tags), so the
+    // content-side strip has to be idempotent on its own.
+    return stripToFixpoint(text, TAG_RE).replace(/\n{3,}/g, "\n\n");
 }
 const REMINDER_RE = /<\/?system-reminder\b[^>]*>/gi;
 /**
@@ -41,5 +76,9 @@ const REMINDER_RE = /<\/?system-reminder\b[^>]*>/gi;
  * `<system-reminder>` from a prior hook or the harness.
  */
 export function stripReminderWrapper(text) {
-    return text.replace(REMINDER_RE, "").replace(/\n{3,}/g, "\n\n");
+    // Also a fixpoint, for the same reason and with sharper stakes: this one
+    // guards the envelope itself, so a surviving `</system-reminder>` closes the
+    // wrapper early and everything after it lands outside as plain instruction.
+    // "</system-remin</system-reminder>der>" defeats a single pass.
+    return stripToFixpoint(text, REMINDER_RE).replace(/\n{3,}/g, "\n\n");
 }

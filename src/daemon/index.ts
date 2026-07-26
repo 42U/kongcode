@@ -184,7 +184,7 @@ function pruneStalePluginCache(): void {
  *  but tool handlers return errors via globalState being null, just like mcp-server
  *  did. The user-facing surfacing happens through MetaHandshakeResponse's
  *  bootstrapPhase + bootstrapError fields. */
-async function initializeStack(): Promise<void> {
+async function initializeStack(getActiveClientCount?: () => number): Promise<void> {
   log.info("[daemon] initializing laqrumcode stack...");
   setBootstrapPhase("starting");
 
@@ -387,7 +387,30 @@ async function initializeStack(): Promise<void> {
     }
   }
 
-  runBootstrapMaintenance(globalState);
+  // 0.8.5: defer + gate bootstrap-maintenance on the daemon having retained an
+  // IPC client. During a daemon flap (e.g. a dist rebuild while the shared DB is
+  // slow), transient cold-boot daemons get spawned and idle-reaped within the
+  // idle window (~60s) WITHOUT ever holding a durable client; running the heavy
+  // archiveOldTurns/turn-table scans on each of them re-hammers the overloaded
+  // DB and lengthens the burst. A flap daemon has 0 active clients (that is *why*
+  // it reaps), so gating on activeClients>0 skips exactly those transient boots
+  // while a real serving daemon (relay attaches within seconds) still runs it.
+  // The once-per-process guard inside runBootstrapMaintenance makes this a no-op
+  // if a SessionStart hook already ran it. Backward-compatible: with no getter
+  // (e.g. tests), activeClients defaults to 1 and maintenance runs.
+  const MAINTENANCE_GATE_DELAY_MS = 15_000;
+  const maintenanceState = globalState!;
+  setTimeout(() => {
+    const activeClients = getActiveClientCount?.() ?? 1;
+    if (activeClients > 0) {
+      runBootstrapMaintenance(maintenanceState);
+    } else {
+      log.info(
+        "[daemon] skipping bootstrap-maintenance — no IPC client attached after " +
+        `${MAINTENANCE_GATE_DELAY_MS}ms grace (transient cold-boot daemon; avoids DB hammering during flap)`,
+      );
+    }
+  }, MAINTENANCE_GATE_DELAY_MS).unref?.();
 
   // Cross-encoder reranker (bge-reranker-v2-m3). Optional — if the model file
   // doesn't exist OR LAQRUMCODE_RERANKER_DISABLED=1, recall falls back to
@@ -787,15 +810,15 @@ async function main(): Promise<void> {
     log.info(`[daemon] TCP transport on 127.0.0.1:${tcpPort} — per-user handshake token enforced`);
   }
 
-  // Idle reaper config: 6s default (per user direction — anything longer
-  // mostly just holds RAM for nobody). The only real value of staying
-  // alive past the last disconnect is absorbing a fast close-and-reopen,
-  // and Claude Code restarts land within ~3-5s on warm cache. 6s gives
-  // a small grace window past that and reaps cleanly otherwise. Set 0 to
-  // reap immediately. Set higher (e.g. 30 min) for shared-server /
-  // cron-driven setups where intermittent clients don't want a cold-start
-  // penalty between disconnects. The timer arms on listen() and on every
-  // disconnect-to-zero; cancels on every connect.
+  // Idle reaper config: the timer fires once clients.size has been 0 for
+  // idleTimeoutMs, reaping the daemon so it doesn't hold RAM for nobody. The
+  // resolved default is resourceProfile.idleTimeoutMs — 300_000ms (5 min) on
+  // the "constrained" tier, 60_000ms (1 min) on "standard"/"generous" (see
+  // resource-tier.ts). Override with LAQRUMCODE_DAEMON_IDLE_TIMEOUT_MS (ms;
+  // 0 = reap immediately; higher for shared-server / cron-driven setups where
+  // intermittent clients don't want a cold-start penalty between disconnects).
+  // The timer arms on listen() and on every disconnect-to-zero; it cancels on
+  // every connect.
   const idleTimeoutMs = (() => {
     const env = process.env.LAQRUMCODE_DAEMON_IDLE_TIMEOUT_MS;
     if (env !== undefined) {
@@ -1157,7 +1180,7 @@ async function main(): Promise<void> {
   // async — clients that connect during this window see bootstrapPhase
   // progressing through the real lifecycle (npm-install → ... → ready).
   // Tool handlers return "still initializing" until globalState is set.
-  initializeStack().catch((err) => {
+  initializeStack(() => server.getStats().activeClients).catch((err) => {
     log.error("[daemon] initializeStack rejected:", err);
     setBootstrapPhase("failed", err instanceof Error ? err : new Error(String(err)));
   });

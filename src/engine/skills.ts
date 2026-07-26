@@ -12,6 +12,7 @@
 import type { SurrealStore } from "./surreal.js";
 import { swallow, safeId } from "./errors.js";
 import { assertRecordId } from "./surreal.js";
+import { stripStructuralTags } from "./sanitize.js";
 
 // --- Types ---
 
@@ -284,13 +285,19 @@ export async function findRelevantSkills(
 export function formatSkillContext(skills: Skill[]): string {
   if (skills.length === 0) return "";
 
+  // Sanitize every interpolated field. No skill-creation path calls
+  // stripStructuralTags, so a skill name/description/step authored (or
+  // extracted) with a forged <active_directives> block would render live in the
+  // injected context. Done per-field rather than on the assembled string so the
+  // <skill_context> wrapper below survives.
+  const clean = (v: unknown) => stripStructuralTags(String(v ?? ""));
   const lines = skills.map((s) => {
     const total = s.successCount + s.failureCount;
     const rate = total > 0 ? `${s.successCount}/${total} successful` : "new";
     const stepsStr = s.steps
-      .map((step, i) => `  ${i + 1}. [${step.tool}] ${step.description}`)
+      .map((step, i) => `  ${i + 1}. [${clean(step.tool)}] ${clean(step.description)}`)
       .join("\n");
-    return `### ${s.name} (${rate})\n${s.description}\n${s.preconditions ? `Pre: ${s.preconditions}\n` : ""}Steps:\n${stepsStr}${s.postconditions ? `\nPost: ${s.postconditions}` : ""}`;
+    return `### ${clean(s.name)} (${rate})\n${clean(s.description)}\n${s.preconditions ? `Pre: ${clean(s.preconditions)}\n` : ""}Steps:\n${stepsStr}${s.postconditions ? `\nPost: ${clean(s.postconditions)}` : ""}`;
   });
 
   return `\n<skill_context>\n[Previously successful procedures — adapt as needed, don't follow blindly]\n${lines.join("\n\n")}\n</skill_context>`;

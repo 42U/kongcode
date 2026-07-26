@@ -168,15 +168,33 @@ export function readDaemonToken(home: string = homedir()): string | null {
  *  plugin loader so the race window is small enough to ignore. Returns the fd
  *  to release later, or null if lock was already held (someone else spawning). */
 function tryAcquireSpawnLock(lockPath: string): number | null {
+  // Open O_EXCL and immediately stamp our pid so a racing client that loses the
+  // create never reads an EMPTY lock file. Previously the pid was written by the
+  // caller well after acquisition (post-mkdir, around the spawn); a racer hitting
+  // EEXIST in that window read "" → Number("")=0 → isPidAlive(0)=false (pid<=0)
+  // → it stole the lock and spawned a second daemon concurrently.
+  const openWithPid = (): number => {
+    const fd = openSync(lockPath, "wx", 0o644);
+    try { writeSync(fd, String(process.pid)); } catch {}
+    return fd;
+  };
   try {
-    return openSync(lockPath, "wx", 0o644);
+    return openWithPid();
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     try {
       const holderPid = Number(readFileSync(lockPath, "utf-8").trim());
-      if (!isPidAlive(holderPid)) {
+      // Only steal a lock whose holder is a CONCRETE, definitely-dead pid. BOTH
+      // guard clauses below are load-bearing — do NOT collapse to one:
+      //  - `holderPid > 0` refuses an EMPTY/whitespace lock (Number("")===0,
+      //    Number("  ")===0): a racer just created it via O_EXCL but hasn't
+      //    stamped its pid yet — "spawn in progress, held", must not be stolen.
+      //  - `Number.isFinite` refuses a partial/non-numeric write ("abc"→NaN).
+      // Dropping `> 0` would let an empty (0) lock pass isFinite and be stolen,
+      // re-racing a second spawn.
+      if (Number.isFinite(holderPid) && holderPid > 0 && !isPidAlive(holderPid)) {
         unlinkSync(lockPath);
-        try { return openSync(lockPath, "wx", 0o644); } catch {}
+        try { return openWithPid(); } catch {}
       }
     } catch {}
     return null;
@@ -388,8 +406,7 @@ export async function ensureDaemon(opts: DaemonSpawnOpts = {}): Promise<DaemonEn
     if (lockFd === null) throw new Error("daemon spawn lock contention — give up");
   }
 
-  // Write our PID into the lock file for diagnostics
-  try { writeSync(lockFd, String(process.pid)); } catch {}
+  // (pid is stamped into the lock at acquisition by tryAcquireSpawnLock)
 
   try {
     const scriptPath = opts.daemonScriptPath ?? resolveDaemonScript();
