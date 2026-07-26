@@ -7,3 +7,21 @@
  * never contains tag-breakout payloads.
  */
 export declare function stripStructuralTags(text: string): string;
+/**
+ * Strip ONLY the `<system-reminder>` wrapper, leaving every other structural
+ * tag in place.
+ *
+ * For text laqrumcode assembled itself and is about to wrap. The full
+ * {@link stripStructuralTags} is for *content* — anything sourced from a turn,
+ * a memory, a tool result — and running it over a finished envelope deletes
+ * the envelope: `<active_directives>`, `<session_directives>` and
+ * `<recalled_memory>` are all on its list, so the section tags laqrumcode had
+ * just written were removed on the way out and the model received tier-0 and
+ * tier-1 directives as one unlabelled run of bullets.
+ *
+ * Breakout is prevented by sanitizing the content going in (see
+ * graph-context `formatContextMessage`), not by scrubbing the container.
+ * This keeps the one property the wrapper actually needs: no nested
+ * `<system-reminder>` from a prior hook or the harness.
+ */
+export declare function stripReminderWrapper(text: string): string;

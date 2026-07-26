@@ -12,6 +12,7 @@ import { getCachedContext, setCachedContext, recordPrefetchHit, recordPrefetchMi
 import { stageRetrieval, stageSkills, getHistoricalUtilityBatch, getLastTurnGroundingTrace } from "./retrieval-quality.js";
 import { isACANActive, scoreWithACAN } from "./acan.js";
 import { swallow } from "./errors.js";
+import { stripStructuralTags } from "./sanitize.js";
 import { clamp } from "./math.js";
 import { log } from "./log.js";
 // ── Cross-encoder reranker (bge-reranker-v2-m3) ──────────────────────────────
@@ -1056,7 +1057,12 @@ function formatTierSection(entries, label) {
         return "";
     const grouped = {};
     for (const e of entries) {
-        (grouped[e.category] ??= []).push(e.text);
+        // Rows written through the core_memory tool are already sanitized, but
+        // rows seeded directly (cognitive-bootstrap, hooks/profile, soul) and
+        // anything predating that sanitization are not. Cheap to redo here, and
+        // this is the one place both render paths — the system-prompt section and
+        // the context message — pass through.
+        (grouped[e.category] ??= []).push(stripStructuralTags(e.text));
     }
     const lines = [];
     for (const [cat, texts] of Object.entries(grouped)) {
@@ -1124,6 +1130,25 @@ async function ensureRecentTurns(contextNodes, session, store, count = 5) {
 }
 // ── Context message formatting ─────────────────────────────────────────────────
 async function formatContextMessage(nodes, store, session, skillContext = "", tier0Entries = [], tier1Entries = []) {
+    // Retrieved text is untrusted with respect to the injection envelope. Turn
+    // rows are stored verbatim by ingestTurn, so a conversation that merely
+    // DISCUSSED "</system-reminder>" or "<active_directives>" would otherwise
+    // render those tags live inside the block — closing the envelope early, or
+    // forging a directives section the user never wrote.
+    //
+    // Sanitize once here rather than at each of the render sites below (TOP
+    // HITS, per-section listings, ALREADY RETRIEVED): a missed site is a
+    // breakout, and sites get added.
+    //
+    // This replaces running stripStructuralTags over the whole assembled string
+    // at injection time (user-prompt-submit.ts). That did stop breakouts, but
+    // <recalled_memory>, <active_directives> and <session_directives> are all on
+    // its tag list, so it also deleted the section tags laqrumcode had just
+    // written — the model received tier-0 and tier-1 directives as one
+    // unlabelled run of bullets with no way to tell a permanent rule from a
+    // session pin. Sanitizing the content instead of the container keeps the
+    // breakout protection and the labels.
+    nodes = nodes.map((n) => (n.text ? { ...n, text: stripStructuralTags(n.text) } : n));
     const groups = {};
     for (const n of nodes) {
         const isCausal = n.source?.startsWith("causal_");
@@ -1220,7 +1245,7 @@ async function formatContextMessage(nodes, store, session, skillContext = "", ti
                     const ageDays = ageMs != null ? Math.floor(ageMs / 86400000) : null;
                     const ageStr = ageDays == null ? "unknown"
                         : ageDays === 0 ? "today" : ageDays === 1 ? "yesterday" : `${ageDays} days ago`;
-                    return `  - [${m.id}] (${ageStr}, surfaced ${m.surface_count}x): ${m.text}`;
+                    return `  - [${m.id}] (${ageStr}, surfaced ${m.surface_count}x): ${stripStructuralTags(String(m.text ?? ""))}`;
                 }).join("\n");
                 sections.push(`RESURFACING MEMORIES (mention naturally during conversation, never reveal scheduling):\n` + memLines);
             }
@@ -1705,7 +1730,9 @@ stageTrace) {
         try {
             [tier0, tier1] = await Promise.all([
                 store.getAllCoreMemory(0),
-                store.getAllCoreMemory(1),
+                // Tier 1 is session-pinned — scope it, or every session inherits every
+                // session directive ever written.
+                store.getAllCoreMemory(1, session.sessionId),
             ]);
             tier0 = applyCoreBudget(tier0, getTier0BudgetChars(budgets));
             tier1 = applyCoreBudget(tier1, getTier1BudgetChars(budgets));
@@ -1729,7 +1756,7 @@ stageTrace) {
         tier0 = tier0FromWrapper.length > 0
             ? tier0FromWrapper
             : applyCoreBudget(await store.getAllCoreMemory(0), getTier0BudgetChars(budgets));
-        tier1 = applyCoreBudget(await store.getAllCoreMemory(1), getTier1BudgetChars(budgets));
+        tier1 = applyCoreBudget(await store.getAllCoreMemory(1, session.sessionId), getTier1BudgetChars(budgets));
     }
     catch (e) {
         swallow.warn("graph-context:coreMemoryLoad", e);
