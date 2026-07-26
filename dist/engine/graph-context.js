@@ -1730,7 +1730,9 @@ stageTrace) {
         try {
             [tier0, tier1] = await Promise.all([
                 store.getAllCoreMemory(0),
-                store.getAllCoreMemory(1),
+                // Tier 1 is session-pinned — scope it, or every session inherits every
+                // session directive ever written.
+                store.getAllCoreMemory(1, session.sessionId),
             ]);
             tier0 = applyCoreBudget(tier0, getTier0BudgetChars(budgets));
             tier1 = applyCoreBudget(tier1, getTier1BudgetChars(budgets));
@@ -1754,7 +1756,7 @@ stageTrace) {
         tier0 = tier0FromWrapper.length > 0
             ? tier0FromWrapper
             : applyCoreBudget(await store.getAllCoreMemory(0), getTier0BudgetChars(budgets));
-        tier1 = applyCoreBudget(await store.getAllCoreMemory(1), getTier1BudgetChars(budgets));
+        tier1 = applyCoreBudget(await store.getAllCoreMemory(1, session.sessionId), getTier1BudgetChars(budgets));
     }
     catch (e) {
         swallow.warn("graph-context:coreMemoryLoad", e);

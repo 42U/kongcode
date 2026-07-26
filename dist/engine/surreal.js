@@ -1778,8 +1778,28 @@ export class SurrealStore {
         return String(rows[0]?.id ?? "");
     }
     // ── Core Memory (Tier 0/1) ─────────────────────────────────────────────
-    async getAllCoreMemory(tier) {
+    /**
+     * Active core-memory entries, priority DESC.
+     *
+     * @param tier      0 (always loaded) or 1 (session-pinned); omit for all
+     * @param sessionId scope tier-1 rows to one session. Tier 1 is documented as
+     *   "pinned for the CURRENT session", but this query had no session filter
+     *   and nothing deactivates the rows at SessionEnd, so every tier-1 directive
+     *   ever written kept loading into every later session — including entries
+     *   that say "this session" in their own text, and campaign pins for versions
+     *   that already shipped. Callers rendering context MUST pass this. Rows with
+     *   no session_id are the bootstrap-seeded ones and stay global; management
+     *   surfaces (the core_memory `list` action, the UI) deliberately omit it so
+     *   an operator can still see and clean up everything.
+     */
+    async getAllCoreMemory(tier, sessionId) {
         try {
+            if (tier === 1 && sessionId) {
+                return await this.queryFirst(`SELECT * FROM core_memory
+           WHERE active = true AND tier = 1
+             AND (session_id = $sid OR session_id IS NONE OR session_id = "")
+           ORDER BY priority DESC`, { sid: sessionId });
+            }
             if (tier != null) {
                 return await this.queryFirst(`SELECT * FROM core_memory WHERE active = true AND tier = $tier ORDER BY priority DESC`, { tier });
             }

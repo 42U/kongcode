@@ -370,7 +370,21 @@ export declare class SurrealStore {
     }>;
     createMemory(text: string, embedding: number[] | null, importance: number, category?: string, sessionId?: string, projectId?: string, embeddingTarget?: string): Promise<string>;
     createMonologue(sessionId: string, category: string, content: string, embedding: number[] | null): Promise<string>;
-    getAllCoreMemory(tier?: number): Promise<CoreMemoryEntry[]>;
+    /**
+     * Active core-memory entries, priority DESC.
+     *
+     * @param tier      0 (always loaded) or 1 (session-pinned); omit for all
+     * @param sessionId scope tier-1 rows to one session. Tier 1 is documented as
+     *   "pinned for the CURRENT session", but this query had no session filter
+     *   and nothing deactivates the rows at SessionEnd, so every tier-1 directive
+     *   ever written kept loading into every later session — including entries
+     *   that say "this session" in their own text, and campaign pins for versions
+     *   that already shipped. Callers rendering context MUST pass this. Rows with
+     *   no session_id are the bootstrap-seeded ones and stay global; management
+     *   surfaces (the core_memory `list` action, the UI) deliberately omit it so
+     *   an operator can still see and clean up everything.
+     */
+    getAllCoreMemory(tier?: number, sessionId?: string): Promise<CoreMemoryEntry[]>;
     createCoreMemory(text: string, category: string, priority: number, tier: number, sessionId?: string): Promise<string>;
     updateCoreMemory(id: string, fields: Partial<Pick<CoreMemoryEntry, "text" | "category" | "priority" | "tier" | "active">>): Promise<boolean>;
     deleteCoreMemory(id: string): Promise<void>;
