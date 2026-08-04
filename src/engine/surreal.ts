@@ -254,6 +254,93 @@ export function raceWithDeadline<T>(p: Promise<T>, ms: number, label: string): P
   });
 }
 
+/** 0.8.7 (2026-08-02 incident): thresholds for concluding that the PROCESS —
+ *  not the connection — is wedged. That incident's shape: every query blew the
+ *  60s deadline, every reconnect "succeeded" (fresh Surreal, connect + signin
+ *  round-tripped fine), and the very next query died again — for two days —
+ *  while an identical fresh PROCESS queried the same server instantly. The
+ *  connection-level self-heal (ensureConnected) cannot reach process-level
+ *  poison (SDK module state, libuv/io_uring, kernel-side socket state …), so
+ *  past these thresholds the only honest repair is process replacement: the
+ *  daemon exits, and the pid-file spawn guard brings up a clean process on the
+ *  next hook/MCP demand (proven recovery path, ~seconds of downtime vs a
+ *  silent multi-day outage).
+ *
+ *  Tuning: a streak only exists while ZERO queries succeed — any success
+ *  resets it, so a merely-slow server (some queries blow the deadline, others
+ *  land) can never escalate. minTimeouts=10 is reachable inside one deadline
+ *  window when concurrent hook traffic wedges (17 in-flight RPCs observed);
+ *  the minStreakMs floor (3 min default) is what keeps a single transient
+ *  server stall from killing the daemon; minHeals=3 requires the medicine to
+ *  have actually run and failed repeatedly. All three must hold. */
+export const WEDGE_DEFAULTS = {
+  minTimeouts: 10,
+  minHeals: 3,
+  /** Env-overridable floor, clamped [30s, 1h]. */
+  minStreakMs: (() => {
+    const n = Number(process.env.LAQRUMCODE_WEDGE_STREAK_MS);
+    return Number.isFinite(n) && n > 0 ? Math.min(Math.max(Math.round(n), 30_000), 3_600_000) : 180_000;
+  })(),
+} as const;
+
+/** Pure accounting for the escalation decision (exported for unit tests, like
+ *  raceWithDeadline — test/wedge-escalation.test.ts). One instance per
+ *  SurrealStore; the store feeds it three events and fires its
+ *  irrecoverable-wedge handler when a record*() call returns true. The
+ *  detector latches: it returns true exactly once per store lifetime. */
+export class WedgeDetector {
+  private timeouts = 0;
+  private futileHeals = 0;
+  private streakStartedAt: number | null = null;
+  private escalatedFlag = false;
+
+  constructor(
+    private readonly cfg: { minTimeouts: number; minHeals: number; minStreakMs: number } = WEDGE_DEFAULTS,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** Any successful query round-trip disproves a process wedge — end the streak. */
+  recordQuerySuccess(): void {
+    this.timeouts = 0;
+    this.futileHeals = 0;
+    this.streakStartedAt = null;
+  }
+
+  /** A query blew QUERY_DEADLINE_MS. Returns true exactly once: when this
+   *  event crosses the escalation threshold. */
+  recordDeadlineTimeout(): boolean {
+    if (this.streakStartedAt === null) this.streakStartedAt = this.now();
+    this.timeouts++;
+    return this.check();
+  }
+
+  /** ensureConnected completed a connection rebuild while a streak is active.
+   *  Heals outside a streak are not evidence (nothing was failing). */
+  recordHealCompleted(): boolean {
+    if (this.streakStartedAt === null) return false;
+    this.futileHeals++;
+    return this.check();
+  }
+
+  get escalated(): boolean {
+    return this.escalatedFlag;
+  }
+
+  stats(): string {
+    const secs = this.streakStartedAt === null ? 0 : Math.round((this.now() - this.streakStartedAt) / 1000);
+    return `${this.timeouts} query-deadline timeouts and ${this.futileHeals} futile reconnects over ${secs}s with zero successful queries`;
+  }
+
+  private check(): boolean {
+    if (this.escalatedFlag || this.streakStartedAt === null) return false;
+    if (this.timeouts < this.cfg.minTimeouts) return false;
+    if (this.futileHeals < this.cfg.minHeals) return false;
+    if (this.now() - this.streakStartedAt < this.cfg.minStreakMs) return false;
+    this.escalatedFlag = true;
+    return true;
+  }
+}
+
 /** Errors worth one reconnect+retry (0.7.118 widened from connection-drop
  *  only). Three production-observed classes on 2026-06-10:
  *  - connection drop: "must be connected" / "ConnectionUnavailable"
@@ -610,6 +697,11 @@ export class SurrealStore {
           // zombieSuspect set so the next ensureConnected re-enters past the
           // line-445 early-return and retries the re-apply (T1: don't latch).
           if (this.schemaApplied) this.zombieSuspect = false;
+          // 0.8.7: the heal COMPLETED. If a wedge streak is active (queries
+          // dying with zero successes), count it — reconnects that keep
+          // "succeeding" while queries keep dying are exactly the
+          // process-wedge signature this store cannot fix from the inside.
+          if (this.wedge.recordHealCompleted()) this.fireIrrecoverableWedge();
           return;
         } catch (e) {
           if (attempt < MAX_ATTEMPTS) {
@@ -699,6 +791,38 @@ export class SurrealStore {
    *  disconnected even though the SDK disagrees. */
   private zombieSuspect = false;
 
+  /** 0.8.7: escalation accounting for the failure class ABOVE a zombie WS —
+   *  a process so poisoned that even FRESH connections' queries never settle.
+   *  See WEDGE_DEFAULTS for the incident and thresholds. */
+  private readonly wedge = new WedgeDetector();
+
+  /** Wired by the daemon to its graceful-exit path (exit → spawn-guard
+   *  respawn). Unwired embedders (mcp-server.ts standalone, tests) get the
+   *  loud log only — a library must not process.exit() on its own. */
+  private onIrrecoverableWedge: ((info: string) => void) | null = null;
+
+  setIrrecoverableWedgeHandler(cb: (info: string) => void): void {
+    this.onIrrecoverableWedge = cb;
+  }
+
+  private fireIrrecoverableWedge(): void {
+    if (this.shutdownFlag) return;
+    const info =
+      `SurrealDB self-heal is not working: ${this.wedge.stats()} — every reconnect built a ` +
+      `fresh healthy-looking connection whose queries still never settle, so the fault is ` +
+      `process-level state a connection rebuild cannot reach (2026-08-02 incident class). ` +
+      `Escalating to process replacement.`;
+    if (process.env.LAQRUMCODE_WEDGE_EXIT_DISABLED === "1") {
+      log.error(`[surreal] ${info} — exit suppressed (LAQRUMCODE_WEDGE_EXIT_DISABLED=1)`);
+      return;
+    }
+    if (this.onIrrecoverableWedge) {
+      this.onIrrecoverableWedge(info);
+    } else {
+      log.error(`[surreal] ${info} (no escalation handler wired in this embedder — cannot self-restart)`);
+    }
+  }
+
   /** Run a query function with one retry on retryable failures (connection
    *  drops, blown deadlines, auth-dropped reconnects). Reconnection is routed
    *  through ensureConnected() so concurrent callers share a single
@@ -759,7 +883,12 @@ export class SurrealStore {
   ): Promise<unknown> {
     const { flagZombie = true } = opts;
     try {
-      return await raceWithDeadline(this.db.query(fullSql, bindings), ms, "SurrealDB query");
+      const out = await raceWithDeadline(this.db.query(fullSql, bindings), ms, "SurrealDB query");
+      // 0.8.7: any successful round-trip disproves a process wedge — reset the
+      // escalation streak. (Also runs for ping()'s flagZombie:false calls: a
+      // success is conclusive evidence either way, only failures are not.)
+      this.wedge.recordQuerySuccess();
+      return out;
     } catch (e) {
       if (flagZombie && e instanceof Error && e.message.includes("deadline exceeded")) {
         this.zombieSuspect = true;
@@ -767,6 +896,7 @@ export class SurrealStore {
           `[surreal] query deadline exceeded after ${ms}ms — connection flagged zombie; ` +
           `forcing reconnect on retry. SQL head: ${fullSql.slice(0, 90)}`,
         );
+        if (this.wedge.recordDeadlineTimeout()) this.fireIrrecoverableWedge();
       }
       throw e;
     }

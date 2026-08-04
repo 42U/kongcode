@@ -134,6 +134,18 @@ let daemonServer: DaemonServer | null = null;
  *  Cleared in gracefulCleanup. */
 let sessionReaperTimer: ReturnType<typeof setInterval> | null = null;
 
+/** 0.8.7: called by SurrealStore's wedge escalation (either store — a process
+ *  wedge poisons every store in it). main() re-arms this to route through
+ *  gracefulCleanup once that exists; the pre-arm fallback hard-exits so even
+ *  a boot-time escalation yields a clean respawn from the spawn guard instead
+ *  of a wedged survivor. */
+let wedgeExitHandler: (reason: string) => void = (reason) => {
+  log.error(`[daemon] ${reason} — exiting (graceful path not armed yet)`);
+  try { removeOwnPidFile(); } catch { /* best-effort */ }
+  try { removeOwnTokenFile(); } catch { /* best-effort */ }
+  process.exit(1);
+};
+
 /** How often the stale-session reaper sweeps. 10 min is well below the default
  *  2h stale threshold in reapStaleSessions, so a leaked session is reclaimed
  *  within a couple of hours without adding measurable load. */
@@ -252,6 +264,10 @@ async function initializeStack(getActiveClientCount?: () => number): Promise<voi
   }
 
   const store = new SurrealStore(config.surreal);
+  // 0.8.7: when the connection-level self-heal proves futile (2026-08-02
+  // incident: two days of reconnect-"success" + query-death), replace the
+  // process instead of orbiting.
+  store.setIrrecoverableWedgeHandler((info) => wedgeExitHandler(info));
   const embeddings = new EmbeddingService(config.embedding, resourceProfile);
   globalState = new GlobalPluginState(config, store, embeddings);
   globalState.workspaceDir = process.env.LAQRUMCODE_PROJECT_DIR ?? process.cwd();
@@ -376,6 +392,9 @@ async function initializeStack(getActiveClientCount?: () => number): Promise<voi
   if (globalState && store.isAvailable()) {
     try {
       const maintenanceStore = new SurrealStore(config.surreal, { skipSupervisorRegister: true });
+      // 0.8.7: same escalation as the primary store — whichever detects the
+      // process wedge first wins; the handler is idempotent (shuttingDown latch).
+      maintenanceStore.setIrrecoverableWedgeHandler((info) => wedgeExitHandler(info));
       if (await maintenanceStore.initialize()) {
         globalState.maintenanceStore = maintenanceStore;
         log.info("[daemon] dedicated maintenance connection ready");
@@ -894,6 +913,11 @@ async function main(): Promise<void> {
     removeOwnTokenFile();
     process.exit(0);
   };
+
+  // 0.8.7: route wedge escalation through the graceful path. Its 8s hard-exit
+  // watchdog (above) guarantees the exit even when the wedged store hangs the
+  // drain — which is precisely the state this fires in.
+  wedgeExitHandler = (reason) => { void gracefulCleanup(reason); };
 
   const reaperExit = (reason: string) => () => { gracefulCleanup(reason); };
 

@@ -85,6 +85,60 @@ export declare const QUERY_DEADLINE_MS: number;
  *  by the race; the timer is cleared on every exit path. Exported for unit
  *  tests (test/surreal-deadline.test.ts). */
 export declare function raceWithDeadline<T>(p: Promise<T>, ms: number, label: string): Promise<T>;
+/** 0.8.7 (2026-08-02 incident): thresholds for concluding that the PROCESS —
+ *  not the connection — is wedged. That incident's shape: every query blew the
+ *  60s deadline, every reconnect "succeeded" (fresh Surreal, connect + signin
+ *  round-tripped fine), and the very next query died again — for two days —
+ *  while an identical fresh PROCESS queried the same server instantly. The
+ *  connection-level self-heal (ensureConnected) cannot reach process-level
+ *  poison (SDK module state, libuv/io_uring, kernel-side socket state …), so
+ *  past these thresholds the only honest repair is process replacement: the
+ *  daemon exits, and the pid-file spawn guard brings up a clean process on the
+ *  next hook/MCP demand (proven recovery path, ~seconds of downtime vs a
+ *  silent multi-day outage).
+ *
+ *  Tuning: a streak only exists while ZERO queries succeed — any success
+ *  resets it, so a merely-slow server (some queries blow the deadline, others
+ *  land) can never escalate. minTimeouts=10 is reachable inside one deadline
+ *  window when concurrent hook traffic wedges (17 in-flight RPCs observed);
+ *  the minStreakMs floor (3 min default) is what keeps a single transient
+ *  server stall from killing the daemon; minHeals=3 requires the medicine to
+ *  have actually run and failed repeatedly. All three must hold. */
+export declare const WEDGE_DEFAULTS: {
+    readonly minTimeouts: 10;
+    readonly minHeals: 3;
+    /** Env-overridable floor, clamped [30s, 1h]. */
+    readonly minStreakMs: number;
+};
+/** Pure accounting for the escalation decision (exported for unit tests, like
+ *  raceWithDeadline — test/wedge-escalation.test.ts). One instance per
+ *  SurrealStore; the store feeds it three events and fires its
+ *  irrecoverable-wedge handler when a record*() call returns true. The
+ *  detector latches: it returns true exactly once per store lifetime. */
+export declare class WedgeDetector {
+    private readonly cfg;
+    private readonly now;
+    private timeouts;
+    private futileHeals;
+    private streakStartedAt;
+    private escalatedFlag;
+    constructor(cfg?: {
+        minTimeouts: number;
+        minHeals: number;
+        minStreakMs: number;
+    }, now?: () => number);
+    /** Any successful query round-trip disproves a process wedge — end the streak. */
+    recordQuerySuccess(): void;
+    /** A query blew QUERY_DEADLINE_MS. Returns true exactly once: when this
+     *  event crosses the escalation threshold. */
+    recordDeadlineTimeout(): boolean;
+    /** ensureConnected completed a connection rebuild while a streak is active.
+     *  Heals outside a streak are not evidence (nothing was failing). */
+    recordHealCompleted(): boolean;
+    get escalated(): boolean;
+    stats(): string;
+    private check;
+}
 /** Errors worth one reconnect+retry (0.7.118 widened from connection-drop
  *  only). Three production-observed classes on 2026-06-10:
  *  - connection drop: "must be connected" / "ConnectionUnavailable"
@@ -170,6 +224,16 @@ export declare class SurrealStore {
      *  deadlineQuery() on a blown deadline; ensureConnected() treats it as
      *  disconnected even though the SDK disagrees. */
     private zombieSuspect;
+    /** 0.8.7: escalation accounting for the failure class ABOVE a zombie WS —
+     *  a process so poisoned that even FRESH connections' queries never settle.
+     *  See WEDGE_DEFAULTS for the incident and thresholds. */
+    private readonly wedge;
+    /** Wired by the daemon to its graceful-exit path (exit → spawn-guard
+     *  respawn). Unwired embedders (mcp-server.ts standalone, tests) get the
+     *  loud log only — a library must not process.exit() on its own. */
+    private onIrrecoverableWedge;
+    setIrrecoverableWedgeHandler(cb: (info: string) => void): void;
+    private fireIrrecoverableWedge;
     /** Run a query function with one retry on retryable failures (connection
      *  drops, blown deadlines, auth-dropped reconnects). Reconnection is routed
      *  through ensureConnected() so concurrent callers share a single
