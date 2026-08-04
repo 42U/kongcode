@@ -47,7 +47,7 @@ if [ -z "$VERSION" ]; then
 fi
 
 if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-  echo "ERROR: '${VERSION}' is not a semver version (expected e.g. 0.8.6 or 0.8.6-rc1)." >&2
+  echo "ERROR: '${VERSION}' is not a semver version (expected e.g. 1.2.3 or 1.2.3-rc1)." >&2
   exit 1
 fi
 
@@ -146,7 +146,8 @@ sed -i -E "s|badge/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-stable|badge/v${VERS
 sed -i "s/const CLIENT_VERSION = \"[^\"]*\"/const CLIENT_VERSION = \"${VERSION}\"/" "$ROOT/src/mcp-client/index.ts"
 
 # --- Surface 6: src/mcp-server.ts McpServer version ----------------------
-# Missed entirely by every version of this script before v0.8.6.
+# Historically the most-missed surface: earlier script versions skipped it
+# entirely (see CHANGELOG for the release that fixed this).
 sed -i -E "s/(name: \"laqrumcode\", version: \")[^\"]*(\")/\1${VERSION}\2/" "$ROOT/src/mcp-server.ts"
 
 # DAEMON_VERSION in src/daemon/index.ts is intentionally absent: it reads

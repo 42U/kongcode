@@ -261,8 +261,23 @@ describe("R6 (gated): spawning the real daemon in tcp mode is reachable over TCP
   });
 
   itDaemon("ensureDaemon spawns/returns a TCP endpoint the client can handshake", async () => {
-    // Use a non-default high port to avoid clobbering a real local daemon.
-    const port = 28764;
+    // Claim a genuinely FREE port from the OS instead of a hardcoded high one.
+    // 2026-08-04: the fixed port 28764 collided with another OS user's live
+    // daemon on a shared host — ensureDaemon trusted the existing listener and
+    // the E2 guard correctly refused the cross-user handshake ("token
+    // mismatch — this daemon belongs to a different OS user"), failing this
+    // test for an environmental reason. bind(0) → read port → close leaves a
+    // tiny reuse race, but unlike a constant it cannot collide with a
+    // long-lived daemon by construction.
+    const port = await new Promise<number>((resolve, reject) => {
+      const probe = createServer();
+      probe.listen(0, "127.0.0.1", () => {
+        const addr = probe.address();
+        if (addr && typeof addr === "object") probe.close(() => resolve(addr.port));
+        else probe.close(() => reject(new Error("no address from probe listener")));
+      });
+      probe.on("error", reject);
+    });
     process.env.LAQRUMCODE_DAEMON_TRANSPORT = "tcp";
     process.env.LAQRUMCODE_DAEMON_PORT = String(port);
     // Pass the resolved dist path explicitly: under vitest the module runs from
