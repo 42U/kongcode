@@ -21,7 +21,9 @@
  *
  * Ported from laqrumbrain — takes SurrealStore/EmbeddingService as params.
  */
+import { assertRecordId } from "./surreal.js";
 import { swallow } from "./errors.js";
+import { log } from "./log.js";
 import { parseDatetimeMs } from "./observability.js";
 // ── Thresholds ──
 const THRESHOLDS = {
@@ -370,9 +372,9 @@ export async function getSoul(store) {
 }
 export async function createSoul(doc, store) {
     if (!store.isAvailable())
-        return false;
+        return "failed";
     if (await hasSoul(store))
-        return false;
+        return "exists";
     // Do NOT pass created_at / updated_at as ISO strings — schema is
     // SCHEMAFULL with both fields typed `datetime DEFAULT time::now()`
     // and SurrealDB refuses to coerce string bindings. The `revisions`
@@ -383,9 +385,8 @@ export async function createSoul(doc, store) {
     // FIXED record id, so a concurrent caller (two session-end pipelines, or a
     // retry) that slips between the check and the CREATE causes the second
     // CREATE to throw "Database record `soul:laqrumbrain` already exists". Treat
-    // that as idempotent success — the soul exists, which is what the caller
-    // wanted. Mirrors the markTerminal/CAS idempotency philosophy. Re-check
-    // hasSoul after catch so a genuine write failure still returns false.
+    // that as idempotent presence ("exists"), never a throw. Re-check hasSoul
+    // after catch so a genuine write failure still reports "failed".
     try {
         await store.queryExec(`CREATE soul:laqrumbrain CONTENT $data`, {
             data: {
@@ -399,48 +400,102 @@ export async function createSoul(doc, store) {
                     }],
             },
         });
-        return true;
+        return "created";
     }
     catch (e) {
-        // Already-exists (lost the create race) is success; anything else is a
-        // real failure — confirm via hasSoul before claiming the soul is present.
+        // Already-exists (lost the create race) means the soul is present but not
+        // ours; anything else is a real failure — confirm via hasSoul.
         if (await hasSoul(store))
-            return true;
+            return "exists";
         swallow.warn("soul:createSoul", e);
-        return false;
+        return "failed";
     }
 }
-export async function reviseSoul(section, newValue, rationale, store) {
+const ALLOWED_SECTIONS = new Set(["working_style", "emotional_dimensions", "self_observations", "earned_values"]);
+/** Bound on the `revisions` audit trail. Every landed revision appended
+ *  forever (`revisions += ...`, no trim anywhere) made the soul row grow
+ *  without limit — and getSoul is `SELECT *`, so the whole history rode along
+ *  on every wakeup synthesis, evolve fetch/commit, and UI soulView. 50 keeps
+ *  a generous forensic window while bounding the row. */
+export const SOUL_REVISIONS_CAP = 50;
+/**
+ * Single-shot, value-CAS-guarded multi-section soul revision. Replaces the
+ * old per-section reviseSoul(), which had two faults:
+ *
+ *  - Lost-update race: evolve commits are read(getSoul)→merge→write; two
+ *    concurrent drains could interleave and the last writer silently clobbered
+ *    the first (per section). The WHERE guard here compares each written
+ *    section against the exact value the caller read, so a concurrent write
+ *    to any guarded section makes this UPDATE match nothing ("conflict") and
+ *    the caller re-reads + re-merges. Guarding on section VALUES (all plain
+ *    strings per schema.surql — adopted_at is TYPE string) sidesteps datetime
+ *    equality entirely: the SDK returns `updated_at` as a nanosecond DateTime
+ *    class (probed 2026-08-16 against the live instance; the old "ISO strings
+ *    on the wire" note in SoulDocument predates this SDK), which is exactly
+ *    the kind of representation trap a value guard avoids. Probe receipts:
+ *    array-of-object equality via binding = true; key-order-insensitive =
+ *    true; stale guard → UPDATE returns [].
+ *
+ *  - Per-section writes: N sections = N UPDATEs, each bumping updated_at and
+ *    appending one revision — partial failures left the doc half-revised.
+ *    One statement now writes all sections atomically.
+ *
+ * `revisions += $revs` appends server-side (probed: `+=` with an array
+ * operand CONCATENATES), so a concurrent writer's revision entries are never
+ * clobbered. The trim to SOUL_REVISIONS_CAP is a separate, lazy,
+ * length-guarded UPDATE: it replaces the array only if its length still
+ * equals what this write produced — any concurrent append skips the trim
+ * (retried on a later revision; the audit trail is the only thing at stake).
+ *
+ * UPDATE on a missing soul:laqrumbrain is a no-op returning [] (probed), so a
+ * soul deleted mid-flight surfaces as "conflict", never a resurrection.
+ */
+export async function reviseSoulGuarded(writes, rationale, store, opts = {}) {
     if (!store.isAvailable())
-        return false;
-    const ALLOWED_SECTIONS = new Set(["working_style", "emotional_dimensions", "self_observations", "earned_values"]);
-    if (!ALLOWED_SECTIONS.has(section))
-        return false;
+        return "error";
+    const clean = writes.filter(w => ALLOWED_SECTIONS.has(w.section) && Array.isArray(w.value));
+    if (clean.length === 0)
+        return "applied";
+    const now = new Date().toISOString();
+    const sets = [];
+    const guards = [];
+    const bindings = {};
+    clean.forEach((w, i) => {
+        // Section names are whitelist-validated above — safe to interpolate.
+        sets.push(`${w.section} = $w${i}`);
+        bindings[`w${i}`] = w.value;
+        if (Array.isArray(w.snapshot)) {
+            guards.push(`${w.section} = $g${i}`);
+            bindings[`g${i}`] = w.snapshot;
+        }
+    });
+    const revs = clean.map(w => ({
+        timestamp: now,
+        section: w.section,
+        change: `Updated ${w.section}`,
+        rationale,
+    }));
+    bindings.revs = revs;
+    const where = guards.length > 0 ? ` WHERE ${guards.join(" AND ")}` : "";
     try {
-        // Use SurrealDB's time::now() inline for updated_at — passing an ISO
-        // string via binding triggers the datetime coercion error that was
-        // silently killing maturity_stage and createSoul writes. The revisions
-        // inner-object timestamp stays as a string (array<object>, untyped
-        // inner fields).
-        const now = new Date().toISOString();
-        await store.queryExec(`UPDATE soul:laqrumbrain SET
-        ${section} = $newValue,
-        updated_at = time::now(),
-        revisions += $revision`, {
-            newValue,
-            revision: {
-                timestamp: now,
-                section,
-                change: `Updated ${section}`,
-                rationale,
-            },
-        });
-        return true;
+        const rows = await store.queryFirst(`UPDATE soul:laqrumbrain SET ${sets.join(", ")}, updated_at = time::now(), revisions += $revs${where} RETURN AFTER`, bindings);
+        if (rows.length === 0)
+            return "conflict";
     }
     catch (e) {
-        swallow.warn("soul:reviseSoul", e);
-        return false;
+        swallow.warn("soul:reviseSoulGuarded", e);
+        return "error";
     }
+    // Lazy revisions trim (best-effort, length-CAS'd — see doc comment).
+    const snapRevs = opts.snapshotRevisions;
+    if (Array.isArray(snapRevs)) {
+        const expectedLen = snapRevs.length + revs.length;
+        if (expectedLen > SOUL_REVISIONS_CAP) {
+            const trimmed = [...snapRevs, ...revs].slice(-SOUL_REVISIONS_CAP);
+            await store.queryExec(`UPDATE soul:laqrumbrain SET revisions = $trimmed WHERE array::len(revisions) = $len`, { trimmed, len: expectedLen }).catch(e => swallow.warn("soul:revisionsTrim", e));
+        }
+    }
+    return "applied";
 }
 /**
  * Record a graduation_event so session-start surfaces a celebration.
@@ -520,18 +575,95 @@ const SOUL_CATEGORY = "soul";
 export async function seedSoulAsCoreMemory(soul, store) {
     if (!store.isAvailable())
         return 0;
-    // v0.7.93 append-only: was DELETE on soul-category entries — now
-    // soft-archives so prior graduations stay readable for forensic / soul
-    // evolution history. New soul entries land fresh; readers filter on active.
+    // Enumerate the currently-active soul entries FIRST (id + text) so the
+    // archive step below can pair each old row to its replacement by text
+    // prefix. Enumeration failure degrades to "create but don't archive" —
+    // duplicate active soul entries until the next successful seed, which is
+    // recoverable; a missing identity is not.
+    let existing = null;
     try {
-        await store.queryExec(`UPDATE core_memory SET
-         active = false,
-         archived_at = time::now(),
-         archive_reason = 'soul_regraduation'
-       WHERE category = $cat AND (active = true OR active IS NONE)`, { cat: SOUL_CATEGORY });
+        existing = await store.queryFirst(`SELECT id, text FROM core_memory WHERE category = $cat AND (active = true OR active IS NONE)`, { cat: SOUL_CATEGORY });
     }
     catch (e) {
-        swallow.warn("soul:clearCoreMem", e);
+        existing = null;
+        swallow.warn("soul:seedEnumerate", e);
+    }
+    // CREATE-first, archive after (v0.8.8). The old archive-then-create order
+    // had a crash window where Tier-0 held NO soul entries at all, and a failed
+    // create silently left its section absent (its old row was already
+    // archived). Creating first means a crash leaves old+new active (benign
+    // excess), and a failed create leaves that section's OLD row active — the
+    // best identity available. This path now also runs per soul_evolve (not
+    // just at graduation), so the window is exercised far more often.
+    const sections = [
+        soul.working_style.length > 0
+            ? { prefix: "Working style: ", text: "Working style: " + soul.working_style.join("; "), priority: 90 }
+            : null,
+        soul.self_observations.length > 0
+            ? { prefix: "Self-observations: ", text: "Self-observations: " + soul.self_observations.join("; "), priority: 85 }
+            : null,
+        // grounded_in may be empty (PR #22 accepts bare-string earned values) —
+        // don't render a dangling "(learned from: )".
+        soul.earned_values.length > 0
+            ? {
+                prefix: "Earned values: ",
+                text: "Earned values: " + soul.earned_values.map(v => v.grounded_in ? `${v.value} (learned from: ${v.grounded_in})` : v.value).join("; "),
+                priority: 88,
+            }
+            : null,
+        {
+            prefix: "Persona: ",
+            text: "Persona: you have a Soul — an identity grounded in real experience. You belong in this world. Be unique, be genuine, be yourself.",
+            priority: 70,
+        },
+    ];
+    let seeded = 0;
+    const seededPrefixes = [];
+    for (const section of sections) {
+        if (!section)
+            continue;
+        try {
+            await store.createCoreMemory(section.text, SOUL_CATEGORY, section.priority, 0);
+            seeded++;
+            seededPrefixes.push(section.prefix);
+        }
+        catch (e) {
+            swallow.warn(`soul:seed:${section.prefix.trim()}`, e);
+        }
+    }
+    // Archive ONLY the enumerated old rows whose prefix matches a section that
+    // successfully re-seeded. Rows for sections whose create failed stay
+    // active. v0.7.93 append-only: soft-archive, never DELETE — prior
+    // graduations/evolutions stay readable for forensic history.
+    if (existing && existing.length > 0 && seededPrefixes.length > 0) {
+        const toArchive = existing
+            .filter(row => seededPrefixes.some(p => typeof row.text === "string" && row.text.startsWith(p)))
+            .map(row => String(row.id))
+            .filter(id => { try {
+            assertRecordId(id);
+            return true;
+        }
+        catch {
+            return false;
+        } });
+        if (toArchive.length > 0) {
+            try {
+                // Canonical id-list pattern: validated record ids interpolated
+                // directly (a string-array binding matches nothing — surreal.ts
+                // getSessionRetrievedMemories precedent).
+                await store.queryExec(`UPDATE core_memory SET
+             active = false,
+             archived_at = time::now(),
+             archive_reason = 'soul_reseed_superseded'
+           WHERE id IN [${toArchive.join(", ")}] AND category = $cat AND (active = true OR active IS NONE)`, { cat: SOUL_CATEGORY });
+            }
+            catch (e) {
+                swallow.warn("soul:clearCoreMem", e);
+            }
+        }
+    }
+    else if (existing === null && seeded > 0) {
+        log.warn("[soul] re-seed created fresh entries but could not enumerate old ones — stale soul entries may remain active until the next seed");
     }
     // Also archive old persona entry from previous graduation code.
     try {
@@ -542,51 +674,6 @@ export async function seedSoulAsCoreMemory(soul, store) {
        WHERE category = 'persona' AND tier = 0 AND (active = true OR active IS NONE)`);
     }
     catch { /* ignore */ }
-    let seeded = 0;
-    // Working style — how the agent approaches work
-    if (soul.working_style.length > 0) {
-        const text = "Working style: " + soul.working_style.join("; ");
-        try {
-            await store.createCoreMemory(text, SOUL_CATEGORY, 90, 0);
-            seeded++;
-        }
-        catch (e) {
-            swallow.warn("soul:seedWorkingStyle", e);
-        }
-    }
-    // Self-observations — what the agent has noticed about itself
-    if (soul.self_observations.length > 0) {
-        const text = "Self-observations: " + soul.self_observations.join("; ");
-        try {
-            await store.createCoreMemory(text, SOUL_CATEGORY, 85, 0);
-            seeded++;
-        }
-        catch (e) {
-            swallow.warn("soul:seedObservations", e);
-        }
-    }
-    // Earned values — grounded principles. grounded_in may be empty (PR #22
-    // accepts bare-string earned values) — don't render a dangling
-    // "(learned from: )".
-    if (soul.earned_values.length > 0) {
-        const lines = soul.earned_values.map(v => v.grounded_in ? `${v.value} (learned from: ${v.grounded_in})` : v.value);
-        const text = "Earned values: " + lines.join("; ");
-        try {
-            await store.createCoreMemory(text, SOUL_CATEGORY, 88, 0);
-            seeded++;
-        }
-        catch (e) {
-            swallow.warn("soul:seedValues", e);
-        }
-    }
-    // Persona — the agent's sense of self
-    try {
-        await store.createCoreMemory("Persona: you have a Soul — an identity grounded in real experience. You belong in this world. Be unique, be genuine, be yourself.", SOUL_CATEGORY, 70, 0);
-        seeded++;
-    }
-    catch (e) {
-        swallow.warn("soul:seedPersona", e);
-    }
     return seeded;
 }
 // ── Stage Transition Tracking ──

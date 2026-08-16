@@ -16,7 +16,7 @@ import type { GlobalPluginState, SessionState } from "../engine/state.js";
 import type { PriorExtractions, TurnData } from "../engine/daemon-types.js";
 import { validateExtraction } from "../engine/daemon-types.js";
 import { buildCoalescedPrompt, buildTranscript, writeExtractionResults } from "../engine/memory-daemon.js";
-import { createSoul, seedSoulAsCoreMemory, reviseSoul, getSoul, checkGraduation, getQualitySignals, recordGraduationEvent } from "../engine/soul.js";
+import { createSoul, seedSoulAsCoreMemory, reviseSoulGuarded, getSoul, hasSoul, checkGraduation, getQualitySignals, recordGraduationEvent, type SoulSectionName } from "../engine/soul.js";
 import { swallow, isUniqueViolation } from "../engine/errors.js";
 import { clamp01 } from "../engine/math.js";
 import { log } from "../engine/log.js";
@@ -132,6 +132,16 @@ const soulEvolveSchema = {
   required: [] as string[],
 };
 
+/** Per-text cap for soul work-item inputs (reflections / causal chains /
+ *  monologues). The row LIMITs bound the count but not the size — one 5KB
+ *  monologue bloats the payload the drain agent must read. 600 chars covers
+ *  a normal multi-sentence reflection; the extraction path's 30k transcript
+ *  cap is the same idea at transcript scale. */
+const SOUL_INPUT_TEXT_CAP = 600;
+function capSoulInput(s: unknown): string {
+  return String(s ?? "").slice(0, SOUL_INPUT_TEXT_CAP);
+}
+
 // ── fetch_pending_work ───────────────────────────────────────────────────────
 
 /**
@@ -181,7 +191,18 @@ export async function countActionablePendingWork(store: SurrealStore): Promise<n
         if (causalEligible) total += n;
         break;
       case "soul_generate":
-        if (soulGenReady === null) soulGenReady = await checkGraduation(store).then(g => g.ready).catch(() => false);
+        // Zombie guard (mirrors buildWorkPayload): graduation signals are
+        // volume counts that never regress, so `ready` stays true forever
+        // once met — but a generate item is only actionable while NO soul
+        // exists. Counting post-graduation stragglers re-created the
+        // empty-drain banner for items that would self-complete (or, pre-fix,
+        // burn a synthesis and fail at commit).
+        if (soulGenReady === null) {
+          soulGenReady = await (async () => {
+            if (await hasSoul(store)) return false;
+            return (await checkGraduation(store)).ready;
+          })().catch(() => false);
+        }
         if (soulGenReady) total += n;
         break;
       case "soul_evolve":
@@ -718,6 +739,18 @@ async function buildWorkPayload(
     }
 
     case "soul_generate": {
+      // Zombie fix: every pre-graduation session enqueued its own
+      // soul_generate item (distinct session_ids clear the compound UNIQUE),
+      // and the graduating drain consumes exactly ONE. Because graduation
+      // signals never regress, checkGraduation stays ready forever — so each
+      // straggler used to get a full payload, burn a complete synthesis, and
+      // then fail at commit ("Failed to create soul record" from createSoul's
+      // hasSoul precheck). A soul that exists means generation is superseded
+      // by evolution: self-complete.
+      if (await hasSoul(store)) {
+        await markTerminal(state, item.id, item.session_id, item.work_type, "completed");
+        return { work_id: item.id, work_type: "soul_generate", empty: true, message: "Soul already exists — generation superseded by evolution. Already marked complete." };
+      }
       const report = await checkGraduation(store);
       if (!report.ready) {
         await markTerminal(state, item.id, item.session_id, item.work_type, "completed");
@@ -734,9 +767,9 @@ async function buildWorkPayload(
         work_type: "soul_generate",
         instructions: `You are LaqrumCode, a graph-backed coding agent with persistent memory. Based on YOUR OWN memory graph data below, write your initial Soul document. Be honest, not aspirational. Only claim what the data supports.`,
         data: {
-          reflections: (reflections as any[]).map(r => `[${r.category}] ${r.text}`),
-          causal_chains: (causalChains as any[]).map(c => `[${c.chain_type}] ${c.description}`),
-          monologues: (monologues as any[]).map(m => m.content),
+          reflections: (reflections as any[]).map(r => `[${r.category}] ${capSoulInput(r.text)}`),
+          causal_chains: (causalChains as any[]).map(c => `[${c.chain_type}] ${capSoulInput(c.description)}`),
+          monologues: (monologues as any[]).map(m => capSoulInput(m.content)),
           quality: {
             retrieval_utilization: `${(quality.avgRetrievalUtilization * 100).toFixed(0)}%`,
             skill_success_rate: `${(quality.skillSuccessRate * 100).toFixed(0)}%`,
@@ -768,9 +801,9 @@ async function buildWorkPayload(
         instructions: `You are revising your own Soul document based on new experience. Return JSON with ONLY the sections that changed; omit unchanged sections entirely. A section you include REPLACES that stored section wholesale — include the COMPLETE revised array for it: every entry from current_soul you are keeping, plus your additions and rewordings. Never return just the new entries. If nothing meaningful changed, return {}. Be honest — revise based on evidence, not aspiration.`,
         data: {
           current_soul: { working_style: soul.working_style, emotional_dimensions: soul.emotional_dimensions, self_observations: soul.self_observations, earned_values: soul.earned_values },
-          new_reflections: (reflections as any[]).map(r => r.text),
-          new_causal_chains: (causalChains as any[]).map(c => c.description),
-          new_monologues: (monologues as any[]).map(m => m.content),
+          new_reflections: (reflections as any[]).map(r => capSoulInput(r.text)),
+          new_causal_chains: (causalChains as any[]).map(c => capSoulInput(c.description)),
+          new_monologues: (monologues as any[]).map(m => capSoulInput(m.content)),
         },
         output_format: "Return JSON with ONLY changed sections from the soul schema (every section is optional — this is a partial update; an included section replaces the stored one wholesale, so it must be the complete revised array). Return {} if nothing changed. Schema: " + JSON.stringify(soulEvolveSchema),
       };
@@ -1116,6 +1149,13 @@ function coerceStringSection(raw: unknown): string[] {
     .filter((s) => s.length > 0 && !isSoulJunk(s));
 }
 
+/** A junky evidence/description string (apology text, bare UUID) is blanked
+ *  rather than sinking the whole entry — the primary value/dimension is legit;
+ *  only the attached text is noise. */
+function cleanEvidence(s: string): string {
+  return isSoulJunk(s) ? "" : s;
+}
+
 /** emotional_dimensions: stored as {dimension, description, adopted_at}.
  *  Accepts alias keys (name→dimension, rationale→description) and bare
  *  strings (dimension with empty description — mirrors the PR #22
@@ -1127,7 +1167,7 @@ function coerceEmotionalDimensions(raw: unknown, now: string): { dimension: stri
       const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
       return {
         dimension: String(o.dimension ?? o.name ?? "").trim(),
-        description: String(o.description ?? o.rationale ?? ""),
+        description: cleanEvidence(String(o.description ?? o.rationale ?? "")),
         adopted_at: now,
       };
     })
@@ -1143,13 +1183,26 @@ function coerceEarnedValues(raw: unknown): { value: string; grounded_in: string 
       const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
       return {
         value: String(o.value ?? o.name ?? "").trim(),
-        grounded_in: String(o.grounded_in ?? o.evidence ?? o.description ?? ""),
+        grounded_in: cleanEvidence(String(o.grounded_in ?? o.evidence ?? o.description ?? "")),
       };
     })
     .filter((v) => v.value.length > 0 && !isSoulJunk(v.value));
 }
 
-type SoulSection = "working_style" | "emotional_dimensions" | "self_observations" | "earned_values";
+type SoulSection = SoulSectionName;
+
+/** Per-section entry caps for soul_evolve, matching soul_generate's
+ *  slice(0, 20/10/20/10). The evolve path previously had NO caps, and the
+ *  delta-guard merge makes APPEND the default for nonconforming agents — so
+ *  unbounded growth became the expected failure mode. An oversized Tier-0
+ *  soul entry (priority 88-90) would eventually crowd lower-priority
+ *  directives out of the finite system-prompt budget. */
+const SOUL_SECTION_CAPS: Record<SoulSection, number> = {
+  working_style: 20,
+  emotional_dimensions: 10,
+  self_observations: 20,
+  earned_values: 10,
+};
 
 /** Identity key for overlap/dedupe: the text for string sections, the value
  *  for earned_values, the dimension for emotional_dimensions. */
@@ -1186,7 +1239,11 @@ function soulSectionKey(section: SoulSection, entry: unknown): string {
  * description didn't change, so echoing an unchanged dimension doesn't
  * destroy its adoption provenance.
  */
-function mergeSoulSection(section: SoulSection, current: unknown[], submitted: unknown[]): unknown[] {
+function mergeSoulSection(
+  section: SoulSection,
+  current: unknown[],
+  submitted: unknown[],
+): { mode: "append" | "replace"; merged: unknown[] } {
   const seen = new Set<string>();
   const cleanSubmitted = submitted.filter((e) => {
     const k = soulSectionKey(section, e);
@@ -1201,19 +1258,50 @@ function mergeSoulSection(section: SoulSection, current: unknown[], submitted: u
   }
   const overlap = cleanSubmitted.filter((e) => currentByKey.has(soulSectionKey(section, e))).length;
   if (currentByKey.size > 0 && overlap === 0) {
-    return [...current, ...cleanSubmitted];
+    return { mode: "append", merged: [...current, ...cleanSubmitted] };
   }
   if (section === "emotional_dimensions") {
-    return cleanSubmitted.map((e) => {
-      const next = e as { dimension: string; description: string; adopted_at: string };
-      const prev = currentByKey.get(soulSectionKey(section, e)) as { description?: unknown; adopted_at?: unknown } | undefined;
-      if (prev && typeof prev.adopted_at === "string" && String(prev.description ?? "") === next.description) {
-        return { ...next, adopted_at: prev.adopted_at };
-      }
-      return next;
-    });
+    return {
+      mode: "replace",
+      merged: cleanSubmitted.map((e) => {
+        const next = e as { dimension: string; description: string; adopted_at: string };
+        const prev = currentByKey.get(soulSectionKey(section, e)) as { description?: unknown; adopted_at?: unknown } | undefined;
+        if (prev && typeof prev.adopted_at === "string" && String(prev.description ?? "") === next.description) {
+          return { ...next, adopted_at: prev.adopted_at };
+        }
+        return next;
+      }),
+    };
   }
-  return cleanSubmitted;
+  return { mode: "replace", merged: cleanSubmitted };
+}
+
+/**
+ * Enforce SOUL_SECTION_CAPS on a merged section, mode-aware and never silent:
+ *
+ *  - replace: the array is the agent's own curated ordering — keep the FIRST
+ *    N (matches soul_generate's slice(0, N) convention).
+ *  - append: overflow means current + new exceeds the cap — keep the LAST N,
+ *    so the oldest entries age out and the new experience lands. Trimming the
+ *    new entries instead would re-create the exact silent drop PR #22 fixed.
+ *
+ * Dropped entries are logged with their identity keys — the daemon log is the
+ * forensic trail (same philosophy as the junk-drop logging above).
+ */
+function applySoulSectionCap(
+  section: SoulSection,
+  mode: "append" | "replace",
+  merged: unknown[],
+): unknown[] {
+  const cap = SOUL_SECTION_CAPS[section];
+  if (merged.length <= cap) return merged;
+  const kept = mode === "append" ? merged.slice(-cap) : merged.slice(0, cap);
+  const dropped = mode === "append" ? merged.slice(0, merged.length - cap) : merged.slice(cap);
+  log.warn(
+    `[pending_work] soul ${section} over cap (${merged.length}/${cap}, ${mode}) — dropped ${dropped.length}: ` +
+    dropped.map((e) => soulSectionKey(section, e)).slice(0, 5).join(" | "),
+  );
+  return kept;
 }
 
 async function commitResults(
@@ -1353,8 +1441,16 @@ async function commitResults(
         self_observations: coerceStringSection(doc.self_observations).slice(0, 20),
         earned_values: coerceEarnedValues(doc.earned_values).slice(0, 10),
       };
-      const success = await createSoul(soulDoc, store);
-      if (!success) throw new Error("Failed to create soul record");
+      const outcome = await createSoul(soulDoc, store);
+      if (outcome === "failed") throw new Error("Failed to create soul record");
+      if (outcome === "exists") {
+        // Raced by a concurrent generate (or a zombie that slipped the
+        // fetch-side hasSoul gate). The existing soul is canonical — this
+        // item's synthesized doc is discarded and NO author-only side effects
+        // run: the double-celebration bug was two racers both recording
+        // graduation_events, each of which a later session-start celebrated.
+        return { skipped: true, reason: "soul already exists" };
+      }
       const soul = await getSoul(store);
       if (soul) await seedSoulAsCoreMemory(soul, store);
       const report = await checkGraduation(store);
@@ -1366,11 +1462,6 @@ async function commitResults(
     case "soul_evolve": {
       const changes = parseSoulResult(results);
       if (!changes || Object.keys(changes).length === 0) return { skipped: true, reason: "no changes" };
-      // The merge-guard below needs the stored soul — and a soul deleted
-      // between fetch and commit must not be resurrected by reviseSoul's
-      // UPDATE on the fixed record id.
-      const soul = await getSoul(store);
-      if (!soul) return { skipped: true, reason: "no soul to evolve" };
       const now = new Date().toISOString();
       // Tolerant per-section coercion (PR #22, extended to every section):
       // bare strings, alias keys, and single non-array values all land.
@@ -1380,17 +1471,51 @@ async function commitResults(
         self_observations: coerceStringSection(changes.self_observations),
         earned_values: coerceEarnedValues(changes.earned_values),
       };
-      let revised = 0;
-      for (const section of ["working_style", "emotional_dimensions", "self_observations", "earned_values"] as const) {
-        const vals = sanitized[section];
-        if (vals && vals.length > 0) {
-          const merged = mergeSoulSection(section, asEntryArray(soul[section]), vals);
-          // Count only revisions that actually landed — sections_revised was
-          // the very evidence trail that exposed the original drop.
-          if (await reviseSoul(section, merged, "Evolved by subagent based on new experience", store)) revised++;
-        }
+      const wanted = (["working_style", "emotional_dimensions", "self_observations", "earned_values"] as const)
+        .filter(s => sanitized[s].length > 0);
+      if (wanted.length === 0) return { sections_revised: 0 };
+      // Value-CAS retry loop. Each attempt: read the soul, delta-guard-merge
+      // every wanted section against THAT read, cap, then write all sections
+      // in one guarded UPDATE (reviseSoulGuarded matches only while each
+      // written section still equals its snapshot). A concurrent evolve
+      // commit flips the guard → "conflict" → re-read + re-merge, so the
+      // old read-modify-write lost-update race can no longer clobber a
+      // section. All-or-nothing: sections_revised is every wanted section on
+      // a landed write, 0 when contention/store errors won out (the item
+      // still completes; future experience re-triggers evolution).
+      const MAX_CAS_ATTEMPTS = 3;
+      let landed = 0;
+      for (let attempt = 1; attempt <= MAX_CAS_ATTEMPTS; attempt++) {
+        // getSoul also guards resurrection: a soul deleted between fetch and
+        // commit must not be re-created (UPDATE on a missing record id is a
+        // probed no-op, and we bail here before ever writing).
+        const soul = await getSoul(store);
+        if (!soul) return { skipped: true, reason: "no soul to evolve" };
+        const writes = wanted.map((section) => {
+          const raw = (soul as unknown as Record<string, unknown>)[section];
+          const current = asEntryArray(raw);
+          const { mode, merged } = mergeSoulSection(section, current, sanitized[section]);
+          // A section ABSENT from the row (legacy/corrupt soul) must write
+          // unguarded: guarding `section = []` against a missing field (NONE)
+          // can never match, which would spin the CAS to exhaustion. An
+          // absent section has nothing to protect anyway.
+          return {
+            section,
+            value: applySoulSectionCap(section, mode, merged),
+            snapshot: raw === undefined || raw === null ? undefined : current,
+          };
+        });
+        const res = await reviseSoulGuarded(
+          writes,
+          "Evolved by subagent based on new experience",
+          store,
+          { snapshotRevisions: asEntryArray(soul.revisions) },
+        );
+        if (res === "applied") { landed = writes.length; break; }
+        if (res === "error") break;
+        log.info(`[pending_work] soul_evolve value-CAS conflict (attempt ${attempt}/${MAX_CAS_ATTEMPTS}) — re-reading and re-merging`);
       }
-      if (revised > 0) {
+      if (landed > 0) {
         // An evolved soul that never re-seeds Tier-0 core memory is invisible
         // at runtime: seedSoulAsCoreMemory previously ran ONLY at graduation,
         // so the every-turn soul entries served graduation-day values forever.
@@ -1401,7 +1526,7 @@ async function commitResults(
           if (evolved) await seedSoulAsCoreMemory(evolved, store);
         } catch (e) { swallow.warn("pending-work:soul-evolve-reseed", e); }
       }
-      return { sections_revised: revised };
+      return { sections_revised: landed };
     }
 
     default:
@@ -1772,4 +1897,5 @@ export const __test__ = {
   coerceEmotionalDimensions,
   coerceEarnedValues,
   mergeSoulSection,
+  applySoulSectionCap,
 };

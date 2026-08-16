@@ -21,7 +21,7 @@
  *
  * Ported from laqrumbrain — takes SurrealStore/EmbeddingService as params.
  */
-import type { SurrealStore } from "./surreal.js";
+import { type SurrealStore } from "./surreal.js";
 export type MaturityStage = "nascent" | "developing" | "emerging" | "maturing" | "ready";
 export interface GraduationSignals {
     sessions: number;
@@ -124,8 +124,67 @@ export interface SoulDocument {
 }
 export declare function hasSoul(store: SurrealStore): Promise<boolean>;
 export declare function getSoul(store: SurrealStore): Promise<SoulDocument | null>;
-export declare function createSoul(doc: Omit<SoulDocument, "id" | "agent_id" | "created_at" | "updated_at" | "revisions">, store: SurrealStore): Promise<boolean>;
-export declare function reviseSoul(section: keyof Pick<SoulDocument, "working_style" | "emotional_dimensions" | "self_observations" | "earned_values">, newValue: unknown, rationale: string, store: SurrealStore): Promise<boolean>;
+/** Outcome of a createSoul attempt. "exists" covers BOTH the up-front
+ *  already-exists check AND the K42 create-race loss — in each case the soul
+ *  is present but THIS call did not author it, so callers must not run
+ *  author-only side effects (graduation event, core-memory seed). The old
+ *  boolean conflated race-loss with authorship (both `true`), which let two
+ *  concurrent soul_generate commits each record a graduation_event — the
+ *  double-celebration bug. */
+export type CreateSoulOutcome = "created" | "exists" | "failed";
+export declare function createSoul(doc: Omit<SoulDocument, "id" | "agent_id" | "created_at" | "updated_at" | "revisions">, store: SurrealStore): Promise<CreateSoulOutcome>;
+export type SoulSectionName = "working_style" | "emotional_dimensions" | "self_observations" | "earned_values";
+/** Bound on the `revisions` audit trail. Every landed revision appended
+ *  forever (`revisions += ...`, no trim anywhere) made the soul row grow
+ *  without limit — and getSoul is `SELECT *`, so the whole history rode along
+ *  on every wakeup synthesis, evolve fetch/commit, and UI soulView. 50 keeps
+ *  a generous forensic window while bounding the row. */
+export declare const SOUL_REVISIONS_CAP = 50;
+export interface GuardedSoulWrite {
+    section: SoulSectionName;
+    /** Complete new value for the section — REPLACES it on write. */
+    value: unknown[];
+    /** The section's value as read in the snapshot this write was computed
+     *  from. Used as a value-CAS guard: the UPDATE matches only while the
+     *  stored section still equals this. Omit (undefined) to write unguarded —
+     *  only for sections that were missing from the snapshot entirely. */
+    snapshot?: unknown[];
+}
+/**
+ * Single-shot, value-CAS-guarded multi-section soul revision. Replaces the
+ * old per-section reviseSoul(), which had two faults:
+ *
+ *  - Lost-update race: evolve commits are read(getSoul)→merge→write; two
+ *    concurrent drains could interleave and the last writer silently clobbered
+ *    the first (per section). The WHERE guard here compares each written
+ *    section against the exact value the caller read, so a concurrent write
+ *    to any guarded section makes this UPDATE match nothing ("conflict") and
+ *    the caller re-reads + re-merges. Guarding on section VALUES (all plain
+ *    strings per schema.surql — adopted_at is TYPE string) sidesteps datetime
+ *    equality entirely: the SDK returns `updated_at` as a nanosecond DateTime
+ *    class (probed 2026-08-16 against the live instance; the old "ISO strings
+ *    on the wire" note in SoulDocument predates this SDK), which is exactly
+ *    the kind of representation trap a value guard avoids. Probe receipts:
+ *    array-of-object equality via binding = true; key-order-insensitive =
+ *    true; stale guard → UPDATE returns [].
+ *
+ *  - Per-section writes: N sections = N UPDATEs, each bumping updated_at and
+ *    appending one revision — partial failures left the doc half-revised.
+ *    One statement now writes all sections atomically.
+ *
+ * `revisions += $revs` appends server-side (probed: `+=` with an array
+ * operand CONCATENATES), so a concurrent writer's revision entries are never
+ * clobbered. The trim to SOUL_REVISIONS_CAP is a separate, lazy,
+ * length-guarded UPDATE: it replaces the array only if its length still
+ * equals what this write produced — any concurrent append skips the trim
+ * (retried on a later revision; the audit trail is the only thing at stake).
+ *
+ * UPDATE on a missing soul:laqrumbrain is a no-op returning [] (probed), so a
+ * soul deleted mid-flight surfaces as "conflict", never a resurrection.
+ */
+export declare function reviseSoulGuarded(writes: GuardedSoulWrite[], rationale: string, store: SurrealStore, opts?: {
+    snapshotRevisions?: unknown[];
+}): Promise<"applied" | "conflict" | "error">;
 /**
  * Record a graduation_event so session-start surfaces a celebration.
  * Extracted from the former attemptGraduation() — now called by the

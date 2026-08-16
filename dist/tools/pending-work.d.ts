@@ -11,6 +11,7 @@
  * a separate API call from the MCP server.
  */
 import type { GlobalPluginState, SessionState } from "../engine/state.js";
+import { type SoulSectionName } from "../engine/soul.js";
 import { type SurrealStore } from "../engine/surreal.js";
 /**
  * Count pending_work rows that would ACTUALLY yield work if drained — the
@@ -63,7 +64,7 @@ declare function coerceEarnedValues(raw: unknown): {
     value: string;
     grounded_in: string;
 }[];
-type SoulSection = "working_style" | "emotional_dimensions" | "self_observations" | "earned_values";
+type SoulSection = SoulSectionName;
 /**
  * Delta-guard merge for soul_evolve (PR #22 follow-up).
  *
@@ -85,7 +86,23 @@ type SoulSection = "working_style" | "emotional_dimensions" | "self_observations
  * description didn't change, so echoing an unchanged dimension doesn't
  * destroy its adoption provenance.
  */
-declare function mergeSoulSection(section: SoulSection, current: unknown[], submitted: unknown[]): unknown[];
+declare function mergeSoulSection(section: SoulSection, current: unknown[], submitted: unknown[]): {
+    mode: "append" | "replace";
+    merged: unknown[];
+};
+/**
+ * Enforce SOUL_SECTION_CAPS on a merged section, mode-aware and never silent:
+ *
+ *  - replace: the array is the agent's own curated ordering — keep the FIRST
+ *    N (matches soul_generate's slice(0, N) convention).
+ *  - append: overflow means current + new exceeds the cap — keep the LAST N,
+ *    so the oldest entries age out and the new experience lands. Trimming the
+ *    new entries instead would re-create the exact silent drop PR #22 fixed.
+ *
+ * Dropped entries are logged with their identity keys — the daemon log is the
+ * forensic trail (same philosophy as the junk-drop logging above).
+ */
+declare function applySoulSectionCap(section: SoulSection, mode: "append" | "replace", merged: unknown[]): unknown[];
 export declare function handleCreateKnowledgeGems(state: GlobalPluginState, session: SessionState, args: Record<string, unknown>): Promise<{
     content: Array<{
         type: "text";
@@ -113,5 +130,6 @@ export declare const __test__: {
     coerceEmotionalDimensions: typeof coerceEmotionalDimensions;
     coerceEarnedValues: typeof coerceEarnedValues;
     mergeSoulSection: typeof mergeSoulSection;
+    applySoulSectionCap: typeof applySoulSectionCap;
 };
 export {};

@@ -321,11 +321,19 @@ describe("checkGraduation", () => {
 // ── seedSoulAsCoreMemory ────────────────────────────────────────────────────
 
 describe("seedSoulAsCoreMemory", () => {
-  function mockSoulStore() {
+  function mockSoulStore(existingRows: { id: string; text: string }[] = []) {
     const records: { text: string; category: string; priority: number; tier: number }[] = [];
     const deleted: string[] = [];
+    const archiveSql: string[] = [];
     return {
       isAvailable: () => true,
+      // v0.8.8 create-first reseed: seedSoulAsCoreMemory now enumerates the
+      // active soul-category rows up front so it can archive superseded rows
+      // by id AFTER the new entries land.
+      queryFirst: async (sql: string) => {
+        if (sql.includes("FROM core_memory")) return existingRows;
+        return [];
+      },
       queryExec: async (_sql: string, params?: any) => {
         // v0.7.93 append-only: was DELETE — now UPDATE...SET active=false with
         // matching archive_reason. Mock the soft-archive shape so the existing
@@ -334,6 +342,7 @@ describe("seedSoulAsCoreMemory", () => {
         if ((_sql.includes("DELETE") || /UPDATE\s+core_memory[\s\S]+active\s*=\s*false/.test(_sql))
             && params?.cat) {
           deleted.push(params.cat);
+          archiveSql.push(_sql);
         }
       },
       createCoreMemory: async (text: string, category: string, priority: number, tier: number) => {
@@ -342,6 +351,7 @@ describe("seedSoulAsCoreMemory", () => {
       },
       _records: records,
       _deleted: deleted,
+      _archiveSql: archiveSql,
     };
   }
 
@@ -390,10 +400,27 @@ describe("seedSoulAsCoreMemory", () => {
     expect(ev!.text).toContain("caught a bug by double-checking");
   });
 
-  it("clears old soul entries before seeding", async () => {
-    const store = mockSoulStore();
+  it("archives superseded soul entries by id after seeding (create-first)", async () => {
+    // v0.8.8: the old archive-then-create order had a crash window with NO
+    // soul entries in Tier-0. Now creation happens first and only enumerated
+    // old rows whose prefix matches a successfully re-seeded section are
+    // archived, by explicit id.
+    const store = mockSoulStore([
+      { id: "core_memory:old1", text: "Working style: obsolete style" },
+      { id: "core_memory:old2", text: "Persona: old persona line" },
+    ]);
     await seedSoulAsCoreMemory(fakeSoul, store as any);
+    expect(store._records.length).toBe(4); // creates still land
     expect(store._deleted).toContain("soul");
+    // The archive targets the enumerated ids, not the whole category.
+    expect(store._archiveSql.some(sql => sql.includes("core_memory:old1") && sql.includes("core_memory:old2"))).toBe(true);
+  });
+
+  it("does not archive anything when no old soul entries exist", async () => {
+    const store = mockSoulStore([]);
+    await seedSoulAsCoreMemory(fakeSoul, store as any);
+    expect(store._records.length).toBe(4);
+    expect(store._deleted).not.toContain("soul");
   });
 
   it("returns 0 when store unavailable", async () => {
