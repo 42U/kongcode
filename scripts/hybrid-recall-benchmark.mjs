@@ -27,9 +27,11 @@ const rrf = (lists, k = 60) => { const m = new Map(); for (const l of lists) l.f
 const rankOf = (id, ordered) => { const i = ordered.indexOf(id); return i < 0 ? Infinity : i + 1; };
 const mean = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : 0);
 
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const SCRIPT_CRED = resolveScriptCred();
 const s = new Surreal();
 await s.connect("ws://127.0.0.1:8000/rpc");
-await s.signin({ username: "root", password: "root" });
+await s.signin({ username: SCRIPT_CRED.user, password: SCRIPT_CRED.pass });
 await s.use({ namespace: "laqrum", database: "memory" });
 console.error("loading concept corpus...");
 const rows = (await s.query("SELECT meta::id(id) AS id, content, embedding FROM concept WHERE embedding != NONE AND content != NONE AND superseded_at IS NONE"))?.[0] || [];

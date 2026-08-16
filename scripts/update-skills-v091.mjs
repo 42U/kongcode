@@ -8,8 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const URL = process.env.SURREAL_URL || "ws://127.0.0.1:8000/rpc";
-const USER = process.env.SURREAL_USER || "root";
-const PASS = process.env.SURREAL_PASS || "root";
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const { user: USER, pass: PASS } = resolveScriptCred();
 const NS = process.env.SURREAL_NS || "laqrum";
 const DB = process.env.SURREAL_DB || "memory";
 

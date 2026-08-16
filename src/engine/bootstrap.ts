@@ -84,6 +84,12 @@ export interface BootstrapInput {
   surrealUrlOverride: string | undefined;
   surrealUser: string;
   surrealPass: string;
+  /** Phase 3: true when the operator explicitly configured credentials
+   *  (plugin config or SURREAL_USER/SURREAL_PASS env). When false/absent,
+   *  surrealUser/surrealPass are the legacy root:root DEFAULTS and external-
+   *  target auth prefers the managed cred file over them (see
+   *  buildExternalCredChain). */
+  surrealCredsExplicit?: boolean;
 }
 
 let managedSurreal: ChildProcess | null = null;
@@ -844,24 +850,33 @@ function surrealCredPath(cacheDir: string): string {
  *  absent and regenerated (the managed child would then be respawned with the
  *  new secret on its next lifecycle, same graceful-migration path as a
  *  pre-Phase-2 root:root child). */
+/** Read the persisted managed credential WITHOUT creating one. Returns null
+ *  when the file is absent or malformed. Phase 3 uses this for the external-
+ *  target credential chain: merely CONSIDERING the file as a fallback must
+ *  not mint a credential (that stays the managed-spawn path's job). */
+export function readManagedCred(cacheDir: string): ManagedSurrealCred | null {
+  const path = surrealCredPath(cacheDir);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Partial<ManagedSurrealCred>;
+    if (
+      parsed &&
+      typeof parsed.user === "string" && parsed.user.length > 0 &&
+      typeof parsed.pass === "string" && parsed.pass.length > 0
+    ) {
+      return { user: parsed.user, pass: parsed.pass };
+    }
+  } catch { /* malformed → null; getOrCreateManagedCred logs + regenerates */ }
+  return null;
+}
+
 export function getOrCreateManagedCred(cacheDir: string): ManagedSurrealCred {
   const path = surrealCredPath(cacheDir);
   // Read existing.
   if (existsSync(path)) {
-    try {
-      const raw = readFileSync(path, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<ManagedSurrealCred>;
-      if (
-        parsed &&
-        typeof parsed.user === "string" && parsed.user.length > 0 &&
-        typeof parsed.pass === "string" && parsed.pass.length > 0
-      ) {
-        return { user: parsed.user, pass: parsed.pass };
-      }
-      log.warn(`[bootstrap] managed surreal cred file at ${path} is malformed — regenerating`);
-    } catch (e) {
-      log.warn(`[bootstrap] failed to read managed surreal cred file (${(e as Error).message}) — regenerating`);
-    }
+    const existing = readManagedCred(cacheDir);
+    if (existing) return existing;
+    log.warn(`[bootstrap] managed surreal cred file at ${path} is missing/malformed — regenerating`);
   }
   // Generate fresh.
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
@@ -934,6 +949,41 @@ export function resolveReusedTargetCred(args: {
   return configured;
 }
 
+/**
+ * Phase 3: candidate credentials for an EXTERNAL SurrealDB target, in
+ * attempt order.
+ *
+ * Pre-Phase-3, external targets were always probed/connected with the
+ * configured creds — which collapse to the legacy root:root DEFAULT when the
+ * operator configured nothing. Two problems: (a) the daemon ran with OWNER
+ * power it doesn't need, against a guessable credential; (b) hardening the
+ * instance (rotating root) made discovery fail, and a failed discovery falls
+ * through to a FRESH managed spawn — the split-brain the reuse path exists
+ * to prevent.
+ *
+ * Chain semantics:
+ *   - Operator explicitly configured creds (plugin config or SURREAL_USER/
+ *     SURREAL_PASS env) → their word is final: chain is exactly [configured].
+ *   - Otherwise → the managed per-user cred file first (the instance may have
+ *     a matching root-LEVEL, EDITOR-role user provisioned — same shape the
+ *     managed spawn uses), then the legacy root:root default last for
+ *     pre-hardening compatibility.
+ *
+ * The chain is tried per candidate URL; the first credential that
+ * authenticates wins and propagates to the connection config.
+ */
+export function buildExternalCredChain(args: {
+  credsExplicit: boolean;
+  configured: ManagedSurrealCred;
+  fileCred: ManagedSurrealCred | null;
+}): ManagedSurrealCred[] {
+  if (args.credsExplicit) return [args.configured];
+  const chain: ManagedSurrealCred[] = [];
+  if (args.fileCred) chain.push(args.fileCred);
+  chain.push(args.configured);
+  return chain;
+}
+
 /** Tables that are unique to laqrumcode's schema — used as a fingerprint to
  *  distinguish "this is our DB" from "this is a SurrealDB someone else
  *  happens to be running on the same port" (e.g., a trading bot's DB).
@@ -974,6 +1024,34 @@ async function isLaqrumcodeSurreal(
     const tables = data?.[0]?.result?.tables;
     if (!tables || typeof tables !== "object") return false;
     return LAQRUMCODE_FINGERPRINT_TABLES.some((t) => t in tables);
+  } catch {
+    return false;
+  }
+}
+
+/** Phase 3: auth-only probe — does this credential sign in at `url`? Unlike
+ *  isLaqrumcodeSurreal it demands NO fingerprint tables, because the
+ *  SURREAL_URL-override target may be a legitimately EMPTY external DB the
+ *  user just provisioned. A trivial statement distinguishes 401 (bad cred)
+ *  from 200 (good cred, any DB state). */
+async function canAuthSurreal(url: string, user: string, pass: string): Promise<boolean> {
+  const sqlUrl = url
+    .replace(/^wss?:/, (m) => (m === "wss:" ? "https:" : "http:"))
+    .replace(/\/rpc$/, "/sql");
+  try {
+    const res = await fetch(sqlUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Authorization: "Basic " + Buffer.from(`${user}:${pass}`).toString("base64"),
+        "surreal-ns": "laqrum",
+        "surreal-db": "memory",
+      },
+      body: "RETURN 1;",
+      signal: AbortSignal.timeout(3_000),
+    });
+    return res.ok;
   } catch {
     return false;
   }
@@ -1208,7 +1286,16 @@ export async function findExistingLaqrumcodeSurreal(
   // so the production call site (4 args) is unchanged. Mirrors the procRoot
   // injection already used by findListenerUidViaProc.
   resolveOwnerUid: (port: number) => number | null = findListenerUid,
-): Promise<{ url: string; pid: number | null; port: number } | null> {
+  // Phase 3: optional credential chain for discovery. When supplied, each
+  // candidate port is probed with each credential in order and the FIRST one
+  // that fingerprints wins (returned as user/pass). Without it, behavior is
+  // exactly pre-Phase-3: the single user/pass args are the only credential.
+  // This matters because a discovery auth failure is indistinguishable from
+  // "not a laqrumcode DB" — pre-chain, rotating the instance's root
+  // credential made discovery fall through to a FRESH managed spawn (the
+  // split-brain the reuse path exists to prevent).
+  credChain?: ManagedSurrealCred[],
+): Promise<{ url: string; pid: number | null; port: number; user: string; pass: string } | null> {
   // Dedup'd candidate list. Order is load-bearing: legacy external ports (8000
   // from Docker setups, alternate 8042 from older READMEs) come first; then
   // the UID-offset bootstrap-managed port for this user; then the legacy
@@ -1238,8 +1325,16 @@ export async function findExistingLaqrumcodeSurreal(
     }
 
     const url = `ws://127.0.0.1:${port}/rpc`;
-    if (!(await isLaqrumcodeSurreal(url, user, pass))) {
-      log.debug(`[bootstrap] port ${port} responds but isn't a laqrumcode DB — skipping`);
+    const chain = credChain && credChain.length > 0 ? credChain : [{ user, pass }];
+    let winner: ManagedSurrealCred | null = null;
+    for (const cred of chain) {
+      if (await isLaqrumcodeSurreal(url, cred.user, cred.pass)) {
+        winner = cred;
+        break;
+      }
+    }
+    if (!winner) {
+      log.debug(`[bootstrap] port ${port} responds but isn't a laqrumcode DB (or no candidate credential authenticates) — skipping`);
       continue;
     }
 
@@ -1278,9 +1373,10 @@ export async function findExistingLaqrumcodeSurreal(
 
     log.info(
       `[bootstrap] found existing laqrumcode SurrealDB at ${url}` +
-        (pid !== null ? ` (managed pid=${pid})` : ` (external — not managing lifecycle)`),
+        (pid !== null ? ` (managed pid=${pid})` : ` (external — not managing lifecycle)`) +
+        ` — auth user '${winner.user}'`,
     );
-    return { url, pid, port };
+    return { url, pid, port, user: winner.user, pass: winner.pass };
   }
 
   return null;
@@ -1489,10 +1585,31 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
   );
 
   // External-SurrealDB path: user explicitly opted out via SURREAL_URL.
+  // Phase 3: candidate credentials for external targets — explicit config
+  // verbatim, else managed cred file first, legacy root:root default last.
+  // Built once; used by both the SURREAL_URL override and the reuse branch.
+  const externalCredChain = buildExternalCredChain({
+    credsExplicit: input.surrealCredsExplicit === true,
+    configured: { user: input.surrealUser, pass: input.surrealPass },
+    fileCred: readManagedCred(input.cacheDir),
+  });
+
   if (input.surrealUrlOverride) {
     log.info(
       `[bootstrap] SURREAL_URL set to ${input.surrealUrlOverride} — skipping managed SurrealDB child.`,
     );
+    // Auth-select from the chain (auth-only probe: the target may be a
+    // legitimately empty DB, so no fingerprint requirement here). If nothing
+    // authenticates, fall back to the configured creds — exactly the pre-
+    // Phase-3 failure mode, surfaced later by the store's connect error.
+    let overrideCred: ManagedSurrealCred = { user: input.surrealUser, pass: input.surrealPass };
+    for (const cred of externalCredChain) {
+      if (await canAuthSurreal(input.surrealUrlOverride, cred.user, cred.pass)) {
+        overrideCred = cred;
+        break;
+      }
+    }
+    log.info(`[bootstrap] external SurrealDB auth (SURREAL_URL): user '${overrideCred.user}'`);
     return {
       npmInstall,
       surrealBinary: { path: "(external)", provisioned: false, sizeBytes: 0 },
@@ -1500,11 +1617,11 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
         url: input.surrealUrlOverride,
         pid: null,
         managed: false,
-        // SURREAL_URL points at an EXTERNAL, user-run SurrealDB. Auth path is
-        // UNCHANGED from pre-Phase-2: use exactly the configured creds
-        // (config.surreal.user/pass = root, or SURREAL_USER/SURREAL_PASS).
-        user: input.surrealUser,
-        pass: input.surrealPass,
+        // SURREAL_URL points at an EXTERNAL, user-run SurrealDB. Phase 3:
+        // the credential is the chain's first authenticating candidate
+        // (explicit config short-circuits the chain to itself).
+        user: overrideCred.user,
+        pass: overrideCred.pass,
       },
       embeddingModel,
       rerankerModel,
@@ -1545,9 +1662,11 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
     port,
     input.surrealUser,
     input.surrealPass,
+    undefined,
+    externalCredChain,
   );
   if (existing) {
-    // Per-target credential resolution (Phase 2):
+    // Per-target credential resolution (Phase 2, chain-aware since Phase 3):
     //  - existing.pid !== null  ⟺ a managed-surface port for which we hold a
     //    live pid file → this is OUR managed child.
     //      · cred file present → it was spawned with the generated cred → use it.
@@ -1556,17 +1675,21 @@ export async function bootstrap(input: BootstrapInput): Promise<BootstrapResult>
     //        running instance; it adopts the per-user cred on its next respawn
     //        (spawnManagedSurreal always uses the generated cred now).
     //  - existing.pid === null  ⟺ an EXTERNAL DB (8000/8042, lifecycle not
-    //    ours). Auth path UNCHANGED: use the configured creds verbatim.
+    //    ours). Phase 3: use the credential that WON discovery — the chain's
+    //    first authenticating candidate (explicit config short-circuits the
+    //    chain to itself, preserving the pre-Phase-3 verbatim behavior).
     const credFileExists = managedCredFileExists(input.cacheDir);
-    const { user, pass } = resolveReusedTargetCred({
-      discoveredPid: existing.pid,
-      credFileExists,
-      configured: { user: input.surrealUser, pass: input.surrealPass },
-      // Only read/mint the cred when the file actually exists (managed child
-      // path); for external targets credFileExists is irrelevant and we avoid
-      // a needless file write.
-      generated: credFileExists ? getOrCreateManagedCred(input.cacheDir) : { user: "", pass: "" },
-    });
+    const { user, pass } = existing.pid === null
+      ? { user: existing.user, pass: existing.pass }
+      : resolveReusedTargetCred({
+          discoveredPid: existing.pid,
+          credFileExists,
+          configured: { user: input.surrealUser, pass: input.surrealPass },
+          // Only read/mint the cred when the file actually exists (managed child
+          // path); for external targets credFileExists is irrelevant and we avoid
+          // a needless file write.
+          generated: credFileExists ? getOrCreateManagedCred(input.cacheDir) : { user: "", pass: "" },
+        });
     return {
       npmInstall,
       surrealBinary,

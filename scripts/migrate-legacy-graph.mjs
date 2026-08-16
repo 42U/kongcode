@@ -64,14 +64,16 @@ if (!LEGACY) {
   process.exit(2);
 }
 
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const SCRIPT_CRED = resolveScriptCred();
 const CFG = {
   srcUrl: process.env.SRC_URL || "ws://127.0.0.1:8000/rpc",
   srcNs: process.env.SRC_NS || LEGACY,
   dstUrl: process.env.DST_URL || process.env.SRC_URL || "ws://127.0.0.1:8000/rpc",
   dstNs: process.env.DST_NS || NEW,
   db: process.env.SURREAL_DB || "memory",
-  user: process.env.SURREAL_USER || "root",
-  pass: process.env.SURREAL_PASS || "root",
+  user: SCRIPT_CRED.user,
+  pass: SCRIPT_CRED.pass,
   batch: Math.max(1, Number(process.env.BATCH || 500)),
   dryRun: process.env.DRY_RUN === "1",
 };

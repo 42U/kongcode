@@ -193,9 +193,11 @@ async function initializeStack(getActiveClientCount) {
     log.info(`[daemon] resource tier: ${resourceProfile.tier} ` +
         `(ram=${resourceProfile.totalRamMb}MB, cpus=${resourceProfile.cpuCount}, ` +
         `gpu=${resourceProfile.llamaGpu}, threads=${resourceProfile.llamaMaxThreads})`);
-    if (config.surreal.user === "root" && config.surreal.pass === "root") {
-        log.warn("[daemon] SurrealDB using default credentials (root:root). " +
-            "Set SURREAL_USER and SURREAL_PASS env vars for stronger auth.");
+    if (config.surreal.user === "root" && config.surreal.pass === "root" && !config.surreal.credsExplicit) {
+        log.warn("[daemon] no explicit SurrealDB credentials configured — bootstrap will " +
+            "prefer the managed cred file (~/.laqrumcode/surreal-cred.json) and fall " +
+            "back to legacy root:root only as a last resort. Set SURREAL_USER and " +
+            "SURREAL_PASS to pin auth explicitly.");
     }
     if (process.env.LAQRUMCODE_SKIP_BOOTSTRAP !== "1") {
         setBootstrapPhase("npm-install");
@@ -211,6 +213,7 @@ async function initializeStack(getActiveClientCount) {
                 surrealUrlOverride: process.env.SURREAL_URL,
                 surrealUser: config.surreal.user,
                 surrealPass: config.surreal.pass,
+                surrealCredsExplicit: config.surreal.credsExplicit,
             });
             if (result.surrealServer.managed || result.surrealServer.url) {
                 // Bootstrap may have detected an existing laqrumcode SurrealDB on a

@@ -8,6 +8,13 @@ export interface SurrealConfig {
   pass: string;
   ns: string;
   db: string;
+  /** Phase 3: true when user/pass came from explicit configuration (plugin
+   *  config or SURREAL_USER/SURREAL_PASS env) rather than collapsing to the
+   *  legacy root:root defaults. Bootstrap treats non-explicit creds as a
+   *  last-resort fallback behind the managed cred file for external targets.
+   *  Optional so test fixtures constructing SurrealConfig literals keep
+   *  compiling; absent means "not explicit". */
+  credsExplicit?: boolean;
 }
 
 export interface EmbeddingConfig {
@@ -99,6 +106,13 @@ export function parsePluginConfig(raw?: Record<string, unknown>): MemoryConfig {
       },
       user: (typeof surreal.user === "string" && surreal.user ? surreal.user : null) ?? (process.env.SURREAL_USER || null) ?? "root",
       pass: (typeof surreal.pass === "string" && surreal.pass ? surreal.pass : null) ?? (process.env.SURREAL_PASS || null) ?? "root",
+      // Phase 3: record whether creds were explicitly provided. Either half
+      // counts — an operator setting only SURREAL_USER intends explicit auth
+      // (and a half-set credential should fail loudly, not silently fall back).
+      credsExplicit: Boolean(
+        (typeof surreal.user === "string" && surreal.user) || process.env.SURREAL_USER ||
+        (typeof surreal.pass === "string" && surreal.pass) || process.env.SURREAL_PASS,
+      ),
       ns: (typeof surreal.ns === "string" && surreal.ns ? surreal.ns : null) ?? (process.env.SURREAL_NS || null) ?? "laqrum",
       db: (typeof surreal.db === "string" && surreal.db ? surreal.db : null) ?? (process.env.SURREAL_DB || null) ?? "memory",
     },

@@ -16,11 +16,18 @@
  * original bug ship green).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { SurrealStore } from "../src/engine/surreal.js";
+import { readManagedCred } from "../src/engine/bootstrap.js";
 
 const URL = process.env.SURREAL_URL ?? "ws://127.0.0.1:8000/rpc";
-const USER = process.env.SURREAL_USER ?? "root";
-const PASS = process.env.SURREAL_PASS ?? "root";
+// Phase 3: the live instance may be HARDENED (root rotated away). Resolve
+// like production: env verbatim, else this machine's managed cred file
+// (root-level EDITOR — DEFINE/REMOVE NAMESPACE allowed), else legacy root.
+const FILE_CRED = readManagedCred(join(homedir(), ".laqrumcode", "cache"));
+const USER = process.env.SURREAL_USER ?? FILE_CRED?.user ?? "root";
+const PASS = process.env.SURREAL_PASS ?? FILE_CRED?.pass ?? "root";
 const HTTP = URL.replace(/^ws/, "http").replace(/\/rpc$/, "");
 const NS = `kctest_prov_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const DB = "mem";

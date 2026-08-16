@@ -207,10 +207,12 @@ async function initializeStack(getActiveClientCount?: () => number): Promise<voi
     `gpu=${resourceProfile.llamaGpu}, threads=${resourceProfile.llamaMaxThreads})`,
   );
 
-  if (config.surreal.user === "root" && config.surreal.pass === "root") {
+  if (config.surreal.user === "root" && config.surreal.pass === "root" && !config.surreal.credsExplicit) {
     log.warn(
-      "[daemon] SurrealDB using default credentials (root:root). " +
-      "Set SURREAL_USER and SURREAL_PASS env vars for stronger auth.",
+      "[daemon] no explicit SurrealDB credentials configured — bootstrap will " +
+      "prefer the managed cred file (~/.laqrumcode/surreal-cred.json) and fall " +
+      "back to legacy root:root only as a last resort. Set SURREAL_USER and " +
+      "SURREAL_PASS to pin auth explicitly.",
     );
   }
 
@@ -228,6 +230,7 @@ async function initializeStack(getActiveClientCount?: () => number): Promise<voi
         surrealUrlOverride: process.env.SURREAL_URL,
         surrealUser: config.surreal.user,
         surrealPass: config.surreal.pass,
+        surrealCredsExplicit: config.surreal.credsExplicit,
       });
       if (result.surrealServer.managed || result.surrealServer.url) {
         // Bootstrap may have detected an existing laqrumcode SurrealDB on a

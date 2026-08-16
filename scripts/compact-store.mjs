@@ -36,8 +36,8 @@ import { join } from "node:path";
 
 const HTTP_BASE = (process.env.SURREAL_URL || "ws://127.0.0.1:8000/rpc")
   .replace(/^ws/, "http").replace(/\/rpc$/, "");
-const USER = process.env.SURREAL_USER || "root";
-const PASS = process.env.SURREAL_PASS || "root";
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const { user: USER, pass: PASS } = resolveScriptCred();
 const NS = process.env.SURREAL_NS || "laqrum";
 const DB = process.env.SURREAL_DB || "memory";
 const NEW_VERSION = process.env.LAQRUMCODE_COMPACT_NEW_VERSION || "v3.1.4";

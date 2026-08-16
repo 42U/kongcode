@@ -33,8 +33,8 @@ import { execSync } from "node:child_process";
 import { mkdirSync, existsSync, statSync, createReadStream } from "node:fs";
 import { join } from "node:path";
 
-const USER = process.env.SURREAL_USER || "root";
-const PASS = process.env.SURREAL_PASS || "root";
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const { user: USER, pass: PASS } = resolveScriptCred();
 const STAGE = process.env.LAQRUMCODE_COMPACT_STAGE_DIR || "/mnt/money/voidorigin/laqrumcode-compact";
 const IMAGE = "surrealdb/surrealdb:v3.1.4";
 const SCRATCH = "laqrumcode-cutover-build";

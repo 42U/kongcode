@@ -48,6 +48,12 @@ export interface BootstrapInput {
     surrealUrlOverride: string | undefined;
     surrealUser: string;
     surrealPass: string;
+    /** Phase 3: true when the operator explicitly configured credentials
+     *  (plugin config or SURREAL_USER/SURREAL_PASS env). When false/absent,
+     *  surrealUser/surrealPass are the legacy root:root DEFAULTS and external-
+     *  target auth prefers the managed cred file over them (see
+     *  buildExternalCredChain). */
+    surrealCredsExplicit?: boolean;
 }
 /** Minimal structural view of SurrealStore the supervisor needs to surface a
  *  degraded state. Structural (not an import of SurrealStore) so bootstrap.ts
@@ -120,6 +126,11 @@ export interface ManagedSurrealCred {
  *  absent and regenerated (the managed child would then be respawned with the
  *  new secret on its next lifecycle, same graceful-migration path as a
  *  pre-Phase-2 root:root child). */
+/** Read the persisted managed credential WITHOUT creating one. Returns null
+ *  when the file is absent or malformed. Phase 3 uses this for the external-
+ *  target credential chain: merely CONSIDERING the file as a fallback must
+ *  not mint a credential (that stays the managed-spawn path's job). */
+export declare function readManagedCred(cacheDir: string): ManagedSurrealCred | null;
 export declare function getOrCreateManagedCred(cacheDir: string): ManagedSurrealCred;
 /** Resolve which credential the daemon should use to connect to a REUSED /
  *  DISCOVERED SurrealDB. This is the security-critical Phase-2 decision,
@@ -147,6 +158,34 @@ export declare function resolveReusedTargetCred(args: {
     configured: ManagedSurrealCred;
     generated: ManagedSurrealCred;
 }): ManagedSurrealCred;
+/**
+ * Phase 3: candidate credentials for an EXTERNAL SurrealDB target, in
+ * attempt order.
+ *
+ * Pre-Phase-3, external targets were always probed/connected with the
+ * configured creds — which collapse to the legacy root:root DEFAULT when the
+ * operator configured nothing. Two problems: (a) the daemon ran with OWNER
+ * power it doesn't need, against a guessable credential; (b) hardening the
+ * instance (rotating root) made discovery fail, and a failed discovery falls
+ * through to a FRESH managed spawn — the split-brain the reuse path exists
+ * to prevent.
+ *
+ * Chain semantics:
+ *   - Operator explicitly configured creds (plugin config or SURREAL_USER/
+ *     SURREAL_PASS env) → their word is final: chain is exactly [configured].
+ *   - Otherwise → the managed per-user cred file first (the instance may have
+ *     a matching root-LEVEL, EDITOR-role user provisioned — same shape the
+ *     managed spawn uses), then the legacy root:root default last for
+ *     pre-hardening compatibility.
+ *
+ * The chain is tried per candidate URL; the first credential that
+ * authenticates wins and propagates to the connection config.
+ */
+export declare function buildExternalCredChain(args: {
+    credsExplicit: boolean;
+    configured: ManagedSurrealCred;
+    fileCred: ManagedSurrealCred | null;
+}): ManagedSurrealCred[];
 /**
  * Find the OS-user (UID) that owns the process LISTENING on a loopback TCP
  * `port`, using only the Linux `/proc` filesystem.
@@ -209,10 +248,12 @@ export declare function findListenerUidViaProc(port: number, procRoot?: string):
  *
  *  Returns the first match. SURREAL_URL env var still takes precedence in the
  *  parent caller — this function only runs when the user hasn't pinned a URL. */
-export declare function findExistingLaqrumcodeSurreal(cacheDir: string, managedPort: number, user: string, pass: string, resolveOwnerUid?: (port: number) => number | null): Promise<{
+export declare function findExistingLaqrumcodeSurreal(cacheDir: string, managedPort: number, user: string, pass: string, resolveOwnerUid?: (port: number) => number | null, credChain?: ManagedSurrealCred[]): Promise<{
     url: string;
     pid: number | null;
     port: number;
+    user: string;
+    pass: string;
 } | null>;
 /** Spawn (and supervise) the managed SurrealDB child. Exported for the C1/C2
  *  supervision regression test, which drives spawn → exit → respawn/cap without

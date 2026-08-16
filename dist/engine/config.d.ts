@@ -5,6 +5,13 @@ export interface SurrealConfig {
     pass: string;
     ns: string;
     db: string;
+    /** Phase 3: true when user/pass came from explicit configuration (plugin
+     *  config or SURREAL_USER/SURREAL_PASS env) rather than collapsing to the
+     *  legacy root:root defaults. Bootstrap treats non-explicit creds as a
+     *  last-resort fallback behind the managed cred file for external targets.
+     *  Optional so test fixtures constructing SurrealConfig literals keep
+     *  compiling; absent means "not explicit". */
+    credsExplicit?: boolean;
 }
 export interface EmbeddingConfig {
     modelPath: string;

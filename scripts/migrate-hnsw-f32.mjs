@@ -18,12 +18,14 @@
  */
 import { Surreal } from "surrealdb";
 
+import { resolveScriptCred } from "./surreal-cred.mjs";
+const SCRIPT_CRED = resolveScriptCred();
 const CFG = {
   url: process.env.SRC_URL || "ws://127.0.0.1:8000/rpc",
   ns: process.env.SURREAL_NS || "laqrum",
   db: process.env.SURREAL_DB || "memory",
-  user: process.env.SURREAL_USER || "root",
-  pass: process.env.SURREAL_PASS || "root",
+  user: SCRIPT_CRED.user,
+  pass: SCRIPT_CRED.pass,
   dryRun: process.env.DRY_RUN === "1",
 };
 

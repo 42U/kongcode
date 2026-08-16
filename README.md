@@ -167,11 +167,20 @@ If you already run SurrealDB, set `SURREAL_URL` and the bootstrap skips the mana
 
 ```bash
 export SURREAL_URL="ws://localhost:8000/rpc"
-export SURREAL_USER=root
-export SURREAL_PASS=root
+export SURREAL_USER=my_editor_user
+export SURREAL_PASS=my_strong_password
 ```
 
 LaqrumCode also auto-detects an existing SurrealDB on `8000`, `8042`, or the managed port at startup.
+
+**Credentials.** When `SURREAL_USER`/`SURREAL_PASS` are set, they are used verbatim. When they are NOT set, external targets are tried with the managed per-user credential (`~/.laqrumcode/surreal-cred.json`) first, then the legacy `root:root` default as a last resort — so a hardened instance keeps working without configuration. To harden an instance that still accepts `root:root`:
+
+```bash
+node scripts/provision-scoped-users.mjs   # defines a non-root EDITOR user matching surreal-cred.json
+node scripts/rotate-root-cred.mjs         # rotates root to a strong secret → ~/.laqrumcode/surreal-admin-cred.json (0600)
+```
+
+The daemon then authenticates as the scoped EDITOR user (full data + schema DDL, no user management); the rotated OWNER credential is for administration only. The maintenance scripts (`backup-*`, `restore-*`, `migrate-*`, …) resolve credentials the same way: env first, then `surreal-cred.json`, then the legacy default.
 
 ### Platform support
 
@@ -267,8 +276,8 @@ All env vars are optional with sensible defaults.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SURREAL_URL` | `ws://localhost:8000/rpc` | SurrealDB WebSocket URL. Bootstrap auto-detects `8000`, `8042`, then the managed port. |
-| `SURREAL_USER` | `root` | SurrealDB username |
-| `SURREAL_PASS` | `root` | SurrealDB password |
+| `SURREAL_USER` | (chain) | SurrealDB username. Unset → managed cred file (`~/.laqrumcode/surreal-cred.json`) first, legacy `root` last |
+| `SURREAL_PASS` | (chain) | SurrealDB password. Unset → managed cred file first, legacy `root` last |
 | `SURREAL_NS` | `laqrum` | SurrealDB namespace |
 | `SURREAL_DB` | `memory` | SurrealDB database |
 | `SURREAL_BIN_PATH` | (auto) | Path to surreal binary; bypasses bootstrap download |

@@ -431,14 +431,19 @@ async function initialize() {
                 surrealUrlOverride: process.env.SURREAL_URL,
                 surrealUser: config.surreal.user,
                 surrealPass: config.surreal.pass,
+                surrealCredsExplicit: config.surreal.credsExplicit,
             });
-            if (result.surrealServer.managed) {
-                // Point the store at the managed child instead of the default ws://localhost:8000.
+            if (result.surrealServer.managed || result.surrealServer.url) {
+                // Point the store at whatever bootstrap chose (managed child OR a
+                // discovered/override external target).
                 config.surreal.url = result.surrealServer.url;
-                // Phase 2: a managed child is spawned with a GENERATED per-user cred,
-                // not root:root — adopt it so this relay connects with the matching
-                // secret. (External targets have managed=false and never reach here,
-                // so their configured-creds auth path is unchanged.)
+                // Phase 2/3: bootstrap resolves the credential for the chosen target —
+                // the GENERATED per-user cred for a managed child, or the external
+                // chain's winning credential (managed cred file > legacy root:root
+                // default; explicit config verbatim). Adopt it so this relay connects
+                // with the matching secret. Pre-Phase-3 this branch was managed-only,
+                // which left external targets on the raw configured creds and broke
+                // them the moment the instance's root credential was rotated.
                 if (result.surrealServer.user) {
                     config.surreal.user = result.surrealServer.user;
                 }

@@ -37,6 +37,11 @@ export function parsePluginConfig(raw) {
             },
             user: (typeof surreal.user === "string" && surreal.user ? surreal.user : null) ?? (process.env.SURREAL_USER || null) ?? "root",
             pass: (typeof surreal.pass === "string" && surreal.pass ? surreal.pass : null) ?? (process.env.SURREAL_PASS || null) ?? "root",
+            // Phase 3: record whether creds were explicitly provided. Either half
+            // counts — an operator setting only SURREAL_USER intends explicit auth
+            // (and a half-set credential should fail loudly, not silently fall back).
+            credsExplicit: Boolean((typeof surreal.user === "string" && surreal.user) || process.env.SURREAL_USER ||
+                (typeof surreal.pass === "string" && surreal.pass) || process.env.SURREAL_PASS),
             ns: (typeof surreal.ns === "string" && surreal.ns ? surreal.ns : null) ?? (process.env.SURREAL_NS || null) ?? "laqrum",
             db: (typeof surreal.db === "string" && surreal.db ? surreal.db : null) ?? (process.env.SURREAL_DB || null) ?? "memory",
         },

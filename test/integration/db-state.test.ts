@@ -35,6 +35,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { Surreal } from "surrealdb";
 import { parsePluginConfig } from "../../src/engine/config.js";
+import { readManagedCred } from "../../src/engine/bootstrap.js";
 
 const SOCKET_PATH =
   process.env.LAQRUMCODE_DAEMON_SOCKET ?? join(homedir(), ".laqrumcode-daemon.sock");
@@ -60,11 +61,19 @@ describe.skipIf(!RUN_LIVE)("laqrumcode DB state invariants (live, read-only)", (
   beforeAll(async () => {
     const config = parsePluginConfig({});
     const { url, ns, db: dbName, user, pass } = config.surreal;
+    // Phase 3: the live instance may be HARDENED (root rotated away).
+    // Resolve like production: explicit env creds verbatim; otherwise this
+    // machine's managed cred file first, legacy defaults last. RUN_LIVE
+    // already gates on the daemon socket, and a healthy daemon uses the
+    // same chain.
+    const cred = config.surreal.credsExplicit
+      ? { user, pass }
+      : (readManagedCred(join(homedir(), ".laqrumcode", "cache")) ?? { user, pass });
     db = new Surreal();
     await db.connect(url, {
       namespace: ns,
       database: dbName,
-      authentication: { username: user, password: pass },
+      authentication: { username: cred.user, password: cred.pass },
     });
   }, 15_000);
 

@@ -24,10 +24,12 @@ import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import {
   findExistingLaqrumcodeSurreal,
   LEGACY_MANAGED_SURREAL_PORT,
+  buildExternalCredChain,
+  readManagedCred,
 } from "../src/engine/bootstrap.js";
 
 const SURREAL_BIN =
@@ -316,6 +318,16 @@ describe("findExistingLaqrumcodeSurreal external-port allow (GH #13, undetermine
       USER,
       PASS,
       () => null, // owner cannot be determined; external port must still ALLOW
+      // Phase 3: the live 8000 instance may be HARDENED (root rotated away),
+      // so resolve credentials exactly like production does — this machine's
+      // managed cred file first, legacy root:root last. On an unhardened box
+      // the chain degenerates to root:root and the pre-Phase-3 assertion is
+      // unchanged.
+      buildExternalCredChain({
+        credsExplicit: false,
+        configured: { user: USER, pass: PASS },
+        fileCred: readManagedCred(join(homedir(), ".laqrumcode", "cache")),
+      }),
     );
     expect(result).not.toBeNull();
     expect(result?.port).toBe(8000);
