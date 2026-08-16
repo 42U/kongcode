@@ -124,7 +124,9 @@ export async function synthesizeWakeup(store, currentSessionId, workspaceDir) {
                     soulLines.push("Self-observations: " + soul.self_observations.join("; "));
                 }
                 if (soul.earned_values.length > 0) {
-                    soulLines.push("Earned values: " + soul.earned_values.map(v => `${v.value} (${v.grounded_in})`).join("; "));
+                    // grounded_in may be empty (PR #22 bare-string earned values) —
+                    // skip the parenthetical rather than render "value ()".
+                    soulLines.push("Earned values: " + soul.earned_values.map(v => v.grounded_in ? `${v.value} (${v.grounded_in})` : v.value).join("; "));
                 }
                 if (soulLines.length > 0) {
                     sections.push(`[SOUL — YOUR SELF-AUTHORED IDENTITY]\n${soulLines.join("\n")}`);

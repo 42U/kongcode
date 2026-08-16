@@ -472,7 +472,12 @@ export interface SoulDocument {
   id: string;
   agent_id: string;
   working_style: string[];
-  emotional_dimensions: { dimension: string; rationale: string; adopted_at: string }[];
+  // `description`, not `rationale`: schema.surql defines
+  // emotional_dimensions.*.description, and both soul writers
+  // (pending-work.ts soul_generate/soul_evolve) have always written
+  // `description`. The interface previously said `rationale`, hidden by
+  // `any`-typed writer maps — a trap for any future reader coded against it.
+  emotional_dimensions: { dimension: string; description: string; adopted_at: string }[];
   self_observations: string[];
   earned_values: { value: string; grounded_in: string }[];
   revisions: { timestamp: string; section: string; change: string; rationale: string }[];
@@ -725,9 +730,11 @@ export async function seedSoulAsCoreMemory(
     } catch (e) { swallow.warn("soul:seedObservations", e); }
   }
 
-  // Earned values — grounded principles
+  // Earned values — grounded principles. grounded_in may be empty (PR #22
+  // accepts bare-string earned values) — don't render a dangling
+  // "(learned from: )".
   if (soul.earned_values.length > 0) {
-    const lines = soul.earned_values.map(v => `${v.value} (learned from: ${v.grounded_in})`);
+    const lines = soul.earned_values.map(v => v.grounded_in ? `${v.value} (learned from: ${v.grounded_in})` : v.value);
     const text = "Earned values: " + lines.join("; ");
     try {
       await store.createCoreMemory(text, SOUL_CATEGORY, 88, 0);

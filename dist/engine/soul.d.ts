@@ -105,7 +105,7 @@ export interface SoulDocument {
     working_style: string[];
     emotional_dimensions: {
         dimension: string;
-        rationale: string;
+        description: string;
         adopted_at: string;
     }[];
     self_observations: string[];

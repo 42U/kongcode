@@ -565,9 +565,11 @@ export async function seedSoulAsCoreMemory(soul, store) {
             swallow.warn("soul:seedObservations", e);
         }
     }
-    // Earned values — grounded principles
+    // Earned values — grounded principles. grounded_in may be empty (PR #22
+    // accepts bare-string earned values) — don't render a dangling
+    // "(learned from: )".
     if (soul.earned_values.length > 0) {
-        const lines = soul.earned_values.map(v => `${v.value} (learned from: ${v.grounded_in})`);
+        const lines = soul.earned_values.map(v => v.grounded_in ? `${v.value} (learned from: ${v.grounded_in})` : v.value);
         const text = "Earned values: " + lines.join("; ");
         try {
             await store.createCoreMemory(text, SOUL_CATEGORY, 88, 0);

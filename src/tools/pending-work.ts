@@ -120,6 +120,18 @@ const soulSchema = {
   required: ["working_style", "emotional_dimensions", "self_observations", "earned_values"],
 };
 
+// PR #22 follow-up: soul_evolve embeds a PARTIAL variant of the soul schema.
+// Embedding `soulSchema` itself would mark all four sections `required` —
+// contradicting the "return ONLY changed sections / return {}" contract and
+// pushing agents to echo every section on every run. reviseSoul REPLACES a
+// section wholesale, so a pressured, imperfect echo silently degrades stored
+// identity data. Same section shapes; nothing required.
+const soulEvolveSchema = {
+  type: "object",
+  properties: soulSchema.properties,
+  required: [] as string[],
+};
+
 // ── fetch_pending_work ───────────────────────────────────────────────────────
 
 /**
@@ -753,14 +765,14 @@ async function buildWorkPayload(
       return {
         work_id: item.id,
         work_type: "soul_evolve",
-        instructions: `You are revising your own Soul document based on new experience. Return JSON with ONLY the fields that changed. Omit unchanged fields. If nothing meaningful changed, return {}. Be honest — revise based on evidence, not aspiration.`,
+        instructions: `You are revising your own Soul document based on new experience. Return JSON with ONLY the sections that changed; omit unchanged sections entirely. A section you include REPLACES that stored section wholesale — include the COMPLETE revised array for it: every entry from current_soul you are keeping, plus your additions and rewordings. Never return just the new entries. If nothing meaningful changed, return {}. Be honest — revise based on evidence, not aspiration.`,
         data: {
           current_soul: { working_style: soul.working_style, emotional_dimensions: soul.emotional_dimensions, self_observations: soul.self_observations, earned_values: soul.earned_values },
           new_reflections: (reflections as any[]).map(r => r.text),
           new_causal_chains: (causalChains as any[]).map(c => c.description),
           new_monologues: (monologues as any[]).map(m => m.content),
         },
-        output_format: "Return JSON with ONLY changed fields from the soul schema. Return {} if nothing changed. Schema: " + JSON.stringify(soulSchema),
+        output_format: "Return JSON with ONLY changed sections from the soul schema (every section is optional — this is a partial update; an included section replaces the stored one wholesale, so it must be the complete revised array). Return {} if nothing changed. Schema: " + JSON.stringify(soulEvolveSchema),
       };
     }
 
@@ -1063,6 +1075,147 @@ function dropJunkEntries<T>(arr: T[] | undefined): T[] {
   });
 }
 
+// ── Soul section sanitizers (soul_generate + soul_evolve) ────────────────────
+//
+// PR #22 exposed the bug class: a commit handler that coerces agent output
+// into the soul schema and silently drops whatever doesn't match. The
+// original incident was soul_evolve earned_values returned as bare strings —
+// coerced to { value: "", ... } and filtered out with no trace. These helpers
+// close the class in BOTH soul handlers for every section: entries may arrive
+// as bare strings, alias-keyed objects, or a single non-array value, and are
+// coerced instead of dropped. Junk-guarded (0.7.118) so an apology string can
+// never become always-injected identity text — but only for entries >= 8
+// chars, because legitimate soul entries can be short ("direct", "concise")
+// and isJunkExtractionText treats < 8 chars as junk.
+
+function isSoulJunk(s: string): boolean {
+  return s.length >= 8 && isJunkExtractionText(s);
+}
+
+/** An agent returning a single object/string where an array belongs should
+ *  lose nothing: wrap it. null/undefined mean "not provided" → []. */
+function asEntryArray(x: unknown): unknown[] {
+  if (Array.isArray(x)) return x;
+  if (x == null) return [];
+  return [x];
+}
+
+/** working_style / self_observations: stored as string[]. Accept strings and
+ *  objects carrying an obvious text field; drop junk and empties. */
+function coerceStringSection(raw: unknown): string[] {
+  return asEntryArray(raw)
+    .map((e) => {
+      if (typeof e === "string") return e.trim();
+      if (e && typeof e === "object") {
+        const o = e as Record<string, unknown>;
+        const probe = o.value ?? o.text ?? o.description ?? o.observation ?? o.style;
+        return typeof probe === "string" ? probe.trim() : "";
+      }
+      return "";
+    })
+    .filter((s) => s.length > 0 && !isSoulJunk(s));
+}
+
+/** emotional_dimensions: stored as {dimension, description, adopted_at}.
+ *  Accepts alias keys (name→dimension, rationale→description) and bare
+ *  strings (dimension with empty description — mirrors the PR #22
+ *  earned_values decision). */
+function coerceEmotionalDimensions(raw: unknown, now: string): { dimension: string; description: string; adopted_at: string }[] {
+  return asEntryArray(raw)
+    .map((e) => {
+      if (typeof e === "string") return { dimension: e.trim(), description: "", adopted_at: now };
+      const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
+      return {
+        dimension: String(o.dimension ?? o.name ?? "").trim(),
+        description: String(o.description ?? o.rationale ?? ""),
+        adopted_at: now,
+      };
+    })
+    .filter((d) => d.dimension.length > 0 && !isSoulJunk(d.dimension));
+}
+
+/** earned_values: stored as {value, grounded_in}. Bare strings land as
+ *  { value, grounded_in: "" } (PR #22); alias keys per v0.7.65. */
+function coerceEarnedValues(raw: unknown): { value: string; grounded_in: string }[] {
+  return asEntryArray(raw)
+    .map((e) => {
+      if (typeof e === "string") return { value: e.trim(), grounded_in: "" };
+      const o = (e && typeof e === "object" ? e : {}) as Record<string, unknown>;
+      return {
+        value: String(o.value ?? o.name ?? "").trim(),
+        grounded_in: String(o.grounded_in ?? o.evidence ?? o.description ?? ""),
+      };
+    })
+    .filter((v) => v.value.length > 0 && !isSoulJunk(v.value));
+}
+
+type SoulSection = "working_style" | "emotional_dimensions" | "self_observations" | "earned_values";
+
+/** Identity key for overlap/dedupe: the text for string sections, the value
+ *  for earned_values, the dimension for emotional_dimensions. */
+function soulSectionKey(section: SoulSection, entry: unknown): string {
+  if (entry == null) return "";
+  if (typeof entry === "string") return entry.trim().toLowerCase();
+  const o = entry as Record<string, unknown>;
+  const raw = section === "emotional_dimensions"
+    ? o.dimension ?? o.name
+    : section === "earned_values"
+      ? o.value ?? o.name
+      : o.value ?? o.text;
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+/**
+ * Delta-guard merge for soul_evolve (PR #22 follow-up).
+ *
+ * reviseSoul REPLACES a section wholesale (`SET ${section} = $newValue`), and
+ * the revisions audit trail stores no prior values — a replace that loses
+ * entries is silent AND unrecoverable. The evolve prompt now states the
+ * contract ("include the complete revised array"), but the drain agent can be
+ * Haiku (memory-extractor-lite) and the original PR #22 incident proves
+ * agents fall back to delta-thinking. So:
+ *
+ *   - Submission shares >= 1 key with the stored section → the agent
+ *     demonstrably engaged with current content: treat it as a genuine
+ *     revision and REPLACE (dropping / rewording entries stays possible).
+ *   - Submission has ZERO overlap with a non-empty stored section → the
+ *     fingerprint of "only the new entries": APPEND to the stored entries
+ *     instead, so a nonconforming agent can add but never destroy.
+ *
+ * Replace mode also preserves adopted_at on emotional_dimensions whose
+ * description didn't change, so echoing an unchanged dimension doesn't
+ * destroy its adoption provenance.
+ */
+function mergeSoulSection(section: SoulSection, current: unknown[], submitted: unknown[]): unknown[] {
+  const seen = new Set<string>();
+  const cleanSubmitted = submitted.filter((e) => {
+    const k = soulSectionKey(section, e);
+    if (!k || seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  const currentByKey = new Map<string, unknown>();
+  for (const c of current) {
+    const k = soulSectionKey(section, c);
+    if (k && !currentByKey.has(k)) currentByKey.set(k, c);
+  }
+  const overlap = cleanSubmitted.filter((e) => currentByKey.has(soulSectionKey(section, e))).length;
+  if (currentByKey.size > 0 && overlap === 0) {
+    return [...current, ...cleanSubmitted];
+  }
+  if (section === "emotional_dimensions") {
+    return cleanSubmitted.map((e) => {
+      const next = e as { dimension: string; description: string; adopted_at: string };
+      const prev = currentByKey.get(soulSectionKey(section, e)) as { description?: unknown; adopted_at?: unknown } | undefined;
+      if (prev && typeof prev.adopted_at === "string" && String(prev.description ?? "") === next.description) {
+        return { ...next, adopted_at: prev.adopted_at };
+      }
+      return next;
+    });
+  }
+  return cleanSubmitted;
+}
+
 async function commitResults(
   item: PendingWorkItem,
   results: Record<string, unknown> | string | undefined,
@@ -1191,18 +1344,14 @@ async function commitResults(
       const doc = parseSoulResult(results);
       if (!doc) throw new Error("Invalid soul document JSON");
       const now = new Date().toISOString();
+      // Same tolerant coercion as soul_evolve (PR #22 bug-class sweep): the
+      // generate agent is shown the schema, but a nonconforming shape must
+      // still land instead of silently thinning the initial soul.
       const soulDoc = {
-        working_style: (doc.working_style ?? []).filter((s: unknown) => typeof s === "string").slice(0, 20),
-        emotional_dimensions: (doc.emotional_dimensions ?? []).map((d: any) => ({
-          dimension: String(d.dimension ?? d.name ?? ""),
-          description: String(d.description ?? d.rationale ?? ""),
-          adopted_at: now,
-        })).filter((d: any) => d.dimension).slice(0, 10),
-        self_observations: (doc.self_observations ?? []).filter((s: unknown) => typeof s === "string").slice(0, 20),
-        earned_values: (doc.earned_values ?? []).map((v: any) => ({
-          value: String(v.value ?? v.name ?? ""),
-          grounded_in: String(v.grounded_in ?? v.evidence ?? v.description ?? ""),
-        })).filter((v: any) => v.value).slice(0, 10),
+        working_style: coerceStringSection(doc.working_style).slice(0, 20),
+        emotional_dimensions: coerceEmotionalDimensions(doc.emotional_dimensions, now).slice(0, 10),
+        self_observations: coerceStringSection(doc.self_observations).slice(0, 20),
+        earned_values: coerceEarnedValues(doc.earned_values).slice(0, 10),
       };
       const success = await createSoul(soulDoc, store);
       if (!success) throw new Error("Failed to create soul record");
@@ -1217,29 +1366,40 @@ async function commitResults(
     case "soul_evolve": {
       const changes = parseSoulResult(results);
       if (!changes || Object.keys(changes).length === 0) return { skipped: true, reason: "no changes" };
+      // The merge-guard below needs the stored soul — and a soul deleted
+      // between fetch and commit must not be resurrected by reviseSoul's
+      // UPDATE on the fixed record id.
+      const soul = await getSoul(store);
+      if (!soul) return { skipped: true, reason: "no soul to evolve" };
       const now = new Date().toISOString();
-      const sanitized: Record<string, unknown[]> = {
-        working_style: (changes.working_style ?? []).filter((s: unknown) => typeof s === "string"),
-        emotional_dimensions: (changes.emotional_dimensions ?? []).map((d: any) => ({
-          dimension: String(d.dimension ?? d.name ?? ""),
-          description: String(d.description ?? d.rationale ?? ""),
-          adopted_at: now,
-        })).filter((d: any) => d.dimension),
-        self_observations: (changes.self_observations ?? []).filter((s: unknown) => typeof s === "string"),
-        // agents sometimes return bare strings despite the schema
-        earned_values: (changes.earned_values ?? []).map((v: any) =>
-          typeof v === "string"
-            ? { value: v, grounded_in: "" }
-            : { value: String(v.value ?? v.name ?? ""), grounded_in: String(v.grounded_in ?? v.evidence ?? v.description ?? "") }
-        ).filter((v: any) => v.value),
+      // Tolerant per-section coercion (PR #22, extended to every section):
+      // bare strings, alias keys, and single non-array values all land.
+      const sanitized: Record<SoulSection, unknown[]> = {
+        working_style: coerceStringSection(changes.working_style),
+        emotional_dimensions: coerceEmotionalDimensions(changes.emotional_dimensions, now),
+        self_observations: coerceStringSection(changes.self_observations),
+        earned_values: coerceEarnedValues(changes.earned_values),
       };
       let revised = 0;
       for (const section of ["working_style", "emotional_dimensions", "self_observations", "earned_values"] as const) {
         const vals = sanitized[section];
         if (vals && vals.length > 0) {
-          await reviseSoul(section, vals, "Evolved by subagent based on new experience", store);
-          revised++;
+          const merged = mergeSoulSection(section, asEntryArray(soul[section]), vals);
+          // Count only revisions that actually landed — sections_revised was
+          // the very evidence trail that exposed the original drop.
+          if (await reviseSoul(section, merged, "Evolved by subagent based on new experience", store)) revised++;
         }
+      }
+      if (revised > 0) {
+        // An evolved soul that never re-seeds Tier-0 core memory is invisible
+        // at runtime: seedSoulAsCoreMemory previously ran ONLY at graduation,
+        // so the every-turn soul entries served graduation-day values forever.
+        // Re-seed from the post-revision row; failure is non-fatal (the soul
+        // row is already updated — seeding is derived state).
+        try {
+          const evolved = await getSoul(store);
+          if (evolved) await seedSoulAsCoreMemory(evolved, store);
+        } catch (e) { swallow.warn("pending-work:soul-evolve-reseed", e); }
       }
       return { sections_revised: revised };
     }
@@ -1608,4 +1768,8 @@ export const __test__ = {
   parseSkillResult,
   parseCausalGraduationResult,
   parseSoulResult,
+  coerceStringSection,
+  coerceEmotionalDimensions,
+  coerceEarnedValues,
+  mergeSoulSection,
 };

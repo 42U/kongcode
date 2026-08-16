@@ -45,6 +45,47 @@ export declare function handleCommitWorkResults(state: GlobalPluginState, _sessi
     }>;
 }>;
 export declare function isJunkExtractionText(s: unknown): boolean;
+/** working_style / self_observations: stored as string[]. Accept strings and
+ *  objects carrying an obvious text field; drop junk and empties. */
+declare function coerceStringSection(raw: unknown): string[];
+/** emotional_dimensions: stored as {dimension, description, adopted_at}.
+ *  Accepts alias keys (name→dimension, rationale→description) and bare
+ *  strings (dimension with empty description — mirrors the PR #22
+ *  earned_values decision). */
+declare function coerceEmotionalDimensions(raw: unknown, now: string): {
+    dimension: string;
+    description: string;
+    adopted_at: string;
+}[];
+/** earned_values: stored as {value, grounded_in}. Bare strings land as
+ *  { value, grounded_in: "" } (PR #22); alias keys per v0.7.65. */
+declare function coerceEarnedValues(raw: unknown): {
+    value: string;
+    grounded_in: string;
+}[];
+type SoulSection = "working_style" | "emotional_dimensions" | "self_observations" | "earned_values";
+/**
+ * Delta-guard merge for soul_evolve (PR #22 follow-up).
+ *
+ * reviseSoul REPLACES a section wholesale (`SET ${section} = $newValue`), and
+ * the revisions audit trail stores no prior values — a replace that loses
+ * entries is silent AND unrecoverable. The evolve prompt now states the
+ * contract ("include the complete revised array"), but the drain agent can be
+ * Haiku (memory-extractor-lite) and the original PR #22 incident proves
+ * agents fall back to delta-thinking. So:
+ *
+ *   - Submission shares >= 1 key with the stored section → the agent
+ *     demonstrably engaged with current content: treat it as a genuine
+ *     revision and REPLACE (dropping / rewording entries stays possible).
+ *   - Submission has ZERO overlap with a non-empty stored section → the
+ *     fingerprint of "only the new entries": APPEND to the stored entries
+ *     instead, so a nonconforming agent can add but never destroy.
+ *
+ * Replace mode also preserves adopted_at on emotional_dimensions whose
+ * description didn't change, so echoing an unchanged dimension doesn't
+ * destroy its adoption provenance.
+ */
+declare function mergeSoulSection(section: SoulSection, current: unknown[], submitted: unknown[]): unknown[];
 export declare function handleCreateKnowledgeGems(state: GlobalPluginState, session: SessionState, args: Record<string, unknown>): Promise<{
     content: Array<{
         type: "text";
@@ -68,5 +109,9 @@ export declare const __test__: {
     parseSkillResult: typeof parseSkillResult;
     parseCausalGraduationResult: typeof parseCausalGraduationResult;
     parseSoulResult: typeof parseSoulResult;
+    coerceStringSection: typeof coerceStringSection;
+    coerceEmotionalDimensions: typeof coerceEmotionalDimensions;
+    coerceEarnedValues: typeof coerceEarnedValues;
+    mergeSoulSection: typeof mergeSoulSection;
 };
 export {};
