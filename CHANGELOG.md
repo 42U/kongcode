@@ -4,6 +4,27 @@ All notable changes to LaqrumCode are documented here. The 0.7.x series introduc
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-16
+
+Security-hardening release: a full-repo security & privacy audit (9 findings, all remediated — report with locked hypotheses and appended outcomes archived on the operator share), the retirement of the legacy `root:root` database credential, and the completion of PR #22's soul-pipeline rescue.
+
+### Security
+- **Full-repo audit fixes (LAQ-SEC-001…009).** The web-UI launch flow no longer exposes the master hook-API token via the opener's argv, terminal output, or browser history — `/ui/auth` now accepts only a single-use 60-second nonce minted over the Bearer-authed loopback API (`POST /ui/mint`), and master-token-in-URL is rejected outright. `daemon.log`/`auto-drain.log` open at 0600 (with convergence chmod for existing installs; rotation keeps generations tight) since warn-level lines can quote graph content. Backup dumps write into 0700 directories with 0600 files. Both loopback HTTP surfaces reject non-loopback `Host` headers (DNS-rebinding defense-in-depth; shared policy in `src/shared/net.ts`). Production npm tree audits clean (hono 4.13.2, fast-uri 3.1.5, body-parser 2.3.0, tar 7.5.22 — all transitive; one dev-only Windows-only esbuild LOW accepted under vite's pin). `drop-test-namespaces` is now a Node script using the admin credential file (the old `curl -u root:root` was dead post-hardening and leaked credentials via argv); `setup.sh` stops suggesting `curl | sh`. Audited clean with no findings: the SQL-interpolation surface, auth design, web-UI serving, download pinning, and multi-user isolation.
+- **`root:root` retired (Phase 3 credential chain).** External SurrealDB targets resolve credentials as: explicit `SURREAL_USER`/`SURREAL_PASS` verbatim → the managed per-user cred file → legacy `root:root` last resort. Discovery tries the chain per candidate port and propagates the winner, closing a split-brain hazard where a hardened instance (rotated root) looked like "not a laqrumcode DB" and triggered a fresh managed spawn. `scripts/provision-scoped-users.mjs` defines per-project root-level EDITOR users (full data + schema DDL, **no user management**) converged with the managed cred files; `scripts/rotate-root-cred.mjs` rotates root to a strong secret with persist-before-rotate ordering and prints rejection receipts for the old default. All maintenance scripts share the same resolution (`scripts/surreal-cred.mjs`); live-DB tests resolve identically and pass against hardened and unhardened instances.
+
+### Added
+- **Redaction covers database/service credential shapes** (GH #16 extension): HTTP Basic-auth header values, `*_PASS`/`*_PASSWORD`/`*_TOKEN`/`*_SECRET`/`*_API_KEY=` env-style assignments (placeholder-aware), `user:pass@` URL credentials, and quoted JSON `pass`/`password`/`token`/`secret` values — with false-positive guards pinned by tests (`MAX_TOKENS=4096`, `$VAR` indirection, `<placeholder>` forms stay untouched).
+- **`scripts/scrub-stored-secrets.mjs`**: stdin-fed (never argv), receipt-printing retro-scrub that replaces known secret literals across `turn`/`turn_archive`/`memory`/`concept`/`monologue` with the standard placeholder. The audit's own scrub run found zero stored matches (positive-control verified) — prevention landed with nothing to clean.
+- **README Security & privacy section** documenting the threat model and the hardening toolchain.
+
+### Fixed
+- **PR #22 follow-through (soul pipeline).** Merged charleshmmnd's `soul_evolve` earned-values fix and closed the gaps around it: the evolve prompt embeds a partial schema (nothing `required`) with explicit replace semantics; a delta-guard merge appends instead of letting delta-shaped returns wipe stored sections; tolerant per-section coercion (bare strings / alias keys / single non-array values) with a junk guard covers both soul handlers; a landed evolution re-seeds the Tier-0 soul entries (previously graduation-only, so evolution was invisible at runtime); `sections_revised` counts only confirmed writes.
+- **Soul pipeline hardening wave 2**: stale `soul_generate` zombies self-complete once a soul exists (fetch gate + actionable-count gate + graceful `soul already exists` commit outcome — previously each straggler burned a full synthesis then failed); per-section caps (20/10/20/10, mode-aware, logged) and a 50-entry revisions trim bound soul growth; `reviseSoulGuarded` closes the concurrent-evolve lost-update race with a value-CAS single-shot write (probed live: `+=` array concat, UPDATE-on-missing no-op, exact array-of-object guard equality); `seedSoulAsCoreMemory` is create-first with prefix-paired archiving (a crash can no longer leave Tier-0 without soul entries); tri-state `createSoul` kills the double-graduation-event race; `SoulDocument.emotional_dimensions` says `description`, matching schema and writers.
+
+### Known follow-ups
+- The daemon-gated R6 TCP spawn integration test cannot run on a machine whose live daemon owns the socket (it verifies singleton-spawn semantics); it remains the only red test in that environment.
+- One dev-only npm LOW (esbuild under vite 7.3.5, Windows dev-server) awaits a vite major.
+
 ## [0.8.7] - 2026-08-04
 
 ### Added

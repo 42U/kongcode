@@ -568,7 +568,7 @@ async function shutdown(): Promise<void> {
 
 async function main(): Promise<void> {
   const server = new Server(
-    { name: "laqrumcode", version: "0.8.7" },
+    { name: "laqrumcode", version: "0.9.0" },
     { capabilities: { tools: {} } },
   );
 
