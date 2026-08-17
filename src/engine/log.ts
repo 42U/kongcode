@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { statSync, renameSync, openSync, closeSync } from "node:fs";
+import { statSync, renameSync, openSync, closeSync, chmodSync } from "node:fs";
 
 const LEVELS = { error: 0, warn: 1, info: 2, debug: 3 } as const;
 type Level = keyof typeof LEVELS;
@@ -44,9 +44,12 @@ export function rotateLogIfOversized(path: string, capBytes: number = LOG_ROTATE
     // the platform/FS rejects an over-existing-target rename, the catch below
     // leaves the live log in place (no data loss, just no rotation this time).
     renameSync(path, rotated);
+    // LAQ-SEC-002: rename preserves whatever loose mode the old log had —
+    // tighten the rotated generation (best-effort; no-op-ish on Windows).
+    try { chmodSync(rotated, 0o600); } catch { /* best-effort */ }
     // Best-effort: pre-create a fresh empty file so a reader that races the
     // caller's open still finds the log. Harmless if the caller opens first.
-    try { closeSync(openSync(path, "a")); } catch { /* caller will create it */ }
+    try { closeSync(openSync(path, "a", 0o600)); } catch { /* caller will create it */ }
     return true;
   } catch {
     // ENOENT (first run) or any rotate failure — NEVER block the caller.

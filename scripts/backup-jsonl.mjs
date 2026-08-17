@@ -106,7 +106,7 @@ async function dumpTable(db, table) {
     // retrieval_outcome, ~3.4k wide rows) from the backup. Streaming never holds
     // more than one line in a string, so any table size exports. Output is
     // byte-identical (one JSON object + "\n" per row).
-    const stream = createWriteStream(file, { encoding: "utf8" });
+    const stream = createWriteStream(file, { encoding: "utf8", mode: 0o600 }); // LAQ-SEC-003: graph dump — owner-only
     const done = new Promise((res, rej) => { stream.on("error", rej); stream.on("finish", res); });
     for (const r of rs) {
       if (!stream.write(rowToJsonLine(r) + "\n")) {
@@ -126,7 +126,7 @@ async function main() {
   console.log(`  Source:  ${URL} ns=${NS} db=${DB}`);
   console.log(`  Output:  ${OUTDIR}`);
 
-  await mkdir(OUTDIR, { recursive: true });
+  await mkdir(OUTDIR, { recursive: true, mode: 0o700 }); // LAQ-SEC-003: full-graph backup dir — owner-only
 
   const db = new Surreal();
   await db.connect(URL);
@@ -173,7 +173,7 @@ async function main() {
     },
     errors: [...results.nodes, ...results.edges].filter(r => r.error).map(r => ({ table: r.table, error: r.error })),
   };
-  await writeFile(join(OUTDIR, "metadata.json"), JSON.stringify(metadata, null, 2));
+  await writeFile(join(OUTDIR, "metadata.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
 
   console.log(`\nWrote ${metadata.totals.total_rows} total rows to ${OUTDIR}`);
   await db.close();

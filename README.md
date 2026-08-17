@@ -238,6 +238,17 @@ Multiple Claude Code sessions share one daemon: one BGE-M3 in RAM instead of N c
 - **Supersede on update**: When a newer version connects, the old daemon shuts down after all current sessions close. No active work is interrupted.
 - **Auto-drain**: When `pending_work` exceeds threshold, the daemon shells out to `claude --agent laqrumcode:memory-extractor-lite` (default; set `LAQRUMCODE_AUTO_DRAIN_MODEL=opus` for the heavier `memory-extractor` variant) as a headless subprocess.
 
+## Security & privacy
+
+LaqrumCode stores byte-faithful session history, so it is built local-first with an explicit multi-user-host threat model. A full-repo security/privacy audit (2026-08-16) drives the current posture:
+
+- **No network exposure.** Every listener binds `127.0.0.1` (or a 0600 unix socket); loopback surfaces additionally reject non-loopback `Host` headers (DNS-rebinding defense). UI/daemon/DB ports are UID-offset to avoid cross-user collisions, and discovery refuses to attach to another OS user's graph.
+- **Authentication.** 192-bit random tokens, constant-time comparison, 0600 token files. The web UI signs in via a **single-use 60-second mint nonce** (`node scripts/open-ui.mjs`) — the master token never appears in a URL, process argv, or browser history. TCP daemon transport requires a per-user handshake token.
+- **Database credentials.** The daemon runs as a scoped non-root EDITOR user (no user management). `scripts/provision-scoped-users.mjs` + `scripts/rotate-root-cred.mjs` harden an instance off the legacy `root:root` default; the credential chain (env → managed cred file → legacy last resort) keeps every script and the daemon working before and after.
+- **Files at rest.** Credentials, tokens, sockets, handoff files, `daemon.log`/`auto-drain.log`, and backup dumps are all owner-only (0600/0700). Backups default into a 0700 directory.
+- **Redaction before storage.** Provider API keys, PEM blocks, JWTs, **and database-credential shapes** (Basic-auth headers, `*_PASS=`/`*_TOKEN=` assignments, `user:pass@` URLs, JSON `"pass"/"token"` values) are stripped at ingestion — extractions inherit the redaction. Extend patterns and per-project/path ignores via `~/.laqrumcode/privacy.json`; retro-scrub known literals from stored rows with `scripts/scrub-stored-secrets.mjs` (stdin-fed, receipt-printing).
+- **Supply chain.** SurrealDB binaries and models are sha256-pinned per platform and verified in-stream; the production dependency tree audits clean.
+
 ## Auto-drain & costs
 
 Memory extraction (causal chains, concepts, skills, etc.) needs an LLM. The daemon **shells out to your already-authenticated `claude` CLI** to process the queue. This runs under your existing Claude Code authentication and **counts toward your normal usage**. Each spawn processes roughly 5-15 queued items.

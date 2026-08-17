@@ -400,7 +400,7 @@ export async function ensureDaemon(opts = {}) {
         // (the kind of bug 0.6.7's first integration test hit — silent 5-min hang)
         // nearly impossible. The fd path: stdin ignored, stdout+stderr to logFile.
         const logFilePath = join(cacheDir, "daemon.log");
-        const { openSync } = await import("node:fs");
+        const { openSync, chmodSync } = await import("node:fs");
         // H1: rotate the daemon.log a single generation if it's over the size cap
         // BEFORE opening for append, so a daemon that never restarts for weeks does
         // not grow it without bound. Crash-safe: a rotate failure is swallowed inside
@@ -411,7 +411,14 @@ export async function ensureDaemon(opts = {}) {
             rotateLogIfOversized(logFilePath);
         }
         catch { /* import/rotate failure must not block spawn */ }
-        const logFd = openSync(logFilePath, "a"); // append, create if missing
+        // LAQ-SEC-002: daemon.log carries graph-content fragments at warn level —
+        // owner-only like every other sensitive runtime file. Mode applies on
+        // create; the chmod converges pre-existing world-readable logs.
+        const logFd = openSync(logFilePath, "a", 0o600); // append, create if missing
+        try {
+            chmodSync(logFilePath, 0o600);
+        }
+        catch { /* best-effort */ }
         log.info(`[daemon-spawn] spawning daemon from ${scriptPath} (logs → ${logFilePath})`);
         const child = spawn(process.execPath, [scriptPath], {
             detached: true,

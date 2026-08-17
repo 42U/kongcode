@@ -63,7 +63,8 @@ else
   # reverse proxy with TLS + auth in front; do NOT bind 0.0.0.0 directly.
   echo "    Docker:  docker run -d --name surrealdb -p 127.0.0.1:8000:8000 surrealdb/surrealdb:latest \\"
   echo "               start --user \"\${SURREAL_USER}\" --pass \"\${SURREAL_PASS}\""
-  echo "    Native:  curl -sSf https://install.surrealdb.com | sh && \\"
+  # LAQ-SEC-009: point at the install docs instead of suggesting curl|sh.
+  echo "    Native:  install SurrealDB per https://surrealdb.com/docs/surrealdb/installation , then:"
   echo "             surreal start --user \"\${SURREAL_USER}\" --pass \"\${SURREAL_PASS}\" --bind 127.0.0.1:8000"
   echo ""
   echo "  NOTE: the env vars above come from ${CREDS_FILE}; \`set -a; . \"${CREDS_FILE}\"; set +a\`"

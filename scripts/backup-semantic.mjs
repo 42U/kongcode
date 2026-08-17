@@ -86,7 +86,7 @@ async function dumpTable(db, table) {
     if (rs.length === 0) return { table, count: 0, file: null };
     const lines = rs.map(rowToJsonLine).join("\n") + "\n";
     const file = join(OUTDIR, `${table}.jsonl`);
-    await writeFile(file, lines, "utf8");
+    await writeFile(file, lines, { encoding: "utf8", mode: 0o600 }); // LAQ-SEC-003: graph dump — owner-only
     return { table, count: rs.length, file };
   } catch (e) {
     return { table, count: 0, file: null, error: String(e?.message ?? e) };
@@ -155,7 +155,7 @@ async function main() {
   console.log(`  Source:  ${URL} ns=${NS} db=${DB}`);
   console.log(`  Output:  ${OUTDIR}`);
 
-  await mkdir(OUTDIR, { recursive: true });
+  await mkdir(OUTDIR, { recursive: true, mode: 0o700 }); // LAQ-SEC-003: full-graph backup dir — owner-only
 
   const db = new Surreal();
   await db.connect(URL);
@@ -201,8 +201,8 @@ async function main() {
       tables: ["turn", "session", "retrieval_outcome", "orchestrator_metrics", "orchestrator_metrics_daily", "pending_work", "subagent", "compaction_checkpoint", "memory_utility_cache", "turn_score", "graduation_event", "maturity_stage", "core_memory", "embedding_cache", "maintenance_runs", "turn_archive"],
     },
   };
-  await writeFile(join(OUTDIR, "metadata.json"), JSON.stringify(metadata, null, 2));
-  await writeFile(join(OUTDIR, "IMPORT.md"), IMPORT_DOC);
+  await writeFile(join(OUTDIR, "metadata.json"), JSON.stringify(metadata, null, 2), { mode: 0o600 });
+  await writeFile(join(OUTDIR, "IMPORT.md"), IMPORT_DOC, { mode: 0o600 });
 
   console.log(`\nWrote ${metadata.totals.total_rows} knowledge rows to ${OUTDIR}`);
   console.log(`Project ids referenced (need mapping on target): ${projectRefs.length}`);

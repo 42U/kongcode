@@ -123,3 +123,47 @@ describe("loadPrivacyConfig", () => {
     expect(loadPrivacyConfig()).toBe(a); // cached identity
   });
 });
+
+describe("redactSecrets — database/service credential shapes (LAQ-SEC-005)", () => {
+  // Same prefix+body split convention as above (GH013 push protection).
+  const secrets: Array<[string, string]> = [
+    ["Basic auth header", "Authorization: Basic " + "bGFxcnVtXzEwMDA6c3VwZXJzZWNyZXQ="],
+    ["env pass assignment", "SURREAL_PASS=" + "nJkE9uxt1imS4gjOg6sd"],
+    ["env password assignment", "DB_PASSWORD=" + "hunter2hunter2"],
+    ["env token assignment", "MY_TOKEN=" + "abcdef123456"],
+    // Host/path stay (only the user:pass@ credential segment is redacted), so
+    // the generic tail-check below would straddle into the host — assert on
+    // the password itself via the dedicated case after this table.
+    ["url-embedded credential", "postgres://laqrum:" + "s3cr3tpw@h"],
+    ["json pass value", '{"user": "laqrum_1000", "pass": "' + 'nJkE9uxt1imS4gjOg6sd"}'],
+    ["json token value", '{"token": "' + 'abcdef123456"}'],
+  ];
+
+  for (const [label, secret] of secrets) {
+    it(`redacts ${label}`, () => {
+      const text = `context before ${secret} context after`;
+      const out = redactSecrets(text);
+      expect(out).toContain(REDACTION_PLACEHOLDER);
+      // The credential VALUE must be gone (check the tail half of the secret,
+      // which is always part of the sensitive payload).
+      expect(out).not.toContain(secret.slice(-10));
+    });
+  }
+
+  const benign = [
+    "MAX_TOKENS=4096",                        // config, not a credential (TOKENS != TOKEN)
+    "SURREAL_PASS=<your-password>",           // placeholder
+    "SURREAL_PASS=$SURREAL_PASS",             // env indirection
+    "DB_PASSWORD=xxxxxxxx",                   // masked placeholder
+    "set SURREAL_PASS=... in your shell",     // elided placeholder
+    "mailto:someone@example.com",             // no :pass@ credential segment
+    "ssh://git@github.com/owner/repo",        // user only, no password
+    'the "passing" tests and "tokens" docs',  // prose, not key:value
+  ];
+
+  for (const text of benign) {
+    it(`leaves benign text alone: ${JSON.stringify(text)}`, () => {
+      expect(redactSecrets(text)).toBe(text);
+    });
+  }
+});

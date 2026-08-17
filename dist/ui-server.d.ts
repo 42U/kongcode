@@ -8,8 +8,10 @@
  * never binds anything but 127.0.0.1.
  *
  * Auth reuses the same secret as the hook API (src/http-api.ts authToken),
- * presented by the browser as an HttpOnly cookie set once via
- * /ui/auth?token=<token> (so the token never lingers in browser history).
+ * presented by the browser as an HttpOnly cookie. The cookie is minted via a
+ * SINGLE-USE, 60s nonce (`POST /ui/mint` with the Bearer master token →
+ * /ui/auth?nonce=…), so the master token never appears in a URL, the opener's
+ * argv, or browser history (LAQ-SEC-001).
  *
  * The server is inert until the frontend is built: if dist/ui/index.html is
  * absent it logs once and skips binding. Start is EADDRINUSE-tolerant so the
@@ -33,6 +35,8 @@ export declare const UI_PORT_BASE = 33000;
  *  cross-user collision (mirrors the managed-surreal port scheme), disjoint from
  *  both the managed-SurrealDB window [18765,28764] AND the daemon IPC window. */
 export declare function uiPort(): number;
+/** Test-only: reset the nonce store. */
+export declare function _resetAuthNonces(): void;
 declare function dashboard(state: GlobalPluginState): Promise<unknown>;
 declare function listMemories(state: GlobalPluginState, q: string, limit: number, offset: number): Promise<unknown>;
 declare function listConcepts(state: GlobalPluginState, q: string, limit: number, offset: number): Promise<unknown>;

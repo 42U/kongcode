@@ -3,9 +3,11 @@
  * Open the laqrumcode read-only web UI (GH #15) in the default browser.
  *
  * Reads the daemon's auth token (~/.laqrumcode/cache/auth-token, written by
- * src/http-api.ts) and opens http://127.0.0.1:<port>/ui/auth?token=… which sets
- * an HttpOnly cookie and redirects to the app — so the token is presented once
- * and never lingers in the URL bar afterwards.
+ * src/http-api.ts), mints a SINGLE-USE 60s nonce over the Bearer-authed
+ * loopback API (POST /ui/mint), and opens /ui/auth?nonce=… which sets an
+ * HttpOnly cookie and redirects to the app. The master token never appears
+ * in a URL, argv, or browser history — only the one-shot nonce does
+ * (LAQ-SEC-001).
  *
  * Port: imported directly from uiPort() in dist/ui-server.js — the single
  * source of truth the daemon binds with (LAQRUMCODE_UI_PORT override, else the
@@ -38,10 +40,31 @@ if (!token) {
 }
 
 const port = uiPort();
-const url = `http://127.0.0.1:${port}/ui/auth?token=${token}`;
+
+// LAQ-SEC-001: never put the master token in a URL — it would transit the
+// opener's argv (world-readable via /proc/*/cmdline on multi-user hosts),
+// this terminal, and browser history. Instead mint a SINGLE-USE, 60s nonce
+// over the Bearer-authed loopback API; the URL then carries only a value
+// that is dead after first use.
+let nonce;
+try {
+  const resp = await fetch(`http://127.0.0.1:${port}/ui/mint`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!resp.ok) throw new Error(`mint failed: HTTP ${resp.status}`);
+  ({ nonce } = await resp.json());
+  if (!nonce) throw new Error("mint returned no nonce");
+} catch (e) {
+  console.error(`Could not reach the laqrumcode UI on port ${port}: ${e?.message ?? e}`);
+  console.error("Is the daemon running? Trigger it with any laqrumcode MCP call (e.g. memory_health), then retry.");
+  process.exit(1);
+}
+const url = `http://127.0.0.1:${port}/ui/auth?nonce=${nonce}`;
 
 console.log(`laqrumcode web UI → http://127.0.0.1:${port}/ui`);
-console.log("Opening your browser…  (if it doesn't open, paste this URL):");
+console.log("Opening your browser…  (if it doesn't open, paste this single-use URL within 60s):");
 console.log(`  ${url}`);
 
 const opener =

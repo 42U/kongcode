@@ -52,6 +52,20 @@ export const SECRET_PATTERNS = [
     // PEM private-key blocks (RSA/EC/OPENSSH/PGP/generic). Distinctive headers →
     // near-zero false positives; non-greedy span redacts the whole key body.
     /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
+    // ── Database / service credential shapes (LAQ-SEC-005) ──
+    // The provider-anchored set above missed the system's OWN secrets: a session
+    // that cats surreal-cred.json or prints a container env stored the daemon's
+    // DB password verbatim into turn rows. Each pattern below stays anchored to
+    // a credential-bearing shape, not free text:
+    // HTTP Basic auth header values (base64 of user:pass).
+    /\bAuthorization:\s*Basic\s+[A-Za-z0-9+/=]{8,}/gi,
+    // Env-style credential assignments (SURREAL_PASS=…, DB_PASSWORD=…, X_TOKEN=…).
+    // Negative lookahead skips obvious placeholders (<pass>, $VAR, xxx…, …).
+    /\b[A-Z][A-Z0-9_]*(?:PASS(?:WORD)?|TOKEN|SECRET|API_?KEY)=(?![\s<$*]|x{3}|\.{3})\S{6,}/g,
+    // URL-embedded credentials: scheme://user:password@host
+    /\b[a-z][a-z0-9+.-]*:\/\/[^/\s:@]+:[^@\s/]{4,}@/gi,
+    // Quoted JSON credential values: "pass"/"password"/"token"/"secret": "…"
+    /"(?:pass|password|token|secret|api_key|apikey)"\s*:\s*"[^"]{6,}"/gi,
 ];
 let cached = null;
 export function privacyConfigPath() {

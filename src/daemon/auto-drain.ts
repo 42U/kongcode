@@ -24,7 +24,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, openSync, closeSync, writeSync, readFileSync, unlinkSync, statSync, appendFileSync, mkdirSync, ftruncateSync, renameSync, writeFileSync, futimesSync, constants as fsConstants } from "node:fs";
+import { existsSync, openSync, closeSync, writeSync, readFileSync, unlinkSync, statSync, appendFileSync, mkdirSync, ftruncateSync, renameSync, writeFileSync, futimesSync, chmodSync, constants as fsConstants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { join, resolve, dirname } from "node:path";
@@ -863,7 +863,10 @@ async function spawnHeadlessDrainer(
     // grows forever on a long-lived daemon. Crash-safe (rotate failure is
     // swallowed; we still open the log below).
     rotateLogIfOversized(drainLogPath);
-    drainLogFd = openSync(drainLogPath, "a");
+    // LAQ-SEC-002: owner-only — the drain child's stdout can quote graph
+    // content. Mode applies on create; chmod converges pre-existing files.
+    drainLogFd = openSync(drainLogPath, "a", 0o600);
+    try { chmodSync(drainLogPath, 0o600); } catch { /* best-effort */ }
     const header = `\n=== auto-drain spawn ${new Date().toISOString()} (queue=${count}, agent=${agentName}, reason=${reason}, plugin_dir=${PLUGIN_DIR}) ===\n`;
     writeSync(drainLogFd, header);
   } catch (e) {

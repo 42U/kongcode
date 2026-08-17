@@ -8,8 +8,10 @@
  * never binds anything but 127.0.0.1.
  *
  * Auth reuses the same secret as the hook API (src/http-api.ts authToken),
- * presented by the browser as an HttpOnly cookie set once via
- * /ui/auth?token=<token> (so the token never lingers in browser history).
+ * presented by the browser as an HttpOnly cookie. The cookie is minted via a
+ * SINGLE-USE, 60s nonce (`POST /ui/mint` with the Bearer master token →
+ * /ui/auth?nonce=…), so the master token never appears in a URL, the opener's
+ * argv, or browser history (LAQ-SEC-001).
  *
  * The server is inert until the frontend is built: if dist/ui/index.html is
  * absent it logs once and skips binding. Start is EADDRINUSE-tolerant so the
@@ -26,9 +28,10 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, normalize, extname, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, randomBytes } from "node:crypto";
 import type { GlobalPluginState } from "./engine/state.js";
 import { log } from "./engine/log.js";
+import { isLoopbackHost } from "./shared/net.js";
 
 let uiServer: HttpServer | null = null;
 
@@ -77,6 +80,52 @@ export function uiPort(): number {
 function constantTimeEq(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
+
+// ── one-time auth mint nonces (LAQ-SEC-001) ─────────────────────────────────
+//
+// The launch flow used to open the browser at /ui/auth?token=<MASTER TOKEN> —
+// putting the hook-API secret into the opener's argv (world-readable via
+// /proc/*/cmdline on multi-user hosts while xdg-open and the URL-handler
+// chain run), the launcher's terminal output, and browser omnibox/visit
+// history. The URL now carries only a single-use, 60-second nonce minted via
+// `POST /ui/mint` (Bearer master token — the launcher holds the 0600 token
+// file). A leaked nonce is dead after first use or expiry; the master token
+// never appears in a URL.
+const NONCE_TTL_MS = 60_000;
+const MAX_OUTSTANDING_NONCES = 32; // launcher mints one per open — tiny bound
+const mintNonces = new Map<string, number>(); // nonce → expiry epoch-ms
+
+function pruneNonces(now: number): void {
+  for (const [n, exp] of mintNonces) if (exp <= now) mintNonces.delete(n);
+}
+
+function mintAuthNonce(now: number = Date.now()): string | null {
+  pruneNonces(now);
+  if (mintNonces.size >= MAX_OUTSTANDING_NONCES) return null;
+  const nonce = randomBytes(24).toString("hex");
+  mintNonces.set(nonce, now + NONCE_TTL_MS);
+  return nonce;
+}
+
+/** Single-use consume: true exactly once per unexpired minted nonce. */
+function consumeAuthNonce(nonce: string, now: number = Date.now()): boolean {
+  pruneNonces(now);
+  if (!nonce) return false;
+  // Constant-time scan: compare against every outstanding nonce so a probe
+  // can't binary-search validity by timing Map lookups on prefixes.
+  let matched: string | null = null;
+  for (const [candidate] of mintNonces) {
+    if (constantTimeEq(candidate, nonce)) matched = candidate;
+  }
+  if (matched === null) return false;
+  mintNonces.delete(matched);
+  return true;
+}
+
+/** Test-only: reset the nonce store. */
+export function _resetAuthNonces(): void {
+  mintNonces.clear();
 }
 
 function cookieToken(req: IncomingMessage): string | null {
@@ -407,12 +456,23 @@ async function handleApi(state: GlobalPluginState, url: URL, res: ServerResponse
  */
 export function uiRequestHandler(state: GlobalPluginState, authToken: string): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
+    // LAQ-SEC-006: DNS-rebinding defense-in-depth — a rebound hostname reaches
+    // this loopback listener carrying the attacker's Host. Reject before any
+    // auth handling. (All data routes are token-gated regardless.)
+    if (!isLoopbackHost(req.headers.host)) {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("Forbidden: non-loopback Host");
+      return;
+    }
     const url = new URL(req.url || "/", "http://127.0.0.1");
-    // Public: the one-time cookie-mint endpoint.
+    // Public: the one-time cookie-mint endpoint. LAQ-SEC-001: accepts ONLY a
+    // single-use minted nonce — never the master token — so nothing secret
+    // survives in argv/history after the launch handshake.
     if (url.pathname === "/ui/auth") {
-      const token = url.searchParams.get("token") || "";
-      if (!constantTimeEq(token, authToken)) {
-        res.writeHead(401); res.end("bad token"); return;
+      const nonce = url.searchParams.get("nonce") || "";
+      if (!consumeAuthNonce(nonce)) {
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end("bad or expired nonce — re-run `node scripts/open-ui.mjs`"); return;
       }
       res.writeHead(302, {
         "set-cookie": `${COOKIE}=${encodeURIComponent(authToken)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400`,
@@ -425,6 +485,16 @@ export function uiRequestHandler(state: GlobalPluginState, authToken: string): (
       if (url.pathname.startsWith("/api/")) { sendJson(res, 401, { error: "unauthorized" }); return; }
       res.writeHead(401, { "content-type": "text/plain" });
       res.end("Unauthorized — open laqrumcode via `node scripts/open-ui.mjs`."); return;
+    }
+    // LAQ-SEC-001: the launcher (authed via Bearer above) mints its one-time
+    // browser nonce here. The only non-GET route; everything below stays
+    // read-only.
+    if (url.pathname === "/ui/mint") {
+      if (req.method !== "POST") { res.writeHead(405); res.end("POST only"); return; }
+      const nonce = mintAuthNonce();
+      if (nonce === null) { sendJson(res, 429, { error: "too many outstanding nonces — retry shortly" }); return; }
+      sendJson(res, 200, { nonce, ttl_ms: NONCE_TTL_MS });
+      return;
     }
     if (req.method !== "GET") { res.writeHead(405); res.end("read-only"); return; }
     if (url.pathname.startsWith("/api/ui/")) { void handleApi(state, url, res); return; }

@@ -15,6 +15,7 @@ import { platform } from "node:os";
 import { log } from "./engine/log.js";
 import { raceWithDeadline } from "./engine/surreal.js";
 import { startUiServer, stopUiServer } from "./ui-server.js";
+import { isLoopbackHost } from "./shared/net.js";
 let server = null;
 let socketPath = null;
 let portFilePath = null;
@@ -437,6 +438,15 @@ async function dispatchHookWithDeadline(handler, state, payload, event, deadline
     }
 }
 async function handleRequest(state, req, res) {
+    // LAQ-SEC-006: DNS-rebinding defense-in-depth for the TCP-fallback surface.
+    // Absent Host stays allowed (unix-socket clients / HTTP/1.0 tools); rebound
+    // browser traffic always carries the attacker hostname. Token gates remain
+    // the primary control on every non-/health route.
+    if (!isLoopbackHost(req.headers.host)) {
+        res.writeHead(403, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "forbidden: non-loopback host" }));
+        return;
+    }
     // Public /health: auth-free, minimal shape. Just status+db_connection.
     // Synchronous: reads cached snapshot, no DB round-trip on the request path,
     // so a hung DB still allows the probe to detect it via status=error/503.
